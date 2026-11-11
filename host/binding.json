@@ -1,0 +1,149 @@
+{
+  "binding": 2,
+  "programs": {
+    "tmux": {
+      "argv": ["tmux", "-L", { "slot": ["server"] }, "-f", { "slot": ["config"] }],
+      "escape-last": ";"
+    }
+  },
+  "tables": {
+    "view": {
+      "cell": "view",
+      "programs": ["bwrap"],
+      "head": [
+        { "slot": ["program", "bwrap"] },
+        "--unshare-user", "--die-with-parent",
+        "--bind", "/", "/",
+        "--dev-bind", "/dev", "/dev"
+      ],
+      "tail": ["--"],
+      "skip-beneath": "hidden",
+      "states": {
+        "hidden": ["--perms", "0000", "--tmpfs", { "entry": "path" }],
+        "searchable": ["--perms", "0111", "--tmpfs", { "entry": "path" }],
+        "read-only": ["--ro-bind", { "entry": "path" }, { "entry": "path" }],
+        "read-write": ["--bind", { "entry": "path" }, { "entry": "path" }],
+        "denied": ["--ro-bind", { "file": "share/denied" }, { "entry": "path" }]
+      }
+    }
+  },
+  "primitives": {
+    "server": {
+      "arity": 2,
+      "set": [
+        [["server"], { "arg": 1 }],
+        [["config"], { "path": 2 }]
+      ],
+      "require": [["name", { "arg": 1 }], ["file", { "path": 2 }]],
+      "call": [
+        "tmux", "start-server",
+        ";", "show-options", "-gv", "destroy-unattached",
+        ";", "show-options", "-sv", "exit-unattached"
+      ],
+      "expect": "off\noff"
+    },
+    "session": {
+      "arity": 5,
+      "require": [["name", { "arg": 1 }], ["name", { "arg": 2 }], ["directory", { "path": 5 }]],
+      "call": [
+        "tmux", "new-session", "-d", "-x", "200", "-y", "50",
+        "-s", { "arg": 1, "double": "#", "unless-before": "[" },
+        "-n", { "arg": 2, "double": "#", "unless-before": "[" },
+        "-c", { "path": 5, "double": "#", "unless-before": "[" },
+        "-P", "-F", "#{session_id} #{window_id} #{pane_id}",
+        "--", { "slot": ["program", "tmux"] }, "-L", { "slot": ["server"] }, "wait-for", { "slot": ["run"] }
+      ],
+      "capture": [
+        ["session", { "arg": 1 }],
+        ["window", { "arg": 1 }, { "arg": 2 }],
+        ["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }]
+      ],
+      "undo": {
+        "what": ["session", { "arg": 1 }],
+        "when": ["tmux", "show-options", "-qv", "-t", { "slot": ["session", { "arg": 1 }] }, "@workplace"],
+        "is": { "slot": ["run"] },
+        "call": ["tmux", "kill-session", "-t", { "slot": ["session", { "arg": 1 }] }]
+      },
+      "then": [
+        "tmux", "set-option", "-t", { "slot": ["session", { "arg": 1 }] }, "@workplace", { "slot": ["run"] },
+        ";", "select-pane", "-t", { "slot": ["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }] },
+        "-T", { "arg": 4, "double": "#", "unless-before": "[" }
+      ],
+      "check": {
+        "what": ["session", { "arg": 1 }],
+        "call": ["tmux", "show-options", "-qv", "-t", { "slot": ["session", { "arg": 1 }] }, "@workplace"],
+        "is": { "slot": ["run"] }
+      }
+    },
+    "window": {
+      "arity": 5,
+      "require": [["name", { "arg": 2 }], ["directory", { "path": 5 }]],
+      "call": [
+        "tmux", "new-window",
+        "-t", { "slot": ["session", { "arg": 1 }] },
+        "-n", { "arg": 2, "double": "#", "unless-before": "[" },
+        "-c", { "path": 5, "double": "#", "unless-before": "[" },
+        "-P", "-F", "#{window_id} #{pane_id}",
+        "--", { "slot": ["program", "tmux"] }, "-L", { "slot": ["server"] }, "wait-for", { "slot": ["run"] },
+        ";", "select-pane", "-T", { "arg": 4, "double": "#", "unless-before": "[" }
+      ],
+      "capture": [
+        ["window", { "arg": 1 }, { "arg": 2 }],
+        ["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }]
+      ]
+    },
+    "pane": {
+      "arity": 7,
+      "require": [["directory", { "path": 7 }]],
+      "call": [
+        "tmux", "split-window",
+        "-t", { "slot": ["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 4 }] },
+        { "arg": 5, "map": { "below": "-v", "right": "-h" } },
+        "-c", { "path": 7, "double": "#", "unless-before": "[" },
+        "-P", "-F", "#{pane_id}",
+        "--", { "slot": ["program", "tmux"] }, "-L", { "slot": ["server"] }, "wait-for", { "slot": ["run"] },
+        ";", "select-pane", "-T", { "arg": 6, "double": "#", "unless-before": "[" }
+      ],
+      "capture": [["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }]]
+    },
+    "arrange": {
+      "arity": 3,
+      "call": [
+        "tmux", "select-layout",
+        "-t", { "slot": ["window", { "arg": 1 }, { "arg": 2 }] },
+        { "arg": 3, "map": {
+          "even-horizontal": "even-horizontal", "even-vertical": "even-vertical",
+          "main-horizontal": "main-horizontal", "main-vertical": "main-vertical", "tiled": "tiled"
+        } }
+      ]
+    },
+    "resolve": {
+      "arity": 5,
+      "programs": ["realpath", "bwrap"],
+      "add": {
+        "table": "view",
+        "key": [{ "arg": 1 }, { "arg": 2 }, { "arg": 3 }],
+        "target": { "path": 5 },
+        "state": { "arg": 4, "map": { "executable": "denied" } }
+      }
+    },
+    "start": {
+      "arity": 5,
+      "require": [["directory", { "path": 4 }]],
+      "call": [
+        "tmux", "respawn-pane", "-k",
+        "-t", { "slot": ["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }] },
+        "-c", { "path": 4, "double": "#", "unless-before": "[" },
+        "--", { "slot": ["bash"] }, { "file": "libexec/exec" },
+        { "table": "view", "key": [{ "arg": 1 }, { "arg": 2 }, { "arg": 3 }] },
+        { "argv": 5 },
+        ";", "clear-history", "-t", { "slot": ["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }] }
+      ],
+      "check": {
+        "what": ["seat", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }],
+        "call": ["tmux", "display-message", "-p", "-t", { "slot": ["pane", { "arg": 1 }, { "arg": 2 }, { "arg": 3 }] }, "#{pane_dead}"],
+        "is": "0"
+      }
+    }
+  }
+}

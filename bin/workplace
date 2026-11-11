@@ -1,0 +1,430 @@
+#!/usr/bin/env bash
+set -o nounset -o pipefail
+shopt -s nullglob dotglob globstar
+unset TMUX TMUX_PANE
+
+if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 2) )); then
+  printf '%s\n' "workplace: bash ${BASH_VERSION} found; 5.2 or later is needed" >&2
+  exit 2
+fi
+
+TMUX_FLOOR=(2 9)
+JQ_FLOOR=(1 7)
+
+say() { printf '%s\n' "$*"; }
+warn() { printf '%s\n' "workplace: $*" >&2; }
+die() { warn "$1"; exit "${2:-1}"; }
+
+source_dir=${BASH_SOURCE[0]}
+case $source_dir in
+  */*) source_dir=${source_dir%/*} ;;
+  *) source_dir=. ;;
+esac
+tool=$(cd -P -- "$source_dir/.." && pwd -P) || die "cannot find the tool's directory" 2
+
+at_least() {
+  local have_major=$1 have_minor=$2 need_major=$3 need_minor=$4
+  (( have_major > need_major || (have_major == need_major && have_minor >= need_minor) ))
+}
+
+need_version() {
+  local program=$1 flag=$2 major=$3 minor=$4 version
+  command -v "$program" > /dev/null || die "$program $major.$minor or later is needed and is not on PATH" 2
+  version=$("$program" "$flag" 2> /dev/null) || die "cannot read $program's version" 2
+  [[ $version =~ ([0-9]+)\.([0-9]+) ]] || die "cannot read $program's version from: $version" 2
+  at_least "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$major" "$minor" \
+    || die "$program ${BASH_REMATCH[1]}.${BASH_REMATCH[2]} found; $major.$minor or later is needed" 2
+}
+
+need_jq() { need_version jq --version "${JQ_FLOOR[@]}"; }
+need_tmux() { need_version tmux -V "${TMUX_FLOOR[@]}"; }
+
+need_programs() {
+  local program found
+  program_slots='{}'
+  for program in tmux "$@"; do
+    found=$(command -v -- "$program") || die "this plan needs $program, and $program is not on PATH" 2
+    [[ $found == /* ]] || die "$program resolves to $found, which is not a program on PATH" 2
+    program_slots=$(jq -c --arg n "$program" --arg p "$found" '.[(["program", $n] | tojson)] = $p' <<< "$program_slots")
+  done
+}
+
+locate() {
+  [[ -n ${WORKPLACE_ROOT-} ]] || die "WORKPLACE_ROOT is not set" 2
+  [[ -n ${WORKPLACE_CONFIG-} ]] || die "WORKPLACE_CONFIG is not set" 2
+  [[ $WORKPLACE_ROOT == /* && -d $WORKPLACE_ROOT ]] \
+    || die "WORKPLACE_ROOT must be the absolute path of a directory: $WORKPLACE_ROOT" 2
+  [[ $WORKPLACE_CONFIG == /* && -d $WORKPLACE_CONFIG ]] \
+    || die "WORKPLACE_CONFIG must be the absolute path of a directory: $WORKPLACE_CONFIG" 2
+  root=$(cd -P -- "$WORKPLACE_ROOT" && pwd -P) || die "cannot enter WORKPLACE_ROOT: $WORKPLACE_ROOT" 2
+  clone=$(cd -P -- "$WORKPLACE_CONFIG" && pwd -P) || die "cannot enter WORKPLACE_CONFIG: $WORKPLACE_CONFIG" 2
+  if [[ $root != / && $clone != "$root" && $clone != "$root"/* ]]; then
+    die "WORKPLACE_CONFIG ($clone) is not at or below WORKPLACE_ROOT ($root)" 2
+  fi
+  build_dir=$clone/BUILD
+  run_dir=$build_dir/RUN
+}
+
+jq_message() {
+  local text
+  IFS= read -r -d '' text < "$1" || :
+  text=${text%$'\n'}
+  text=${text#jq: error (at *): }
+  printf '%s' "$text"
+}
+
+json_list() {
+  if (( $# )); then
+    printf '%s\0' "$@" | jq -R -s -c 'split("\u0000")[:-1]'
+  else
+    printf '%s\n' '[]'
+  fi
+}
+
+plan_report() {
+  local plan=$1 binding=$2 checker=$3 errors
+  report=$(jq -c --slurpfile b "$binding" -f "$checker" "$plan" 2>&1) \
+    || die "the plan is not JSON that jq can read: $report"
+  mapfile -t errors < <(jq -r '.errors[]' <<< "$report")
+  if (( ${#errors[@]} )); then
+    printf '%s\n' "${errors[@]/#/workplace: }" >&2
+    exit 1
+  fi
+  mapfile -t plan_programs < <(jq -r '.programs[]' <<< "$report")
+  plan_terms=$(jq -r '.terms' <<< "$report")
+}
+
+manifest_files=(plan.json binding.json libexec/resolve.jq libexec/check.jq libexec/exec share/denied)
+
+cmd_build() {
+  local plan=""
+  while (( $# )); do
+    case $1 in
+      --plan)
+        (( $# >= 2 )) || die "--plan needs a file" 2
+        plan=$2
+        shift 2
+        ;;
+      *) die "build takes --plan FILE; $1 is not one of its arguments" 2 ;;
+    esac
+  done
+  [[ -n $plan ]] || die "Typify's plan is not wired in yet, so build takes --plan FILE" 2
+  need_jq
+  locate
+  if [[ -e $build_dir || -L $build_dir ]]; then
+    die "$build_dir exists; build refuses until it is removed"
+  fi
+  [[ -f $plan ]] || die "no plan file at $plan" 2
+  plan_report "$plan" "$tool/host/binding.json" "$tool/libexec/check.jq"
+  local -a sources=("$plan" "$tool/host/binding.json" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq"
+    "$tool/libexec/exec" "$tool/share/denied")
+  mkdir -- "$build_dir" || die "cannot make $build_dir"
+  if ! {
+    mkdir -- "$build_dir/libexec" "$build_dir/share" &&
+      cp -- "$plan" "$build_dir/plan.json" &&
+      cp -- "$tool/host/binding.json" "$build_dir/binding.json" &&
+      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/exec" "$build_dir/libexec/" &&
+      cp -- "$tool/share/denied" "$build_dir/share/denied" &&
+      (cd -- "$build_dir" && sha256sum -- "${manifest_files[@]}") > "$build_dir/MANIFEST.tmp"
+  }; then
+    rm -rf -- "$build_dir"
+    die "build failed; $build_dir was removed"
+  fi
+  local -a source_sums copy_sums
+  mapfile -t source_sums < <(sha256sum -- "${sources[@]}")
+  mapfile -t copy_sums < "$build_dir/MANIFEST.tmp"
+  local i
+  for i in "${!sources[@]}"; do
+    if [[ ${source_sums[i]%%  *} != "${copy_sums[i]%%  *}" ]]; then
+      rm -rf -- "$build_dir"
+      die "the copy of ${sources[i]} differs from its source; $build_dir was removed"
+    fi
+  done
+  printf '%s\n' "${copy_sums[@]}" > "$build_dir/MANIFEST"
+  rm -f -- "$build_dir/MANIFEST.tmp"
+  local sum
+  sum=$(sha256sum -- "$build_dir/MANIFEST")
+  say "built $build_dir: $plan_terms terms; manifest ${sum%%  *}"
+}
+
+verify_build() {
+  [[ -d $build_dir ]] || { warn "no build at $build_dir"; return 1; }
+  [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]] || { warn "$build_dir has no MANIFEST"; return 1; }
+  local -A want=()
+  local line name file rel
+  while IFS= read -r line; do
+    name=${line#*  }
+    [[ $line == *"  "* && -n $name ]] || { warn "MANIFEST holds a line that is not a hash and a name"; return 1; }
+    want[$name]=${line%%  *}
+  done < "$build_dir/MANIFEST"
+  for file in "$build_dir"/**; do
+    rel=${file#"$build_dir"/}
+    [[ $rel == MANIFEST || $rel == RUN || $rel == RUN/* ]] && continue
+    if [[ -L $file ]]; then warn "$build_dir holds a symbolic link: $rel"; return 1; fi
+    [[ -d $file ]] && continue
+    [[ -n ${want[$rel]+x} ]] || { warn "$build_dir holds a file its MANIFEST does not list: $rel"; return 1; }
+  done
+  for name in "${manifest_files[@]}"; do
+    [[ -n ${want[$name]+x} ]] || { warn "MANIFEST does not list $name"; return 1; }
+  done
+  local -a sums
+  mapfile -t sums < <(cd -- "$build_dir" && sha256sum -- "${!want[@]}" 2> /dev/null)
+  (( ${#sums[@]} == ${#want[@]} )) || { warn "a file the MANIFEST lists is missing from $build_dir"; return 1; }
+  for line in "${sums[@]}"; do
+    name=${line#*  }
+    [[ ${line%%  *} == "${want[$name]}" ]] || { warn "$build_dir/$name does not match its MANIFEST"; return 1; }
+  done
+  return 0
+}
+
+run_call() {
+  local -n _out=$1
+  shift
+  _out=$("$@" 2> "$run_dir/call.err")
+}
+
+log_call() {
+  json_list "$@" >> "$run_dir/calls.jsonl"
+}
+
+teardown() {
+  [[ -f $run_dir/ledger ]] || return 0
+  local -a records fields when call
+  local i n record what is out
+  mapfile -t records < "$run_dir/ledger"
+  for (( i = ${#records[@]} - 1; i >= 0; i-- )); do
+    record=${records[i]}
+    mapfile -d '' -t fields < <(jq --raw-output0 \
+      '.what, (.is // ""), ((.when // []) | length | tostring), (.when // [])[], (.call | length | tostring), .call[]' <<< "$record")
+    what=${fields[0]}
+    is=${fields[1]}
+    n=${fields[2]}
+    when=("${fields[@]:3:n}")
+    call=("${fields[@]:3+n+1}")
+    if (( n )); then
+      if ! run_call out "${when[@]}"; then
+        say "undo $what: already gone"
+        continue
+      fi
+      if [[ $out != "$is" ]]; then
+        say "undo $what: it does not carry this run's mark, left alone"
+        continue
+      fi
+    fi
+    if run_call out "${call[@]}"; then
+      say "undo $what: done"
+    else
+      warn "undo $what: failed: $(jq_message "$run_dir/call.err")"
+    fi
+  done
+}
+
+resolve_step() {
+  local phase=$1 term=$2 caps=$3 resolved=$4
+  jq -n --raw-output0 \
+    --argjson st "$state" --argjson term "$term" --argjson caps "$caps" --argjson resolved "$resolved" \
+    --slurpfile b "$build_dir/binding.json" --slurpfile t "$run_dir/tables.json" \
+    --arg root "$root" --arg build "$build_dir" --arg phase "$phase" \
+    -f "$build_dir/libexec/resolve.jq" > "$run_dir/step" 2> "$run_dir/step.err"
+}
+
+meets() {
+  local test=$1 value=$2
+  case $test in
+    directory) [[ -d $value ]] || { warn "$where: $value is not a directory"; return 1; } ;;
+    file) [[ -f $value ]] || { warn "$where: $value is not a file"; return 1; } ;;
+    exists) [[ -e $value ]] || { warn "$where: $value does not exist"; return 1; } ;;
+    name) [[ -n $value && $value != */* ]] || { warn "$where: '$value' is not a name: empty, or it holds a /"; return 1; } ;;
+    *) warn "$where: the binding asks for an unknown test: $test"; return 1 ;;
+  esac
+}
+
+apply_term() {
+  local record=$1 term
+  term=$(jq -c '.term' <<< "$record")
+  where=$(jq -r '"\(.path), term \(.n) (\(.term | join(" ")))"' <<< "$record")
+  if ! resolve_step call "$term" '[]' '[]'; then
+    warn "$where: $(jq_message "$run_dir/step.err")"
+    return 1
+  fi
+  local -a fields argv targets resolved=() captured=()
+  mapfile -d '' -t fields < "$run_dir/step"
+  local next_state=${fields[1]} has_expect=${fields[2]} expect=${fields[3]} count=${fields[4]} i=5 k target found
+  for (( k = 0; k < count; k++ )); do
+    meets "${fields[i]}" "${fields[i + 1]}" || return 1
+    i=$(( i + 2 ))
+  done
+  count=${fields[i]}
+  i=$(( i + 1 ))
+  targets=("${fields[@]:i:count}")
+  i=$(( i + count ))
+  for target in "${targets[@]}"; do
+    found=$(realpath -e -- "$target" 2> /dev/null) || { warn "$where: $target does not resolve to an existing file"; return 1; }
+    resolved+=("$found")
+  done
+  count=${fields[i]}
+  i=$(( i + 1 ))
+  argv=("${fields[@]:i:count}")
+  i=$(( i + count ))
+  local wanted=${fields[i]} out=""
+  state=$next_state
+  if (( ${#argv[@]} )); then
+    log_call "${argv[@]}"
+    if ! run_call out "${argv[@]}"; then
+      warn "$where: ${argv[0]} failed: $(jq_message "$run_dir/call.err")"
+      return 1
+    fi
+    if [[ $has_expect == 1 && $out != "$expect" ]]; then
+      warn "$where: ${argv[0]} printed '${out//$'\n'/ }', and the binding expects '${expect//$'\n'/ }'"
+      return 1
+    fi
+  fi
+  local caps_json='[]'
+  if (( wanted )); then
+    read -r -a captured <<< "$out"
+    caps_json=$(json_list "${captured[@]}")
+  fi
+  if ! resolve_step after "$term" "$caps_json" "$(json_list "${resolved[@]}")"; then
+    warn "$where: $(jq_message "$run_dir/step.err")"
+    return 1
+  fi
+  mapfile -d '' -t fields < "$run_dir/step"
+  state=${fields[1]}
+  [[ -n ${fields[2]} ]] && printf '%s\n' "${fields[2]}" >> "$run_dir/ledger"
+  [[ -n ${fields[3]} ]] && printf '%s\n' "${fields[3]}" >> "$run_dir/checks"
+  count=${fields[4]}
+  i=5
+  local -a then_call=("${fields[@]:i:count}")
+  i=$(( i + count ))
+  count=${fields[i]}
+  i=$(( i + 1 ))
+  (( count )) && printf '%s\n' "${fields[@]:i:count}" >> "$run_dir/added.jsonl"
+  if (( ${#then_call[@]} )); then
+    log_call "${then_call[@]}"
+    if ! run_call out "${then_call[@]}"; then
+      warn "$where: ${then_call[0]} failed: $(jq_message "$run_dir/call.err")"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+cmd_up() {
+  (( $# == 0 )) || die "up takes no arguments" 2
+  need_jq
+  need_tmux
+  locate
+  verify_build || die "up starts only a verified build, and never builds"
+  plan_report "$build_dir/plan.json" "$build_dir/binding.json" "$build_dir/libexec/check.jq"
+  need_programs "${plan_programs[@]}"
+  mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
+  local run
+  printf -v run 'workplace-%08x%08x' "$SRANDOM" "$SRANDOM"
+  jq -c '.tables' <<< "$report" > "$run_dir/tables.json"
+  state=$(jq -n -c --arg root "$root" --arg clone "$clone" --arg build "$build_dir" --arg run "$run" --arg bash "$BASH" \
+    --argjson programs "$program_slots" \
+    '{slots: ({(["root"] | tojson): $root, (["clone"] | tojson): $clone, (["build"] | tojson): $build,
+               (["run"] | tojson): $run, (["bash"] | tojson): $bash} + $programs), added: {}}')
+  : > "$run_dir/ledger"
+  : > "$run_dir/checks"
+  : > "$run_dir/added.jsonl"
+  : > "$run_dir/calls.jsonl"
+  local -a records
+  mapfile -t records < <(jq -c '.programs[] | .path as $p | .plan | to_entries[]
+    | {path: $p, n: (.key + 1), term: (.value | if type == "object" then .term else . end)}' "$build_dir/plan.json")
+  local record applied=0
+  for record in "${records[@]}"; do
+    if ! apply_term "$record"; then
+      teardown
+      rm -rf -- "$run_dir"
+      die "up stopped after $applied of ${#records[@]} terms; everything it made is torn down"
+    fi
+    applied=$(( applied + 1 ))
+  done
+  printf '%s\n' "$state" > "$run_dir/state.json"
+  jq -n --argjson st "$state" --arg root "$root" \
+    '{collector: "workplace", root: $root,
+      facts: [$st.slots | to_entries[] | {fact: "slot", args: (.key | fromjson), value: .value}]}' > "$run_dir/facts.json"
+  say "up: $applied terms applied; run $run"
+}
+
+cmd_down() {
+  (( $# == 0 )) || die "down takes no arguments" 2
+  need_jq
+  need_tmux
+  locate
+  if [[ ! -d $run_dir ]]; then
+    say "down: nothing is up under $clone"
+    return 0
+  fi
+  teardown
+  rm -rf -- "$run_dir"
+  say "down: done"
+}
+
+cmd_status() {
+  (( $# == 0 )) || die "status takes no arguments" 2
+  need_jq
+  locate
+  local bad=0 sum
+  if [[ ! -d $build_dir ]]; then
+    say "build: none"
+  elif verify_build; then
+    sum=$(sha256sum -- "$build_dir/MANIFEST")
+    say "build: verified, manifest ${sum%%  *}"
+  else
+    say "build: does not match its manifest"
+    bad=1
+  fi
+  if [[ ! -d $run_dir ]]; then
+    say "run: down"
+    return "$bad"
+  fi
+  need_tmux
+  local run
+  run=$(jq -r '.slots[(["run"] | tojson)] // "unknown"' "$run_dir/state.json" 2> /dev/null) || run=unknown
+  say "run: up, $run"
+  local -a records fields call
+  local record what is out
+  mapfile -t records < "$run_dir/checks"
+  for record in "${records[@]}"; do
+    mapfile -d '' -t fields < <(jq --raw-output0 '.what, (.is // ""), .call[]' <<< "$record")
+    what=${fields[0]}
+    is=${fields[1]}
+    call=("${fields[@]:2}")
+    if run_call out "${call[@]}" && [[ $out == "$is" ]]; then
+      say "ok          $what"
+    else
+      say "gone        $what"
+      bad=1
+    fi
+  done
+  mapfile -t records < "$run_dir/added.jsonl"
+  for record in "${records[@]}"; do
+    say "unchecked   $(jq -r '"\(.what) \(.path): \(.state), added by the loop for \(.from)"' <<< "$record")"
+  done
+  return "$bad"
+}
+
+usage() {
+  say "usage: workplace build --plan FILE | up | down | status"
+  say "reads WORKPLACE_ROOT and WORKPLACE_CONFIG"
+}
+
+(( $# )) || { usage >&2; exit 2; }
+command=$1
+shift
+case $command in
+  build) cmd_build "$@" ;;
+  up) cmd_up "$@" ;;
+  down) cmd_down "$@" ;;
+  status)
+    cmd_status "$@"
+    exit $?
+    ;;
+  help | --help | -h) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

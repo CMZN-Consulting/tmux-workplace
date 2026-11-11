@@ -163,7 +163,7 @@ is : identity = /[A-Za-z0-9][A-Za-z0-9-]*/
 is : path = canonical-path
 is : argv = /\[.+\]/
 is : vault = relative-path except ""
-is : mode = "ro" | "rw"
+is : mode = "read-only" | "read-write"
 is : field = "agent" | "workdir"
 cell : policies = shadow
 cell : panes = shadow
@@ -173,28 +173,17 @@ cell : assignments = shadow
 primitive : assign : office room seat field text
 writes : assign : assignments = put 4
 effect : assign = state
-cell : mounts = shadow stacking
-primitive : reference : office room seat path mode
-writes : reference : mounts = put 4
-stage : reference = 5
-primitive : mask : office room seat path
-writes : mask : mounts = put 4
-stage : mask = 10
-primitive : reopen : office room seat path mode
-writes : reopen : mounts = put 4
-stage : reopen = 20
-primitive : veil : office room seat path
-writes : veil : mounts = put 4
-stage : veil = 30
-primitive : bind : office room seat path mode
-writes : bind : mounts = put 4
-reads : bind : directory = reject
-stage : bind = 40
-cell : boards = join access
-join : access : "ro" "rw" = "rw"
-primitive : board : office room seat path mode
-writes : board : boards = put 4
-stage : board = 50
+is : visibility = "hidden" | "searchable-only" | "read-only" | "read-write"
+cell : view = join exposure
+join : exposure : "hidden" "searchable-only" = "searchable-only"
+join : exposure : "hidden" "read-only" = "read-only"
+join : exposure : "hidden" "read-write" = "read-write"
+join : exposure : "searchable-only" "read-only" = "read-only"
+join : exposure : "searchable-only" "read-write" = "read-write"
+join : exposure : "read-only" "read-write" = "read-write"
+primitive : claim : office room seat path visibility
+writes : claim : view = put 4
+effect : claim = state
 primitive : resolve : office room seat text path
 effect : resolve = external
 stage : resolve = 60
@@ -204,13 +193,13 @@ primitive : spawn : office room seat argv
 effect : spawn = external
 stage : spawn = 70
 term : grant : vault mode
-rule : grant <p> <m> -> bind <office> <room> <seat> (join (context HouseRules.vault-root) <p>) <m> ; (each <a> in (ancestors (join (context HouseRules.vault-root) <p>)) (if (prefix (context HouseRules.vault-root) <a>) (if (exists (join <a> SHARED.md)) (board <office> <room> <seat> (join <a> SHARED.md) <m>)))) ; (if (exists (join (join (context HouseRules.vault-root) <p>) SHARED.md)) (board <office> <room> <seat> (join (join (context HouseRules.vault-root) <p>) SHARED.md) <m>))
+rule : grant <p> <m> -> claim <office> <room> <seat> (context HouseRules.vault-root) searchable-only ; claim <office> <room> <seat> (join (context HouseRules.vault-root) <p>) <m> ; (each <a> in (ancestors (join (context HouseRules.vault-root) <p>)) (if (prefix (context HouseRules.vault-root) <a>) (if (exists (join <a> SHARED.md)) (claim <office> <room> <seat> (join <a> SHARED.md) <m>)))) ; (if (exists (join (join (context HouseRules.vault-root) <p>) SHARED.md)) (claim <office> <room> <seat> (join (join (context HouseRules.vault-root) <p>) SHARED.md) <m>))
 fuel : grant = 64
-ensure : grant : grant-visible = (visible mounts <office> <room> <seat> (join (context HouseRules.vault-root) <1>))
+ensure : grant : grant-recorded = (bound view <office> <room> <seat> (join (context HouseRules.vault-root) <1>))
 count : grant = 0..1 by 1
-note : grant = board-fold-emission-unavailable
+note : grant = desired-view-claims-not-native-masking
 term : command : argv
-rule : command <x> -> (each <p> in (inherited HouseRules.read-only) (reference <office> <room> <seat> <p> ro)) ; (each <p> in (inherited HouseRules.deny-access) (mask <office> <room> <seat> <p>)) ; veil <office> <room> <seat> (context HouseRules.vault-root) ; (each <p> in (inherited HouseRules.deny-exec) (resolve <office> <room> <seat> executable <p>)) ; spawn <office> <room> <seat> <x>
+rule : command <x> -> (each <p> in (inherited HouseRules.read-only) (claim <office> <room> <seat> <p> read-only)) ; (each <p> in (inherited HouseRules.deny-access) (claim <office> <room> <seat> <p> hidden)) ; claim <office> <room> <seat> (context HouseRules.vault-root) hidden ; (each <p> in (inherited HouseRules.deny-exec) (resolve <office> <room> <seat> executable <p>)) ; spawn <office> <room> <seat> <x>
 fuel : command = 64
 note : command = argv-decoding-and-runtime-plumbing-external
 term : named : label
@@ -232,11 +221,11 @@ form : command : <argv>
 does : command <argv>
 count : command = 1
 form : vault : <vault>
-does : grant <vault> rw
+does : grant <vault> read-write
 form : vault-read : <vault>
-does : grant <vault> ro
+does : grant <vault> read-only
 term : private : path
-rule : private <x> -> reopen <office> <room> <seat> <x> rw
+rule : private <x> -> claim <office> <room> <seat> <x> read-write
 ensure : private : explicitly-denied = (bound policies (concat "deny-access:" <1>))
 form : private : <path>
 does : private <path>

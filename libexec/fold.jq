@@ -34,7 +34,7 @@ joined($b[0]; $root) as $plan
 | ($seats | map(.[0:2]) | unique) as $rooms
 | [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant")))] as $records
 | def known($scope; $n):
     if $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
@@ -123,6 +123,19 @@ joined($b[0]; $root) as $plan
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
         elif $t[1] == "/" then "\($where): a record path of / would cover each seat's whole view"
         else empty end
+      elif $t[0] == "ssh-key" then
+        if ($t | length) != 3 then "\($where): an ssh-key has the words ssh-key NAME PATH, not \($t | length)"
+        elif ($t[1] | key_fault) != null then "\($where): the ssh key's name \($t[1] | tojson) is refused: \($t[1] | key_fault)"
+        elif $t[2] | canonical | not then "\($where): \($t[2]) is not an absolute, canonical path"
+        else empty end
+      elif $t[0] == "ssh-grant" then
+        if ($t | length) != 7 then "\($where): an ssh-grant has the words ssh-grant A B C SCOPE NAME STATE, not \($t | length)"
+        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of an ssh-grant"
+        elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) ssh-grant cannot name \($t[1:4] | join(" "))"
+        elif known($t[4]; $t[1:4]) | not then "\($where): the ssh-grant names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
+        elif ($t[5] | key_fault) != null then "\($where): the ssh key's name \($t[5] | tojson) is refused: \($t[5] | key_fault)"
+        elif $t[6] | IN("granted", "none") | not then "\($where): \($t[6]) is not granted or none"
+        else empty end
       else
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
@@ -150,6 +163,10 @@ joined($b[0]; $root) as $plan
       | [$records[] | select(.term[0] == "record-path")] as $rpaths
       | ($rpaths | map(.term[1]) | unique) as $record_paths
       | ([$recs, $limits, $chains, $rpaths] | add | length > 0) as $logs
+      | [$records[] | select(.term[0] == "ssh-key")] as $sshkeys
+      | [$records[] | select(.term[0] == "ssh-grant")] as $sshgrants
+      | ([$sshkeys, $sshgrants] | add | length > 0) as $ssh
+      | ($sshkeys | map(.term[1]) | unique) as $ssh_names
       | [($said | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two statements of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
          ($cleared | group_by(.term[1:5])[] | select((map(.term[5] | tonumber) | unique | length) > 1)
@@ -178,6 +195,12 @@ joined($b[0]; $root) as $plan
           then "two mail terms differ: \([$mail_paths[] as $p | "\($p) from \(ats([$mailed[] | select(.term[1] == $p) | .origin]))"] | join(", "))" else empty end),
          ($reached | group_by(.term[1:10])[] | select((map(.term[10]) | unique | length) > 1)
           | "two reach terms of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) to \(scope_text(.[0].term; .[0].term[9]; .[0].term[6:9])) differ: \(map("\(.term[10]) from \(at(.origin))") | join(", "))"),
+         ($sshkeys | group_by(.term[1])[] | select((map(.term[2]) | unique | length) > 1)
+          | "two ssh-key terms of the name \(.[0].term[1]) differ: \(map("\(.term[2]) from \(at(.origin))") | join(", "))"),
+         ($sshgrants | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
+          | "two ssh-grant terms of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) for the key \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
+         ($sshgrants[] | select(.term[5] as $n | $ssh_names | index($n) | not)
+          | "\(at(.origin)): the ssh-grant names the key \(.term[5]), which no ssh-key term declares"),
          ([$reached[] | select(.term[5] != "record")] as $asks
           | if ($asks | length) > 0 and ($mailed | length) == 0
             then "the plan holds reach terms and no mail term, so no seat has a mailbox to ask in (the reach at \(ats([$asks[].origin])))" else empty end),
@@ -212,6 +235,8 @@ joined($b[0]; $root) as $plan
           | entities($expected) as $expects
           | entities($reached) as $reaches
           | entities($recs) as $record_terms
+          | entities($sshkeys) as $ssh_keys_e
+          | entities($sshgrants) as $ssh_grants_e
           | (if ($rpaths | length) == 0 then null else $record_paths[0] end) as $record_path
           | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
           | def holds($scope; $n; $k):
@@ -271,7 +296,14 @@ joined($b[0]; $root) as $plan
              | (if $logs | not then null
                 elif ($spoke | length) == 0 then {pane: "none", scope: null, origins: []}
                 else {pane: $spoke[0].term[6], scope: $spoke[0].term[4], origins: $spoke[0].origins} end) as $record
-             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record}]
+             | [$ssh_names[] as $nm
+                | ([$ssh_grants_e[] | select(.term[5] == $nm and holds(.term[4]; .term[1:4]; $k))] | max_by(.term[4] | rank)) as $g
+                | select($g != null and $g.term[6] == "granted")
+                | {name: $nm, scope: $g.term[4], origins: $g.origins}] as $ssh_granted
+             | (if $ssh | not then null
+                elif $key.state == "held" then {granted: $ssh_granted, unreached: []}
+                else {granted: [], unreached: $ssh_granted} end) as $ssh_seat
+             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record, ssh: $ssh_seat}]
           as $folds
           | [$folds[] | select(.home != null) | . as $f
              | ([$f.home.variable] + [$f.home.variables[].name]) as $given
@@ -285,8 +317,12 @@ joined($b[0]; $root) as $plan
                   elif .record.pane? == "kept"
                   then ": it has no view, and a seat with no view could reach its own record, which the plan keeps (the record at \(ats(.record.origins)))"
                   else "" end)] as $rootless
+          | [$folds[] | select(.ssh != null) | . as $f | $f.ssh.unreached[] | select(.scope == "seat")
+             | "seat \($f.name) (\($f.seat | join("/"))): the ssh-grant at \(ats(.origins)) grants the key \(.name) at the seat's own scope, and the seat holds no key, so it has no agent to hold it"
+               + (if $f.key.scope == null then "" else " (the key at \(ats($f.key.origins)))" end)] as $unheld
           | if ($clashes | length) > 0 then {errors: $clashes}
             elif ($rootless | length) > 0 then {errors: $rootless}
+            elif ($unheld | length) > 0 then {errors: $unheld}
             else
               [$folds[] | . as $f
                | (reduce $labels[] as $l ({rows: $f.stated, at: []};
@@ -315,7 +351,11 @@ joined($b[0]; $root) as $plan
                     | "seat \($f.name) (\($f.seat | join("/"))): its mailbox at \($mail.path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the mail at \(ats($mail.origins)))" end),
                  (if $record_path == null then empty
                   else $f.rows[] | select(.value[0] == "hidden" and beneath($record_path; .key[3]))
-                    | "seat \($f.name) (\($f.seat | join("/"))): its record path \($record_path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the record-path at \(ats([$rpaths[].origin])))" end)]
+                    | "seat \($f.name) (\($f.seat | join("/"))): its record path \($record_path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the record-path at \(ats([$rpaths[].origin])))" end),
+                 ($ssh_keys_e[] | . as $sk | $sk.term[2] as $file
+                  | ([$f.rows[] | select(at_or_beneath($file; .key[3]))] | max_by(.key[3] | length)) as $row
+                  | select($row != null and ($row.value[0] | IN("read-only", "read-write")))
+                  | "seat \($f.name) (\($f.seat | join("/"))): the file \($file) of the ssh key \($sk.term[1]) (the ssh-key at \(ats($sk.origins))) is shown to the seat by its row \($row.key[3]) \($row.value[0]) (from \(ats($row.origins))), and no seat is shown the file of a private key")]
             as $refused
             | if ($refused | length) > 0 then {errors: $refused}
               else
@@ -336,6 +376,7 @@ joined($b[0]; $root) as $plan
                      + (if (.expects | length) == 0 then {} else {expects} end)
                      + (if .reach == null then {} else {reach: (.reach | map_values(map(.name)))} end)
                      + (if .record == null then {} else {record} end)
+                     + (if .ssh == null then {} else {ssh} end)
                      + {
                       rows: (.rows | length),
                       replacement_statements: .replacing,
@@ -343,6 +384,7 @@ joined($b[0]; $root) as $plan
                       distinct_replaced_statement_count: .distinct,
                       statements_at_labelled_paths: .at}]}
                     + (if $mail == null then {} else {mail: $mail} end)
+                    + (if $ssh | not then {} else {ssh: {keys: [$ssh_keys_e[] | {name: .term[1], path: .term[2], origins}]}} end)
                     + (if $logs | not then {}
                        else {records: {path: $record_path, limit: ((($limits | map(.term[1]) | unique)[0] // "268435456") | tonumber),
                                        chain: (($chains | map(.term[1]) | unique)[0] // null),

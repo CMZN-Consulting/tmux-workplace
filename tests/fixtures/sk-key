@@ -1,0 +1,26 @@
+import base64, os, struct, sys
+
+
+def s(b):
+    if isinstance(b, str):
+        b = b.encode()
+    return struct.pack('>I', len(b)) + b
+
+
+kind = 'sk-ssh-ed25519@openssh.com'
+pk = os.urandom(32)
+pub = s(kind) + s(pk) + s('ssh:')
+check = os.urandom(4)
+priv = check + check + s(kind) + s(pk) + s('ssh:') + bytes([1]) + s(os.urandom(64)) + s(b'') + s('a security key made by the tests')
+pad = 1
+while len(priv) % 8:
+    priv += bytes([pad])
+    pad += 1
+blob = b'openssh-key-v1\0' + s('none') + s('none') + s(b'') + struct.pack('>I', 1) + s(pub) + s(priv)
+text = base64.b64encode(blob).decode()
+fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(fd, 'w') as f:
+    f.write('-----BEGIN OPENSSH PRIVATE KEY-----\n')
+    for i in range(0, len(text), 70):
+        f.write(text[i:i + 70] + '\n')
+    f.write('-----END OPENSSH PRIVATE KEY-----\n')

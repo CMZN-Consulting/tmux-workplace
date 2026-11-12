@@ -32,7 +32,7 @@
   - A program's and an origin's `path` are the reader's record of where a line was written, and the loop neither rewrites nor refuses them.
   - A `read-only` or `read-write` row whose path does not exist is refused, and so is a `hidden`, `searchable-only` or `scratch` row whose path is not a directory. The preconditions the binding names (a directory, a file) are checked at build.
 - **C5.** `up` checks `BUILD` against its `MANIFEST`, refuses a changed, missing or unlisted file, and never builds.
-- **C6.** The loop needs bash 5.2, jq 1.7 and tmux 3.5a or later, and refuses an older one; versions are compared with tmux's letter suffix, so the floor 3.5a refuses 3.5. It needs `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`, and bubblewrap only when a seat has a view. GnuPG 2.4.4 or later (`gpg`, `gpg-agent`, `gpgconf`, `gpg-connect-agent`), with `setsid` and `base64`, is needed only by a plan in which a seat holds a key (C44), GNU `env` with `-S`, coreutils 8.30 or later, only by one in which a seat expects a value (C49): `up` and `exec` refuse an older `env` there with exit 2, naming both versions; and git 2.32 or later, with `flock`, `dd`, `mv`, `tail` and `date`, only by a plan that holds mail (C56). It resolves each program to an absolute path before it applies anything, and refuses a path that holds `=`.
+- **C6.** The loop needs bash 5.2, jq 1.7 and tmux 3.5a or later, and refuses an older one; versions are compared with tmux's letter suffix, so the floor 3.5a refuses 3.5. It needs `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`, and bubblewrap only when a seat has a view. GnuPG 2.4.4 or later (`gpg`, `gpg-agent`, `gpgconf`, `gpg-connect-agent`), with `setsid` and `base64`, is needed only by a plan in which a seat holds a key (C44), and OpenSSH's `ssh-keygen` and `ssh-add` only by one that grants an ssh key (C86), GNU `env` with `-S`, coreutils 8.30 or later, only by one in which a seat expects a value (C49): `up` and `exec` refuse an older `env` there with exit 2, naming both versions; and git 2.32 or later, with `flock`, `dd`, `mv`, `tail` and `date`, only by a plan that holds mail (C56). It resolves each program to an absolute path before it applies anything, and refuses a path that holds `=`.
 
 ## Applying the plan
 
@@ -104,7 +104,7 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
@@ -146,20 +146,21 @@
   - For each seat that holds a key, in the order of the panes, `build` makes a home `S/keys/NN`, NN being the seat's place among the panes.
   - In it, under `setsid` with nothing on standard input, it makes an ed25519 key that signs and certifies, with an ed25519 subkey that authenticates. There is no passphrase, no expiry and nothing that encrypts.
   - The user id is `NAME <A.B.C@WORKPLACE>`: the seat's name, and its place at the workplace. A user id that gpg does not make as asked refuses the build by name. The user id is passed after `--`, since gpg reads one that begins with `-` as its options.
-  - The agent of the home has `pinentry-program` set to `false` and `enable-ssh-support`. The home holds the subkey's keygrip in `sshcontrol`, which is read-only (0444), and `no-autostart` in `gpg.conf`.
+  - The agent of the home has `pinentry-program` set to `false`, `enable-ssh-support` and `disable-scdaemon` (C88). The home holds the subkey's keygrip in `sshcontrol`, which is read-only (0444), and `no-autostart` in `gpg.conf`.
 - **C36.** No key outlives its build.
   - Every build removes the old homes of `S/keys`, first removing their runtime socket directories, which ends any agent of them.
   - It removes the revocation certificate that gpg writes unasked, and ends the agent that made the key.
 - **C37.** `BUILD/keys.json`, listed in `BUILD/MANIFEST`, holds the workplace's name and S. For each holding seat it holds:
   - its place and name, its home and its user id;
   - the fingerprints of the key and of the subkey, and the armored public key;
-  - the OpenSSH line of the subkey, with the comment `A/B/C@WORKPLACE`, and that line's SHA256 fingerprint.
+  - the OpenSSH line of the subkey, with the comment `A/B/C@WORKPLACE`, and that line's SHA256 fingerprint;
+  - its grants (C87).
 - **C38.** Before any term, `up` starts one agent per holding seat under `setpriv --no-new-privs`, outside every view.
   - It refuses where an agent of the home already answers, and leaves that agent alone.
   - It refuses a socket path over 106 bytes, the most GnuPG takes. `build` refuses a state directory too long for the sockets: over 84 bytes, or over 78 where there is no runtime directory.
   - It records in the ledger the agent, marked by its process id, and, where its sockets stand in the runtime directory, that directory. It records in the run's checks the agent's answer.
 - **C39.** After the rows, the binding's fixed part closes the runtime directory, and with it the agents' sockets, in every view that would show it as the machine has it (C84), and masks R in every view: closed for a seat that holds no key and has no home, and searchable for one that holds a key or has a home.
-  - A holding seat is shown, at G = `S/gnupg`, a read-only directory of the frame's making. It holds the key's public ring, its trust database and `gpg.conf`, the agent's extra socket as `S.gpg-agent`, and its ssh socket as `S.gpg-agent.ssh`. It is never shown the standard socket, a private key or another seat's home.
+  - A holding seat is shown, at G = `S/gnupg`, a read-only directory of the frame's making. It holds the key's public ring, its trust database and `gpg.conf`, the agent's extra socket as `S.gpg-agent`, its ssh socket as `S.gpg-agent.ssh`, and, for a seat that an ssh key reaches, the keys' public files in `ssh/` (C90). It is never shown the standard socket, a private key or another seat's home.
   - The frame gives such a seat `GNUPGHOME` and `SSH_AUTH_SOCK` after the environment's cell, and a plan that sets either for it is refused by `plan` and by `build`, naming the row and the key term (C48).
 - **C40.** In its view a holding seat signs with gpg and with `ssh-keygen -Y sign`, and makes a signed git commit with the committer set to its name and address alone, all with nothing set by hand. Each verifies against `keys.json`.
 - **C41.** Through its sockets a seat obtains nothing of its key and changes nothing.
@@ -303,7 +304,7 @@
   - The pipe's command quotes each word for the shell, and doubles its `%` and `#`, since tmux expands both in it.
   - The keeper stores what the pane's program wrote, byte for byte, with `dd`, a chunk at each read. It takes the day from `date -u` whenever the second changes, and changes the file itself at a change of day, so the pipe is set once. Setting it again loses lines: 2 in 20, measured.
   - At the limit it stores nothing more that day and counts what it does not store. When that day's file ends, at a change of day or at the pane's end, it appends `DAY COUNT` to `unstored`.
-- **C72.** With a sink, the carrier sends one entry for each kept file, every ten seconds and twice as it ends: for what was appended since that file's last entry. The kept files are each seat's day files, `unstored` and `gaps`, and the frame's record of requests (C66).
+- **C72.** With a sink, the carrier sends one entry for each kept file, every ten seconds and twice as it ends: for what was appended since that file's last entry. The kept files are each seat's day files, `unstored`, `gaps` and `signed` (C91), and the frame's record of requests (C66).
   - An entry is `{chain: "workplace-record", at, workplace, seat, file, offset, length, hash, previous}`.
   - Its hash is the SHA-256 of `previous`, written as 64 lowercase hex digits, followed by the bytes from `offset` for `length`. Before a file's first entry, `previous` is 64 zeros.
   - The carrier keeps each file's offset and last hash in `chain.state`, across runs.
@@ -337,6 +338,27 @@
   - **What it holds:** only the seat's own `hidden`, `searchable-only` and `scratch` rows beneath it, mounted again after the mask, and whatever the frame gives the seat beneath it. A seat's key agent is shown in its key home (C39), so a seat signs under the mask, and under a `hidden` row at the runtime directory as well.
   - **Rows:** a `hidden`, `searchable-only` or `scratch` row at the runtime directory stands as the text wrote it, and no mask is put there. `plan` and `build` refuse a `read-only` or a `read-write` row at or beneath it, naming the seat, the row and its origin, as at the clone. `why` names the mask, and the seat's rows beneath it that stand.
 
+## An ssh key granted to a seat's agent
+
+- **C85.** The fold reads `ssh-key NAME PATH` and `ssh-grant A B C SCOPE NAME STATE`. NAME is a word under the rule for a key of an office. PATH is as written, and the frame joins a relative one to the root. SCOPE is `workplace`, `office`, `room` or `seat`, with A, B and C as for `key`, and STATE is `granted` or `none`. For each NAME the narrowest scope that speaks decides, and with no term nothing is granted. A plan that holds either term is folded, so every seat of it has a view.
+  - It refuses, naming the origins: two `ssh-key` terms of one NAME that differ, two `ssh-grant` terms of one scope and one NAME with different states, a NAME that no `ssh-key` term declares, a grant at a seat's own scope to a seat that holds no key, and a word, a count of words or a scope that the terms do not take.
+  - It refuses a key's file that any seat's table shows read-only or read-write, naming the seat, its row and the key's term: no seat is shown the file of a private key.
+  - A grant of a wider scope reaches the seats of that scope that hold a key. `plan` prints each key with its file, and for each seat the names it is granted, with their terms, and, for a seat of the scope that holds no key, that the grant does not reach it. `view.json` gives each seat `ssh: {granted, unreached}`, and the keys under `ssh.keys`.
+- **C86.** `build` checks the file of each key that reaches a seat, once and before it makes any key home, with `ssh-keygen -y` and an empty passphrase, under `setsid` with nothing on standard input. It refuses with exit 1, naming the key and its file: a file that is missing or is not a regular file, one that asks for a passphrase, one that ssh does not read as a private key, an RSA key under 2048 bits, a security key's file, and any kind but ed25519, RSA and ECDSA on nistp256, nistp384 or nistp521.
+- **C87.** For each holding seat that a key reaches, `build` loads the key into the seat's home, after the seat's own: through an agent of the home started with `--batch` on its command line, by `ssh-add` reading the file on its standard input, and it ends that agent. The file is read by `build` alone, outside every view: once for the check and once for each seat, and nothing of it is kept between the reads.
+  - The home gains one unprotected key file per grant, and its grip in `sshcontrol` after the seat's own, which the agent offers first. `sshcontrol` is made read-only once the keys are loaded (C35).
+  - The home gains `ssh/NAME.pub` for each grant, read-only: the public OpenSSH line with NAME as its comment.
+  - `keys.json` gives each holding seat `grants`: for each, its NAME, that line, its SHA256 fingerprint, the grip of the key and its kind. No byte of a private key stands in `BUILD`.
+  - The copy in a home is a key of that build: every build removes the old homes, and their copies with them (C36).
+- **C88.** The agent of each home has `disable-scdaemon`: no smartcard daemon runs for it after a listing.
+- **C89.** `up` refuses with exit 1, naming the file, a home whose `gpg-agent.conf` says `batch`, and a machine whose `gpg-agent.conf` in GnuPG's system directory says it, since every agent reads that file and an agent with `batch` takes any key added through its ssh socket. It checks that each agent offers every key the build loaded for it, refuses where one does not, and records the agent's answer among the run's checks.
+- **C90.** A seat that a key reaches is shown, in G at `ssh/`, the public files of its keys, read-only. Through its ssh socket it lists each granted key after its own and signs with it.
+  - A key loaded on standard input shows the file's own comment, or `(stdin)`, and never a path. A seat tells its keys apart by their public files.
+  - Through the two sockets it is shown it obtains nothing of a granted key, adds none and removes none, as for its own (C41). No file of the key stands in its view.
+  - Its ssh configuration, which the workplace's text writes, names the key's public file for each host and offers only that one. A host that allows one try logs it in so, and refuses an agent that offers every key, since the agent offers the seat's own first.
+- **C91.** Where the plan keeps a record, each holding seat's agent logs at `-v` to `signed`, in the seat's directory of records, with its times in UTC, and the carrier chains `signed` among the kept files (C72). After an ssh signature it holds a line with the second, and nothing of the key or of the data.
+- **C92.** `status` lists each agent's granted keys by name, and exits 1 when an agent no longer offers one that the build loaded. `why` names a seat's grants, the terms that give them and their public files, and for a seat that holds no key, the grants that do not reach it.
+
 ## Limits, stated and not checked
 
 - A mail's body is carried byte for byte, since mail carries captures and logs, which hold control characters. The head is the frame's, and it ends at the first line of three dashes; a reader takes `from` from the head alone. A mail shown raw on a terminal can draw over its own head, so a mail is read through a program that does not obey control characters, as a seat's file tool does.
@@ -347,3 +369,10 @@
 - A keeper that a signal ends does not write that day's count of what it had not stored. The carrier sets the pipe again and records the gap.
 - The journal keeps what it is sent within its own rate limit and retention, which are the administrator's. On this machine they are the defaults: a rate limit of 10,000 entries in 30 seconds for a unit, and removal by size and not by age. The carrier sends an entry only for a file that grew in the last ten seconds, so a house of 28 seats sends a few hundred in 30 seconds at the most. An entry that the journal dropped, or has since removed, shows to `record verify` as a skip.
 - A seat's program has no session bus, and so no notification, no secret service and no portal, and it has no manager of the user's (C84).
+- A granted key (C85 to C92):
+  - **Copies.** Each holding seat's key home holds an unprotected copy of every key granted to it, for as long as the build stands. A key granted to every holding seat stands once in each of their homes. The copies go with the build's homes (C36).
+  - **The extra socket.** A seat signs any hash with a granted key through its extra socket too, and such a signature leaves no line in `signed`. The agent's own log cannot name the key behind an ssh signature without also writing the private keys, so `signed` names the seat and the second, and the accepting host's record names the key and the account.
+  - **The agent's answers.** It answers `ssh-rsa` signatures with SHA-1; which signatures a host takes is the host's. Lock answers success, and the agent still lists its keys.
+  - **Use.** A seat uses a granted key for as long as it runs, and it can forward its agent to a host for the length of one connection. A process of the user outside every view reaches the state directory, and the homes in it.
+  - **Who runs `build`.** A workplace that names a key is built outside its own views. A seat of another workplace that runs the build was shown the key's file by that workplace's text. The frame does not see across workplaces.
+  - **Where no record is kept,** a holding seat's agent logs nothing.

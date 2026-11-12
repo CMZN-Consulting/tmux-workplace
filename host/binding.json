@@ -83,7 +83,9 @@
         "record",
         "record-limit",
         "record-chain",
-        "record-path"
+        "record-path",
+        "ssh-key",
+        "ssh-grant"
       ],
       "programs": [
         "bwrap"
@@ -526,12 +528,6 @@
                 },
                 "/S.gpg-agent.ssh"
               ]
-            },
-            "--remount-ro",
-            {
-              "slot": [
-                "key-view"
-              ]
             }
           ],
           "environment": [
@@ -556,6 +552,69 @@
                 ]
               }
             ]
+          ]
+        },
+        {
+          "if-slot": [
+            "key-grants",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--ro-bind",
+            {
+              "slot": [
+                "key-grants",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-view"
+                  ]
+                },
+                "/ssh"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "key-home",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--remount-ro",
+            {
+              "slot": [
+                "key-view"
+              ]
+            }
           ]
         },
         {
@@ -901,6 +960,9 @@
       ],
       "record-path": [
         1
+      ],
+      "ssh-key": [
+        2
       ]
     },
     "cells": {

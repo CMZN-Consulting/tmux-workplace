@@ -16,7 +16,7 @@ jobs:
       - name: Packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config bison libevent-dev libncurses-dev bubblewrap jq
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config bison libevent-dev libncurses-dev bubblewrap jq openssh-server scdaemon
       - name: tmux 3.5a from its release archive
         env:
           TMUX_ARCHIVE: https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz

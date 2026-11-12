@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
 LOG_PROGRAMS=(dd date tail head)
@@ -410,6 +410,7 @@ print_fold_report() {
     | (if .view.mail == null then empty else "mail: \(.view.mail.path), where each seat is shown its own mailbox (\(ats(.view.mail.origins)))" end),
       (if .view.records == null then empty
        else "records: \(if .view.records.path == null then "shown to no seat" else "shown at \(.view.records.path)" end); \(.view.records.limit) bytes a day for a pane; \(if .view.records.chain == null then "no chain is made, and the files are kept" else "chained to the \(.view.records.chain)" end)" end),
+      (.view.ssh.keys[]? | "ssh key \(.name): \(.path) (\(ats(.origins)))"),
       (.view.seats[]
        | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); clearance \(.clearance.value)"
          + (if .clearance.scope == null then ", by default" else ", the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)
@@ -422,6 +423,8 @@ print_fold_report() {
             | (["mail", "grab", "write", "record"][] | select(. as $a | $r | has($a))) as $a
             | "  \($a): \(if ($r[$a] | length) == 0 then "no seat" else [$r[$a][] | .name + (if (.origins | length) > 0 then " (\(ats(.origins)))" else "" end)] | join(", ") end)"
           end),
+         (.ssh.granted[]? | "  ssh key \(.name): granted, by the \(.scope)'"'"'s term (\(ats(.origins)))"),
+         (.ssh.unreached[]? | "  ssh key \(.name): the \(.scope)'"'"'s grant does not reach it, since the seat holds no key (\(ats(.origins)))"),
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
@@ -615,8 +618,81 @@ key_step() {
   fi
 }
 
+check_ssh_keys() {
+  local holders=$1 name file line type blob out bits kind program
+  local -a names
+  mapfile -t names < <(jq -r '[.[].grants[]] | unique[]' <<< "$holders")
+  (( ${#names[@]} )) || return 0
+  for program in ssh-keygen ssh-add gpg-connect-agent; do
+    command -v "$program" > /dev/null || die "a plan that grants an ssh key needs $program, and $program is not on PATH" 2
+  done
+  for name in "${names[@]}"; do
+    file=$(jq -r --arg n "$name" '[.view.ssh.keys[] | select(.name == $n) | .path][0] // empty' <<< "$folded")
+    [[ -n $file ]] || die "cannot find the file of the ssh key $name in the plan's view" 2
+    [[ -e $file || -L $file ]] || die "build refuses: the ssh key $name, $file, is missing"
+    [[ -f $file ]] || die "build refuses: the ssh key $name, $file, is not a regular file"
+    if ! line=$(setsid -w ssh-keygen -y -P '' -f "$file" < /dev/null 2> "$build_dir/key.out"); then
+      out=$(tail -n 1 "$build_dir/key.out")
+      rm -f -- "$build_dir/key.out"
+      [[ $out == *"incorrect passphrase"* ]] && die "build refuses: the ssh key $name, $file, asks for a passphrase, and build loads only a key that asks for none"
+      die "build refuses: the ssh key $name, $file, is not a private key that ssh reads: $out"
+    fi
+    rm -f -- "$build_dir/key.out"
+    read -r type blob _ <<< "$line"
+    case $type in
+      ssh-ed25519 | ssh-rsa | ecdsa-sha2-nistp256 | ecdsa-sha2-nistp384 | ecdsa-sha2-nistp521) ;;
+      sk-*) die "build refuses: the ssh key $name, $file, is a security key's file, of the kind $type, which the agent does not take" ;;
+      *) die "build refuses: the ssh key $name, $file, is of the kind $type; the frame takes ed25519, RSA of 2048 bits or more, and ECDSA on nistp256, nistp384 or nistp521" ;;
+    esac
+    out=$(ssh-keygen -l -f - <<< "$type $blob" 2> /dev/null) || die "cannot read the size of the ssh key $name" 2
+    bits=${out%% *} kind=${out##* }
+    kind=${kind#(} kind=${kind%)}
+    [[ $bits =~ ^[0-9]+$ && -n $kind ]] || die "cannot read the size of the ssh key $name: $out" 2
+    if [[ $type == ssh-rsa ]] && (( bits < 2048 )); then
+      die "build refuses: the ssh key $name, $file, is an RSA key of $bits bits; the frame takes RSA of 2048 bits or more"
+    fi
+    ssh_file[$name]=$file
+    ssh_line[$name]="$type $blob $name"
+    ssh_fpr[$name]=$(ssh_fingerprint "$blob") || die "cannot compute the fingerprint of the ssh key $name" 2
+    ssh_kind[$name]="${kind,,} $bits"
+  done
+}
+
+load_ssh_keys() {
+  local home=$1 who=$2 socket listing name grip
+  shift 2
+  granted='[]'
+  (( $# )) || return 0
+  mkdir -m 0700 -- "$home/ssh" || die "cannot make $home/ssh" 2
+  for name in "$@"; do
+    printf '%s\n' "${ssh_line[$name]}" > "$home/ssh/$name.pub" && chmod 0444 -- "$home/ssh/$name.pub" || die "cannot write $home/ssh/$name.pub" 2
+  done
+  if ! setsid -w gpg-agent --homedir "$home" --daemon --batch < /dev/null > "$build_dir/key.out" 2>&1; then
+    end_key_agent "$home"
+    die "build refuses: the agent that loads the ssh keys of $who did not start: $(tail -n 1 "$build_dir/key.out")" 2
+  fi
+  socket=$(gpgconf --homedir "$home" --list-dirs agent-ssh-socket)
+  for name in "$@"; do
+    if ! env -u DISPLAY -u WAYLAND_DISPLAY -u SSH_ASKPASS SSH_ASKPASS_REQUIRE=never SSH_AUTH_SOCK="$socket" \
+      setsid -w ssh-add -q - < "${ssh_file[$name]}" > "$build_dir/key.out" 2>&1; then
+      end_key_agent "$home"
+      die "build refuses: the ssh key $name, ${ssh_file[$name]}, cannot be loaded for $who: $(tail -n 1 "$build_dir/key.out")"
+    fi
+  done
+  listing=$(gpg-connect-agent --homedir "$home" --no-autostart 'KEYINFO --ssh-list --ssh-fpr=sha256' /bye 2> /dev/null)
+  end_key_agent "$home"
+  for name in "$@"; do
+    grip=$(awk -v f="${ssh_fpr[$name]}" '$1 == "S" && $2 == "KEYINFO" && $9 == f { print $3; exit }' <<< "$listing")
+    [[ $grip =~ ^[0-9A-F]{40}$ ]] || die "build refuses: after the load, the agent of $who does not offer the ssh key $name" 2
+    granted=$(jq -c --arg n "$name" --arg l "${ssh_line[$name]}" --arg f "${ssh_fpr[$name]}" --arg g "$grip" --arg k "${ssh_kind[$name]}" \
+      '. + [{name: $n, ssh: $l, fingerprint: $f, grip: $g, kind: $k}]' <<< "$granted")
+  done
+}
+
 make_keys() {
-  local holders=$1 workplace=$2 state_dir
+  local holders=$1 workplace=$2 state_dir granted
+  local -A ssh_file=() ssh_line=() ssh_fpr=() ssh_kind=()
+  [[ $holders == '[]' ]] || check_ssh_keys "$holders"
   if ! state_dir=$(state_root); then
     [[ $holders == '[]' ]] && return 0
     die "build needs the workplaces' state directory, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
@@ -652,7 +728,7 @@ make_keys() {
   mkdir -m 0700 -- "$state_dir/keys" || die "cannot make $state_dir/keys" 2
   local no; no=$(command -v false) || die "build needs false, for the agents' pinentry" 2
   local entries='[]' holder n name nn home uid who wanted pub line type blob comment fingerprint
-  local -a seat
+  local -a seat grants
   while IFS= read -r holder; do
     n=$(jq -r '.n' <<< "$holder")
     name=$(jq -r '.name' <<< "$holder")
@@ -662,7 +738,7 @@ make_keys() {
     who="seat ${seat[0]}/${seat[1]}/${seat[2]} ($name)"
     uid="$name <${seat[0]}.${seat[1]}.${seat[2]}@$workplace>"
     mkdir -m 0700 -- "$home" || die "cannot make the key home $home" 2
-    printf '%s\n' "pinentry-program $no" enable-ssh-support > "$home/gpg-agent.conf" || die "cannot write $home/gpg-agent.conf" 2
+    printf '%s\n' "pinentry-program $no" enable-ssh-support disable-scdaemon > "$home/gpg-agent.conf" || die "cannot write $home/gpg-agent.conf" 2
     key_step "$home" "$who" gpg --homedir "$home" --batch --pinentry-mode loopback --passphrase '' --quick-gen-key -- "$uid" ed25519 sign never
     key_listing "$home"
     wanted=${uid//\\/\\x5c}
@@ -677,23 +753,28 @@ make_keys() {
       end_key_agent "$home"
       die "build refuses: the key of $who has the usage ${key_usage@Q} and its subkey ${sub_usage@Q}, not signing and authentication alone" 2
     fi
-    printf '%s 0\n' "$sub_grip" > "$home/sshcontrol" && chmod 0444 -- "$home/sshcontrol" && printf '%s\n' no-autostart > "$home/gpg.conf" \
+    printf '%s 0\n' "$sub_grip" > "$home/sshcontrol" && printf '%s\n' no-autostart > "$home/gpg.conf" \
       && rm -rf -- "$home/openpgp-revocs.d" || { end_key_agent "$home"; die "cannot finish the key home $home" 2; }
     pub=$(gpg --homedir "$home" --armor --export -- "$key_fpr" 2> /dev/null) && line=$(gpg --homedir "$home" --export-ssh-key -- "$key_fpr" 2> /dev/null) \
       || { end_key_agent "$home"; die "cannot export the public key of $who" 2; }
     read -r type blob comment <<< "$line"
     fingerprint=$(ssh_fingerprint "$blob") || { end_key_agent "$home"; die "cannot compute the ssh fingerprint of $who" 2; }
     end_key_agent "$home"
+    mapfile -t grants < <(jq -r '.grants[]' <<< "$holder")
+    load_ssh_keys "$home" "$who" "${grants[@]}"
+    chmod 0444 -- "$home/sshcontrol" || die "cannot make $home/sshcontrol read-only" 2
     entries=$(jq -c --argjson seat "$(jq -c '.seat' <<< "$holder")" --arg name "$name" --arg home "keys/$nn" --arg uid "$uid" \
       --arg fpr "$key_fpr" --arg sub "$sub_fpr" --arg pub "$pub" --arg ssh "$type $blob ${seat[0]}/${seat[1]}/${seat[2]}@$workplace" \
-      --arg sshfp "$fingerprint" \
+      --arg sshfp "$fingerprint" --argjson grants "$granted" \
       '. + [{seat: $seat, name: $name, home: $home, uid: $uid, fingerprint: $fpr, authentication: $sub,
-             public_key: $pub, ssh: $ssh, ssh_fingerprint: $sshfp}]' <<< "$entries")
+             public_key: $pub, ssh: $ssh, ssh_fingerprint: $sshfp, grants: $grants}]' <<< "$entries")
   done < <(jq -c '.[]' <<< "$holders")
   rm -f -- "$build_dir/key.out"
   jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir/keys.json" \
     || die "cannot write $build_dir/keys.json" 2
   say "keys: $count made in $state_dir/keys"
+  jq -r '[.[].grants[]] | group_by(.) | map("\(.[0]) for \(length) seat\(if length > 1 then "s" else "" end)") | select(length > 0)
+    | "ssh keys loaded: \(join(", "))"' <<< "$holders"
 }
 
 seat_directories() {
@@ -1089,7 +1170,7 @@ cmd_build() {
   local holders='[]'
   if [[ -n $folded ]]; then
     holders=$(jq -c '.report.names as $names | [.view.seats | to_entries[] | select(.value.key.state == "held")
-      | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson]}]' <<< "$folded") || die "cannot read the seats that hold a key" 2
+      | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson], grants: [(.value.ssh.granted // [])[].name]}]' <<< "$folded") || die "cannot read the seats that hold a key" 2
   fi
   make_keys "$holders" "$(jq -r '.name // "default"' <<< "$report")"
   holders='[]'
@@ -1359,6 +1440,8 @@ run_server() {
   fi
 }
 
+says_batch() { [[ -f $1 ]] && grep -qE '^[[:space:]]*batch[[:space:]]*$' -- "$1"; }
+
 agent_record() {
   jq -c -n --arg what "$1" --arg is "$2" --argjson words "$(json_list "${@:3}")" \
     '{what: $what, when: $words[0:6], is: $is, call: $words[6:]}'
@@ -1387,14 +1470,34 @@ start_agents() {
   done
   agent=$(command -v gpg-agent) connect=$(command -v gpg-connect-agent) kill_with=$(command -v gpgconf)
   local setpriv_program; setpriv_program=$(command -v setpriv) || { warn "up needs setpriv"; return 1; }
-  local view=$made_in/gnupg holder home name pid answer extra ssh socket_dir who socket
-  local -a seat ask
+  local machine_conf
+  machine_conf=$("$kill_with" --list-dirs sysconfdir 2> /dev/null)/gpg-agent.conf
+  if says_batch "$machine_conf"; then
+    warn "the machine's $machine_conf says batch, which every agent of GnuPG reads, and an agent that serves a seat with it takes any key added through its ssh socket; up refuses until that line is gone"
+    return 1
+  fi
+  local view=$made_in/gnupg holder home name pid answer extra ssh socket_dir who socket records=$build_dir/records.json log_dir offers grant_name grant_grip grant_fpr
+  local -a seat ask log offer
   while IFS= read -r holder; do
     home=$made_in/$(jq -r '.home' <<< "$holder")
     name=$(jq -r '.name' <<< "$holder")
     mapfile -t seat < <(jq -r '.seat[]' <<< "$holder")
     who="the agent of $name"
     [[ -d $home ]] || { warn "the key home $home of $name is missing; build again"; return 1; }
+    if says_batch "$home/gpg-agent.conf"; then
+      warn "$home/gpg-agent.conf says batch, and an agent that serves a seat never runs with it, since it takes any key added through its ssh socket; build again"
+      return 1
+    fi
+    log=()
+    if [[ -f $records ]]; then
+      log_dir=$(jq -r --argjson k "$(jq -c '.seat' <<< "$holder")" '[.seats[] | select(.seat == $k) | .dir][0] // empty' "$records")
+      [[ -n $log_dir && -d $log_dir ]] || { warn "the record of $name, where its agent logs what it signs, is missing; build again"; return 1; }
+      log=(--log-file "$log_dir/signed" -v)
+    fi
+    if [[ $(jq '.grants // [] | length' <<< "$holder") != 0 && ! -d $home/ssh ]]; then
+      warn "the public files of $name's ssh keys, $home/ssh, are missing; build again"
+      return 1
+    fi
     ask=("$connect" --homedir "$home" --no-autostart "GETINFO pid" /bye)
     answer=$("${ask[@]}" 2> /dev/null)
     if [[ $answer == D\ * ]]; then
@@ -1403,7 +1506,7 @@ start_agents() {
     fi
     socket_dir=$("$kill_with" --homedir "$home" --list-dirs socketdir)
     [[ $socket_dir == "$home" ]] || agent_record "the runtime sockets of $name's agent" "" "${ask[@]}" "$kill_with" --homedir "$home" --remove-socketdir >> "$run_dir/ledger"
-    "$setpriv_program" --no-new-privs "$agent" --homedir "$home" --daemon > "$run_dir/agent.out" 2>&1 \
+    TZ=UTC0 "$setpriv_program" --no-new-privs "$agent" --homedir "$home" --daemon "${log[@]}" > "$run_dir/agent.out" 2>&1 \
       || { warn "$who did not start: $(tail -n 1 "$run_dir/agent.out")"; return 1; }
     answer=$("${ask[@]}" 2> /dev/null)
     pid=${answer#D }
@@ -1427,6 +1530,18 @@ start_agents() {
       | .slots[(["key-extra"] + $k | tojson)] = $e
       | .slots[(["key-ssh"] + $k | tojson)] = $s
       | .slots[(["state-pass"] + $k | tojson)] = "1"' <<< "$state")
+    if [[ $(jq '.grants // [] | length' <<< "$holder") != 0 ]]; then
+      offer=("$connect" --homedir "$home" --no-autostart "KEYINFO --ssh-list --ssh-fpr=sha256" /bye)
+      offers=$("${offer[@]}" 2> /dev/null)
+      while IFS=$'\t' read -r grant_name grant_grip grant_fpr; do
+        awk -v g="$grant_grip" -v f="$grant_fpr" '$1 == "S" && $2 == "KEYINFO" && $3 == g && $9 == f { found = 1 } END { exit !found }' <<< "$offers" \
+          || { warn "$who does not offer the ssh key $grant_name, which the build loaded for it; build again"; return 1; }
+      done < <(jq -r '.grants[] | [.name, .grip, .fingerprint] | @tsv' <<< "$holder")
+      jq -c -n --arg what "$who offers its ssh keys: $(jq -r '[.grants[].name] | join(", ")' <<< "$holder")" --arg is "$offers" \
+        --arg note "$name's agent no longer offers every ssh key the build loaded for it; build again and bring the workplace up" \
+        --argjson call "$(json_list "${offer[@]}")" '{what: $what, is: $is, note: $note, call: $call}' >> "$run_dir/checks"
+      state=$(jq -c --arg g "$home/ssh" --argjson k "$(jq -c '.seat' <<< "$holder")" '.slots[(["key-grants"] + $k | tojson)] = $g' <<< "$state")
+    fi
     say "up: $who, pid $pid"
   done < <(jq -c '.seats[]' "$keys")
 }
@@ -2232,7 +2347,7 @@ carrier_chain() {
   (( ${1-0} || EPOCHSECONDS - chain_last >= CHAIN_PERIOD )) || return 0
   chain_last=$EPOCHSECONDS
   for i in "${!record_names[@]}"; do
-    for file in "${record_dirs[i]}"/*.pane "${record_dirs[i]}/unstored" "${record_dirs[i]}/gaps"; do
+    for file in "${record_dirs[i]}"/*.pane "${record_dirs[i]}/unstored" "${record_dirs[i]}/gaps" "${record_dirs[i]}/signed"; do
       [[ -f $file && ! -L $file ]] && chain_one "$file" "${record_boxes[i]}/${file##*/}" "${record_names[i]}"
     done
   done
@@ -2489,6 +2604,11 @@ cmd_why() {
             (if $key == null then empty
              elif $key.scope == null then "key: none; no key term speaks for the seat"
              else "key: \($key.state), by the \($key.scope)'s term, from \([$key.origins[] | at(.)] | join(", "))" end),
+            (($folded_seat.ssh.granted? // [])[]
+             | "ssh key \(.name): granted, by the \(.scope)'s term, from \([.origins[] | at(.)] | join(", "))"
+               + (if $keyview == "" then "" else "; the seat is shown its public file at \($keyview)/ssh/\(.name).pub" end)),
+            (($folded_seat.ssh.unreached? // [])[]
+             | "ssh key \(.name): granted by the \(.scope)'s term, from \([.origins[] | at(.)] | join(", ")), and it does not reach the seat, which holds no key"),
             (if $folded_seat.home? == null then empty
              else $folded_seat.home as $h
                | "home: \($h.state)\(if $h.state == "kept" then " at" else ", a file system made when its pane starts at" end) \($home_path // "the state directory, which this shell does not name"), named to its program by \($h.variable), by the kind \($h.kind)'s term, from \([$h.origins[] | at(.)] | join(", "))",
@@ -2526,6 +2646,7 @@ cmd_why() {
                "masked by the frame after the rows (Identity, Home): \($stateroot), where workplaces keep their state, is shown to no seat"
                + (if $keyview != "" and $key.state? == "held"
                   then "; this seat holds a key and passes through it to \($keyview), where it is shown its public ring, its trust database and gpg.conf, read-only, and its agent's extra socket and ssh socket"
+                       + (if (($folded_seat.ssh.granted? // []) | length) > 0 then ", and in ssh/ the public files of its ssh keys, read-only" else "" end)
                   else "" end)
                + (if $home_path != null then "; this seat has a home and passes through it to \($home_path)" else "" end)
              else empty end),

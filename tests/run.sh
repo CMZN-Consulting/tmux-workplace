@@ -1201,7 +1201,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1630,7 +1630,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -1650,7 +1650,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -1659,7 +1659,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -1733,6 +1733,7 @@ t_identity() {
   check "[C37] its fingerprint is the one ssh-keygen gives" \
     test "$(jq -r '.seats[0].ssh_fingerprint' "$keys")" = "$(jq -r '.seats[0].ssh' "$keys" | ssh-keygen -lf - | cut -d' ' -f2)"
   check "[C37] the build's manifest lists keys.json" grep -qE '^[0-9a-f]{64}  keys\.json$' "$clone/BUILD/MANIFEST"
+  check "[C37] and gives each holding seat its grants, none where no ssh key reaches it" test "$(jq -c '[.seats[].grants]' "$keys")" = '[[],[],[]]'
   check "[C35] sshcontrol holds the subkey's keygrip alone, and is read-only, 0444" \
     test "$(stat -c %a "$home/sshcontrol") $(grep -cvE '^[[:space:]]*(#|$)' "$home/sshcontrol") $(cut -d' ' -f1 "$home/sshcontrol")" \
       = "444 1 $(gpg --homedir "$home" --with-colons --with-keygrip --list-keys | awk -F: '$1 == "grp" { g = $10 } END { print g }')"
@@ -1874,6 +1875,288 @@ t_identity() {
   fi
 }
 
+ssh_terms='def s($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/SSH.typify"}};
+  .programs[-1].recorded += [
+    s(["ssh-key", "account", "keys/account"]; 1), s(["ssh-key", "node-rsa", $root + "/keys/node-rsa"]; 2), s(["ssh-key", "node-ec", "keys/node-ec"]; 3),
+    s(["ssh-grant", "-", "-", "-", "workplace", "account", "granted"]; 4), s(["ssh-grant", "harbor", "-", "-", "office", "node-rsa", "granted"]; 5),
+    s(["ssh-grant", "harbor", "dock", "keeper", "seat", "node-ec", "granted"]; 6), s(["ssh-grant", "orchard", "barn", "picker", "seat", "account", "none"]; 7),
+    st("-"; "-"; "-"; "workplace"; $root + "/keys"; "hidden"; 9)]'
+ssh_refused() {
+  statements_plan "$key_terms | $ssh_terms | .programs[-1].recorded += [$1]"
+  exit_is 1 wplan || return 1
+  said "$2" || { note "    wanted: $2"; sed 's/^/    | /' "$scratch/out"; return 1; }
+}
+
+t_ssh_grants_fold() {
+  scoped_clone
+  statements_plan "$key_terms | $ssh_terms"
+  check "plan with ssh keys and grants" exit_is 0 wplan
+  check "[C85] each seat that holds a key is granted each name by the narrowest scope that speaks, and a grant reaches no seat that holds none" \
+    test "$(jq -c '[.seats[] | [.seat[2], [.ssh.granted[] | "\(.name) \(.scope) \(.origins[0].line)"], [.ssh.unreached[].name]]]' "$clone/PLAN/view.json")" = \
+    '[["keeper",["account workplace 4","node-ec seat 6","node-rsa office 5"],[]],["pilot",[],["account","node-rsa"]],["watch",[],["account","node-rsa"]],["grower",["account workplace 4"],[]],["picker",[],[]]]'
+  check "[C85] a key's path is joined to the root where it is relative, and stands as written where it is absolute" \
+    test "$(jq -c '[.ssh.keys[] | [.name, .path]]' "$clone/PLAN/view.json")" \
+      = "$(jq -c -n --arg r "$root" '[["account", "\($r)/keys/account"], ["node-rsa", "\($r)/keys/node-rsa"], ["node-ec", "\($r)/keys/node-ec"]]')"
+  check "[C85] plan prints each key and its file" said "ssh key account: $root/keys/account (programs/SSH.typify:1)"
+  check "[C85] and, for each seat, the names it is granted with their terms" \
+    bash -c 'grep -qxF "  ssh key node-ec: granted, by the seat'"'"'s term (programs/SSH.typify:6)" "$1" && grep -qxF "  ssh key account: granted, by the workplace'"'"'s term (programs/SSH.typify:4)" "$1"' _ "$scratch/out"
+  check "[C85] and, for a seat of the scope that holds no key, that the grant does not reach it" \
+    said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
+  check "[C85] the fold's version is one that reads ssh grants" \
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
+  check "[C85] two ssh-key terms of one name that differ refuse the plan with exit 1, naming both" \
+    ssh_refused 's(["ssh-key", "account", "keys/other"]; 10)' "two ssh-key terms of the name account differ: $root/keys/account from programs/SSH.typify:1, $root/keys/other from programs/SSH.typify:10"
+  check "[C85] two ssh-grant terms of one scope and name with different states refuse it, naming both" \
+    ssh_refused 's(["ssh-grant", "harbor", "-", "-", "office", "node-rsa", "none"]; 10)' "two ssh-grant terms of the office harbor for the key node-rsa differ: granted from programs/SSH.typify:5, none from programs/SSH.typify:10"
+  check "[C85] a grant of a name that no ssh-key term declares refuses it" \
+    ssh_refused 's(["ssh-grant", "-", "-", "-", "workplace", "ghost", "granted"]; 10)' "programs/SSH.typify:10: the ssh-grant names the key ghost, which no ssh-key term declares"
+  check "[C85] a grant at a seat's own scope to a seat that holds no key refuses it, naming the seat and both terms" \
+    ssh_refused 's(["ssh-grant", "harbor", "dock", "pilot", "seat", "account", "granted"]; 10)' "seat Harbor Pilot (harbor/dock/pilot): the ssh-grant at programs/SSH.typify:10 grants the key account at the seat's own scope, and the seat holds no key, so it has no agent to hold it (the key at programs/IDENTITY.typify:4)"
+  check "[C85] a key's file that a seat's table shows read-only refuses it, naming the seat, its row and the key's term" \
+    ssh_refused 'st("harbor"; "dock"; "keeper"; "seat"; $root + "/keys"; "read-only"; 10)' "seat Harbor Keeper (harbor/dock/keeper): the file $root/keys/account of the ssh key account (the ssh-key at programs/SSH.typify:1) is shown to the seat by its row $root/keys read-only (from programs/policy.typify:10), and no seat is shown the file of a private key"
+  check "[C85] and so does one that a seat's table shows read-write, by a room's row that replaces the workplace's hidden one" \
+    ssh_refused 'st("orchard"; "barn"; "-"; "room"; $root + "/keys"; "read-write"; 10)' "seat Orchard Picker (orchard/barn/picker): the file $root/keys/node-ec of the ssh key node-ec (the ssh-key at programs/SSH.typify:3) is shown to the seat by its row $root/keys read-write (from programs/policy.typify:10)"
+  check "[C85] a grant naming a seat the plan does not make refuses it" \
+    ssh_refused 's(["ssh-grant", "harbor", "dock", "ghost", "seat", "account", "granted"]; 10)' "programs/SSH.typify:10: the ssh-grant names the seat harbor/dock/ghost, which the plan does not make"
+  statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "-x", "keys/x"]; 10), s(["ssh-grant", "-", "-", "-", "workplace", "account", "maybe"]; 11), s(["ssh-key", "short"]; 12), s(["ssh-grant", "-", "-", "-", "kind", "account", "granted"]; 13)]'
+  check "[C85] a name the rule for a key refuses, a state other than granted and none, a wrong count of words and a scope it does not take refuse the plan" exit_is 1 wplan
+  check "[C85] naming each" bash -c 'grep -qF "SSH.typify:10: the ssh key'"'"'s name \"-x\" is refused: it begins with -" "$1" && grep -qF "SSH.typify:11: maybe is not granted or none" "$1" \
+    && grep -qF "SSH.typify:12: an ssh-key has the words ssh-key NAME PATH, not 2" "$1" && grep -qF "SSH.typify:13: kind is not a scope of an ssh-grant" "$1"' _ "$scratch/out"
+  check "[C85] a path with a .. component refuses the plan" \
+    ssh_refused 's(["ssh-key", "dots", "keys/../dots"]; 10)' "programs/SSH.typify:10 (ssh-key): the path \"keys/../dots\" is refused: it has a . or .. component"
+  statements_plan "$ssh_terms"' | .programs[-1].recorded |= map(select(.term[0] | startswith("ssh")))'
+  check "[C85] a plan with ssh terms alone is folded, and refused for want of a row for /" exit_is 1 wplan
+  check "[C85] naming a seat" said "no row for /"
+}
+
+ssh_shims() {
+  local program
+  mkdir -p -- "$scratch/shims"
+  for program in ssh-keygen ssh-add; do
+    printf '%s\n' '#!/usr/bin/env bash' \
+      "printf '%s %s stdin=%s\n' $program \"\$*\" \"\$(readlink /proc/\$\$/fd/0)\" >> '$scratch/reads'" \
+      "exec '$(command -v "$program")' \"\$@\"" > "$scratch/shims/$program"
+    chmod +x -- "$scratch/shims/$program"
+  done
+}
+reads_of() { grep -cF -- "$1" "$scratch/reads"; }
+
+t_ssh_key_refusals() {
+  local program
+  for program in ssh-keygen python3 gpg; do
+    command -v "$program" > /dev/null || { skip "[C86] $program is not on PATH here, so the refusals of a key's file are shown where it is"; return; }
+  done
+  scoped_clone
+  local keys=$root/keys state=$HOME/.local/state/workplace/$label case
+  mkdir -m 0700 -- "$keys"
+  ssh-keygen -q -t ed25519 -N '' -f "$keys/account" < /dev/null
+  ssh-keygen -q -t ecdsa -b 256 -N '' -f "$keys/node-ec" < /dev/null
+  statements_plan "$key_terms | $ssh_terms"
+  check "plan" exit_is 0 wplan
+  local -A said_for=(
+    [missing]="build refuses: the ssh key node-rsa, $keys/node-rsa, is missing"
+    [directory]="build refuses: the ssh key node-rsa, $keys/node-rsa, is not a regular file"
+    [passphrase]="build refuses: the ssh key node-rsa, $keys/node-rsa, asks for a passphrase, and build loads only a key that asks for none"
+    [text]="build refuses: the ssh key node-rsa, $keys/node-rsa, is not a private key that ssh reads: "
+    [public]="build refuses: the ssh key node-rsa, $keys/node-rsa, is not a private key that ssh reads: "
+    [rsa1024]="build refuses: the ssh key node-rsa, $keys/node-rsa, is an RSA key of 1024 bits; the frame takes RSA of 2048 bits or more"
+    [security]="build refuses: the ssh key node-rsa, $keys/node-rsa, is a security key's file, of the kind sk-ssh-ed25519@openssh.com, which the agent does not take"
+    [dsa]="build refuses: the ssh key node-rsa, $keys/node-rsa, is of the kind ssh-dss; the frame takes ed25519, RSA of 2048 bits or more, and ECDSA on nistp256, nistp384 or nistp521")
+  for case in missing directory passphrase text public rsa1024 security dsa; do
+    rm -rf -- "$keys/node-rsa" "$keys/node-rsa.pub" "$clone/BUILD"
+    case $case in
+      directory) mkdir -- "$keys/node-rsa" ;;
+      passphrase) ssh-keygen -q -t rsa -b 3072 -m PEM -N 'a passphrase of the tests' -f "$keys/node-rsa" < /dev/null ;;
+      text) printf '%s\n' 'a line that is not a key' > "$keys/node-rsa" ;;
+      public) ssh-keygen -q -t ed25519 -N '' -f "$keys/node-rsa-made" < /dev/null && cp -- "$keys/node-rsa-made.pub" "$keys/node-rsa" && rm -f -- "$keys/node-rsa-made" "$keys/node-rsa-made.pub" ;;
+      rsa1024) ssh-keygen -q -t rsa -b 1024 -N '' -f "$keys/node-rsa" < /dev/null ;;
+      security) python3 -I "$fixtures/sk-key" "$keys/node-rsa" ;;
+      dsa)
+        if ! ssh-keygen -q -t dsa -N '' -f "$keys/node-rsa" < /dev/null > /dev/null 2>&1; then
+          skip "[C86] this OpenSSH makes no DSA key, so the refusal of a kind that ssh reads and the frame does not take is shown where it does"
+          continue
+        fi
+        ;;
+    esac
+    rm -f -- "$keys/node-rsa.pub"
+    check "[C86] build refuses the key's file ($case), with exit 1" exit_is 1 wp build
+    check "[C86] naming the key and its file" said "${said_for[$case]}"
+    check "[C86] before it makes any key home, and leaving no BUILD" bash -c '[[ ! -e $1/BUILD && ! -e $2/keys ]]' _ "$clone" "$state"
+  done
+  rm -rf -- "$keys/node-rsa" "$clone/BUILD"
+  ssh-keygen -q -t rsa -b 3072 -m PEM -N '' -f "$keys/node-rsa" < /dev/null
+  local without=$scratch/path-without-ssh-add dir entry
+  local -a dirs found
+  local -A have=()
+  mkdir -p -- "$without"
+  IFS=: read -r -a dirs <<< "$PATH"
+  for dir in "${dirs[@]}"; do
+    found=()
+    for entry in "$dir"/*; do
+      [[ -x $entry && ! -d $entry && ${entry##*/} != ssh-add && -z ${have[${entry##*/}]-} ]] || continue
+      have[${entry##*/}]=1
+      found+=("$entry")
+    done
+    (( ${#found[@]} )) && ln -s -t "$without" -- "${found[@]}"
+  done
+  check "[C6] build refuses a plan that grants an ssh key where ssh-add is not on PATH, with exit 2" \
+    exit_is 2 env PATH="$without" "$BASH" "$loop" build
+  check "[C6] naming it" said "a plan that grants an ssh key needs ssh-add, and ssh-add is not on PATH"
+}
+
+t_ssh_grants() {
+  local program
+  for program in gpg gpg-agent gpgconf gpg-connect-agent ssh-keygen ssh-add ssh git setsid base64 python3; do
+    command -v "$program" > /dev/null || { skip "[C87] $program is not on PATH here, so no ssh key is granted and used in a pane"; return; }
+  done
+  scoped_clone
+  local w=$label state=$HOME/.local/state/workplace/$label keys=$root/keys berth=$root/harbor/berth sshd="" path name
+  for path in /usr/sbin/sshd /usr/bin/sshd /sbin/sshd; do [[ -x $path ]] && { sshd=$path; break; }; done
+  mkdir -m 0700 -- "$keys"
+  mkdir -p -- "$root/records"
+  ssh-keygen -q -t ed25519 -N '' -C account-comment -f "$keys/account" < /dev/null
+  ssh-keygen -q -t rsa -b 3072 -m PEM -N '' -C node-rsa-comment -f "$keys/node-rsa" < /dev/null
+  ssh-keygen -q -t ecdsa -b 384 -m PKCS8 -N '' -C node-ec-comment -f "$keys/node-ec" < /dev/null
+  rm -f -- "$keys"/*.pub
+  mkdir -m 0700 -- "$berth/sshd"
+  ssh-keygen -q -t ed25519 -N '' -C host -f "$berth/sshd/host" < /dev/null
+  ssh-keygen -y -f "$keys/account" > "$berth/sshd/authorized_keys"
+  printf '%s\n' "HostKey $berth/sshd/host" "AuthorizedKeysFile $berth/sshd/authorized_keys" "StrictModes no" "UsePAM no" "PasswordAuthentication no" \
+    "KbdInteractiveAuthentication no" "PubkeyAuthentication yes" "MaxAuthTries 1" "LogLevel VERBOSE" > "$berth/sshd/config"
+  statements_plan "$key_terms | $ssh_terms | $records_terms"' | def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
+    add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/report", "grants=" + $root + "/harbor/berth|" + $root + "/keys|'"$sshd"'"])'
+  check "plan" exit_is 0 wplan
+  ssh_shims
+  check "[C86] build checks and loads the granted keys" exit_is 0 env PATH="$scratch/shims:$PATH" "$BASH" "$loop" build
+  check "[C87] naming each key and how many seats it is loaded for" said "ssh keys loaded: account for 2 seats, node-ec for 1 seat, node-rsa for 1 seat"
+  check "[C86] [C87] each key's file is read by ssh-keygen once for the check, and on ssh-add's standard input once for each seat it is loaded for" \
+    test "$(reads_of "$keys/account") $(reads_of "$keys/node-ec") $(reads_of "$keys/node-rsa") $(grep -c "^ssh-add -q - stdin=$keys/" "$scratch/reads")" = "3 2 2 4"
+  local keys_json=$clone/BUILD/keys.json home=$state/keys/01 grower=$state/keys/04 picker=$state/keys/05
+  check "[C87] keys.json gives each holding seat its grants by name" \
+    test "$(jq -c '[.seats[] | [.seat[2], [.grants[].name]]]' "$keys_json")" = '[["keeper",["account","node-ec","node-rsa"]],["grower",["account"]],["picker",[]]]'
+  local want
+  want=$(for name in account node-ec node-rsa; do printf '%s %s\n' "$(ssh-keygen -y -f "$keys/$name" | cut -d' ' -f1,2)" "$name"; done)
+  check "[C87] with the public OpenSSH line of each, NAME its comment" test "$(jq -r '.seats[0].grants[].ssh' "$keys_json")" = "$want"
+  check "[C87] its SHA256 fingerprint" \
+    test "$(jq -r '.seats[0].grants[].fingerprint' "$keys_json")" = "$(for name in account node-ec node-rsa; do ssh-keygen -l -f "$keys/$name" | cut -d' ' -f2; done)"
+  check "[C87] and its kind" test "$(jq -r '[.seats[0].grants[].kind] | join(", ")' "$keys_json")" = "ed25519 256, ecdsa 384, rsa 3072"
+  check "[C87] and the key's grip, the name of its file in the home" \
+    bash -c 'for g in $(jq -r ".seats[0].grants[].grip" "$1"); do [[ -f $2/private-keys-v1.d/$g.key ]] || exit 1; done' _ "$keys_json" "$home"
+  check "[C87] each holding seat's home holds one unprotected key file per grant beside its own two" \
+    bash -c '[[ $(ls "$1/private-keys-v1.d" | wc -l) == 5 && $(ls "$2/private-keys-v1.d" | wc -l) == 3 && $(ls "$3/private-keys-v1.d" | wc -l) == 2 ]] && ! grep -q protected-private-key "$1"/private-keys-v1.d/*.key "$2"/private-keys-v1.d/*.key' _ "$home" "$grower" "$picker"
+  check "[C87] sshcontrol holds the seat's own grip first, then each grant's, and is read-only, 0444" \
+    test "$(grep -vE '^[[:space:]]*(#|$)' "$home/sshcontrol" | cut -d' ' -f1 | paste -sd' ') $(stat -c %a "$home/sshcontrol")" \
+      = "$(gpg --homedir "$home" --with-colons --with-keygrip --list-keys | awk -F: '$1 == "grp" { g = $10 } END { print g }') $(jq -r '[.seats[0].grants[].grip] | join(" ")' "$keys_json") 444"
+  check "[C87] the home holds ssh/NAME.pub for each grant, the line of keys.json, read-only" \
+    bash -c 'for n in account node-ec node-rsa; do [[ $(< "$1/ssh/$n.pub") == "$(jq -r --arg n "$n" ".seats[0].grants[] | select(.name == \$n) | .ssh" "$2")" && $(stat -c %a "$1/ssh/$n.pub") == 444 ]] || exit 1; done' _ "$home" "$keys_json"
+  check "[C87] a home with no grant has no ssh directory" test ! -e "$picker/ssh"
+  check "[C35] [C88] the home's gpg-agent.conf says pinentry false, ssh support and no smartcard daemon, and never batch" \
+    test "$(paste -sd' ' "$home/gpg-agent.conf")" = "pinentry-program $(command -v false) enable-ssh-support disable-scdaemon"
+  check "[C87] no byte of a private key stands in BUILD" \
+    bash -c '! grep -rqE "PRIVATE KEY|private-key" "$1" && for f in "$2"/*; do ! grep -rqF -- "$(sed -n 2p "$f")" "$1" || exit 1; done' _ "$clone/BUILD" "$keys"
+  check "[C87] build leaves no agent running" no_agent_of "$state/keys"
+  local t0 t1
+  t0=$(date -u +%s)
+  check "[C89] up, from a shell whose zone is nine hours east of UTC" exit_is 0 env TZ=XYZ-9 "$BASH" "$loop" up
+  wp status > "$scratch/out" 2>&1
+  check "[C92] status lists each agent's ssh keys by name" \
+    bash -c 'grep -qxF "ok      the agent of Harbor Keeper offers its ssh keys: account, node-ec, node-rsa" "$1" && grep -qxF "ok      the agent of Orchard Grower offers its ssh keys: account" "$1"' _ "$scratch/out"
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  t1=$(date -u +%s)
+  local report=$berth/report
+  r() { grep -qxF -- "$1" "$report"; }
+  check "[C90] keeper is shown the public files of its ssh keys at G/ssh" r "grants files: account.pub node-ec.pub node-rsa.pub "
+  check "[C90] read-only" r "grants files write: refused"
+  check "[C90] its agent offers its own key first" r "grants list first: $(jq -r '.seats[0].ssh' "$keys_json" | cut -d' ' -f1,2)"
+  check "[C90] then each granted key, the comment being the file's own or (stdin), and never a path" \
+    r "grants list after it: ssh-ed25519 account-comment|ecdsa-sha2-nistp384 (stdin)|ssh-rsa (stdin)"
+  for name in account node-ec node-rsa; do
+    check "[C90] keeper signs with $name through its ssh socket" r "grants sign $name: ok"
+    printf 'keeper %s\n' "$(jq -r --arg n "$name" '.seats[0].grants[] | select(.name == $n) | .ssh' "$keys_json")" > "$scratch/allowed-$name"
+    check "[C90] and the signature verifies against keys.json's line" \
+      exit_is 0 bash -c 'ssh-keygen -Y verify -f "$1" -I keeper -n file -s "$2.sig" < "$2"' _ "$scratch/allowed-$name" "$berth/grants-msg-$name"
+  done
+  check "[C90] a forged add of a granted key is refused" r "grants forged add of account: refused"
+  check "[C90] removing a granted key, and every key, changes nothing" r "grants after removing account and every key: listed"
+  check "[C90] no file of a key stands in its view" r "grants key files: unseen"
+  local extra grip forbidden=0
+  extra=$(gpgconf --homedir "$home" --list-dirs agent-extra-socket)
+  for grip in $(jq -r '.seats[0].grants[].grip' "$keys_json"); do
+    for program in "READKEY $grip" "EXPORT_KEY $grip" "EXPORT_KEY --openpgp $grip" "DELETE_KEY --force $grip"; do
+      [[ $(gpg-connect-agent --homedir "$home" --no-autostart -S "$extra" "$program" /bye 2>&1) == *Forbidden* ]] && forbidden=$(( forbidden + 1 ))
+    done
+  done
+  check "[C90] through the extra socket the seat is shown, reading, exporting and deleting each granted key are forbidden" test "$forbidden" = 12
+  if [[ -n $sshd ]]; then
+    check "[C90] a login that offers every key the agent holds is refused by a host that allows one try" r "grants login all: refused"
+    check "[C90] one that names the key's public file and offers only it logs in" r "grants login named: ok"
+  else
+    skip "[C90] no sshd is installed here, so the login both ways is shown where one is"
+  fi
+  local scd
+  scd=$(gpgconf --list-components | awk -F: '$1 == "scdaemon" { print $3 }')
+  if [[ -n $scd && -x $scd ]]; then
+    check "[C88] after the seat's listings no smartcard daemon runs for its agent" \
+      bash -c '[[ $(gpg-connect-agent --homedir "$1" --no-autostart "GETINFO scd_running" /bye 2>&1) == ERR* ]]' _ "$home"
+  else
+    skip "[C88] no smartcard daemon is installed here (gpgconf names ${scd:-none}), so that none runs after a listing is measured where one is"
+  fi
+  local signed="$state/records/harbor dock keeper/signed"
+  check "[C91] keeper's agent logs to signed in its record a line for each ssh signature, with the second in UTC" \
+    bash -c 'n=0; while IFS= read -r line; do at=$(date -u -d "${line:0:19}" +%s 2> /dev/null) || continue; (( at >= $2 && at <= $3 + 1 )) && n=$(( n + 1 )); done < <(grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} gpg-agent\[[0-9]+\] ssh request handler for sign_request \(13\) started$" "$1"); (( n >= 3 ))' \
+      _ "$signed" "$t0" "$t1"
+  local -a secrets=("a line the grants sign" "PRIVATE" "private-key")
+  for name in $(jq -r '.seats[0] | .ssh, .ssh_fingerprint, (.grants[] | .ssh, .fingerprint, .grip)' "$keys_json"); do
+    [[ $name == ssh-* || $name == ecdsa-* ]] && continue
+    secrets+=("${name#SHA256:}")
+  done
+  for name in account node-ec node-rsa; do secrets+=("$(sed -n 2p "$keys/$name")"); done
+  check "[C91] and nothing of the keys or of the data" bash -c 'for s in "${@:2}"; do ! grep -qF -- "$s" "$1" || exit 1; done' _ "$signed" "${secrets[@]}"
+  check "[C72] [C91] the carrier chains signed among the kept files" \
+    eventually_long bash -c 'jq -e "select(.file == \"harbor dock keeper/signed\")" "$1" > /dev/null 2>&1' _ "$state/records/chain"
+  wp why "Harbor Keeper" "$state/gnupg/ssh" > "$scratch/out" 2>&1
+  check "[C92] why names a seat's grants and the terms that give them" \
+    said "ssh key account: granted, by the workplace's term, from programs/SSH.typify:4; the seat is shown its public file at $state/gnupg/ssh/account.pub"
+  check "[C92] and the public files in its key view" said ", and in ssh/ the public files of its ssh keys, read-only"
+  wp why "Harbor Pilot" / > "$scratch/out" 2>&1
+  check "[C92] and, for a seat that holds no key, the grants that do not reach it" \
+    said "ssh key account: granted by the workplace's term, from programs/SSH.typify:4, and it does not reach the seat, which holds no key"
+  wp status > "$scratch/out" 2>&1
+  check "[C92] and lists them so after the seat's signatures, its refused adds and its removals" \
+    grep -qxF "ok      the agent of Harbor Keeper offers its ssh keys: account, node-ec, node-rsa" "$scratch/out"
+  rm -f -- "$home/private-keys-v1.d/$(jq -r '.seats[0].grants[] | select(.name == "node-rsa") | .grip' "$keys_json").key"
+  check "[C92] status exits 1 when an agent no longer offers a key the build loaded" exit_is 1 wp status
+  check "[C92] naming the agent and its keys" \
+    bash -c 'grep -qxF "gone    the agent of Harbor Keeper offers its ssh keys: account, node-ec, node-rsa" "$1" && grep -qF "no longer offers every ssh key the build loaded for it" "$1"' _ "$scratch/out"
+  check "down" exit_is 0 wp down
+  check "[C89] up refuses a key home whose agent no longer has every key the build loaded" exit_is 1 wp up
+  check "[C89] naming the agent and the key" said "the agent of Harbor Keeper does not offer the ssh key node-rsa, which the build loaded for it; build again"
+  check "[C89] and starts no server" no_server
+  check "[C89] and leaves no agent running" no_agent_of "$state/keys"
+  rm -rf -- "$clone/BUILD"
+  check "build again" exit_is 0 wp build
+  printf '%s\n' batch >> "$home/gpg-agent.conf"
+  check "[C89] up refuses a home whose gpg-agent.conf says batch, with exit 1" exit_is 1 wp up
+  check "[C89] naming the file" said "$home/gpg-agent.conf says batch, and an agent that serves a seat never runs with it"
+  check "[C89] and starts no server" no_server
+  check "[C89] and no agent" no_agent_of "$state/keys"
+  sed -i '/^batch$/d' "$home/gpg-agent.conf"
+  local machine
+  machine=$(gpgconf --list-dirs sysconfdir)
+  if [[ -d $machine ]]; then
+    check "[C89] up refuses where the machine's gpg-agent.conf says batch, which every agent reads" \
+      exit_is 1 bwrap --dev-bind / / --tmpfs "$machine" -- bash -c 'printf "%s\n" batch > "$1/gpg-agent.conf" && exec "$2" "$3" up' _ "$machine" "$BASH" "$loop"
+    check "[C89] naming the file" said "the machine's $machine/gpg-agent.conf says batch, which every agent of GnuPG reads"
+    check "[C89] and starts no server" no_server
+    check "[C89] and no agent" no_agent_of "$state/keys"
+  else
+    skip "[C89] GnuPG's system directory $machine does not stand here, so a machine's gpg-agent.conf that says batch is tried where it does"
+  fi
+  check "[C89] up, the home's file mended" exit_is 0 wp up
+  check "down" exit_is 0 wp down
+  check "[C87] no agent of a key home runs after down" no_agent_of "$state/keys"
+}
+
 home_terms='def h($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/HOMES.typify"}};
   kinds([["harbor", "dock", "keeper", "navigator"], ["harbor", "dock", "pilot", "navigator"], ["harbor", "tower", "watch", "none"],
          ["orchard", "barn", "grower", "gardener"], ["orchard", "barn", "picker", "gardener"]])
@@ -1937,7 +2220,7 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
   check "[C32] plan prints each seat's home and the names it expects" \
     bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; clearance 0, by default; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; clearance 0, by default; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
@@ -2485,7 +2768,7 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
   check "[C54] with no reach term every seat mails every seat, and grabs and writes none; no clearance is read" \
@@ -3083,7 +3366,7 @@ t_records_fold() {
   check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
   check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
   check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; clearance 0, by default; its pane not kept; 1 rows"
-  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
   statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
   check "plan with a record and no chain" exit_is 0 wplan
   check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"
@@ -3447,6 +3730,9 @@ tests=(
   t_plan_end_to_end
   t_identity_selection
   t_identity
+  t_ssh_grants_fold
+  t_ssh_key_refusals
+  t_ssh_grants
   t_home_and_values_selection
   t_homes
   t_values

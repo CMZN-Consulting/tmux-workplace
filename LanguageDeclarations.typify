@@ -245,10 +245,6 @@ version : 1
 file : ROOT.typify
 required!
 is : workplace = /[A-Za-z0-9][A-Za-z0-9_-]*/
-is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
-is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
-is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
-is : variable = /[A-Za-z_][A-Za-z0-9_]*/
 cell : configuration = shadow
 primitive : configure : text text
 writes : configure : configuration = put 1
@@ -265,6 +261,16 @@ stage : server = 0
 form : server : <workplace> : <relative-path>
 does : server <workplace> <relative-path>
 count : server = 1
+end!
+
+declare : WorkplaceEnvironment
+version : 1
+file : programs/ENVIRONMENT.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
 cell : environment = shadow
 primitive : set-environment : office-key room-key seat-key variable text
 writes : set-environment : environment = put 4

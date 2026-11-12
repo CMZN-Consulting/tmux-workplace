@@ -1422,13 +1422,13 @@ t_the_folded_view_in_the_panes() {
 }
 
 t_plan_end_to_end() {
-  local pinned=c2e88ff3380d0fddd34610196a7be36a726e05331d9fe3f692e38d4ce4717a9c reference=/tmp/workplace-reference-s3
+  local pinned=f007776cde073439b0cac818c1b193afdcddee7d7d23ac5d6fb66a4f1aab7107 reference=/tmp/workplace-reference-s3
   if ! command -v typify > /dev/null; then
     skip "[C28] the reader typify is not on PATH here, so plan cannot run end to end"
     return 0
   fi
   if [[ ! -f $reference/config/workplace.json ]]; then
-    skip "[C28] the reader-side fixture of w1-scopes is not laid out as a clone at $reference"
+    skip "[C28] the relative edition of the fixture (w1-paths 5384b45) is not laid out as a clone at $reference"
     return 0
   fi
   if [[ -e $reference/config/BUILD ]]; then

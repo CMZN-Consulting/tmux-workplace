@@ -269,47 +269,50 @@
         },
         {
           "if-slot": [
-            "mask-manager"
+            "runtime-mask",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
           ],
           "args": [
             "--perms",
-            "0000",
+            "0700",
             "--tmpfs",
             {
               "slot": [
-                "mask-manager"
+                "runtime-mask",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
               ]
             }
-          ]
-        },
-        {
-          "if-slot": [
-            "mask-bus"
           ],
-          "args": [
-            "--ro-bind",
-            "/dev/null",
-            {
-              "slot": [
-                "mask-bus"
-              ]
-            }
-          ]
-        },
-        {
-          "if-slot": [
-            "runtime-gnupg"
-          ],
-          "args": [
-            "--perms",
-            "0000",
-            "--tmpfs",
-            {
-              "slot": [
-                "runtime-gnupg"
-              ]
-            }
-          ]
+          "rows-beneath": {
+            "slot": [
+              "runtime-mask",
+              {
+                "arg": 1
+              },
+              {
+                "arg": 2
+              },
+              {
+                "arg": 3
+              }
+            ]
+          }
         },
         {
           "if-slot": [
@@ -834,6 +837,37 @@
             {
               "slot": [
                 "record-path"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "runtime-mask",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--remount-ro",
+            {
+              "slot": [
+                "runtime-mask",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
               ]
             }
           ]

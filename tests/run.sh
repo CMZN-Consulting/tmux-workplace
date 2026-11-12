@@ -10,6 +10,7 @@ fixtures=$here/fixtures
 failures=0
 total=0
 skips=$(mktemp /tmp/wpt-skips.XXXXXX)
+trap 'rm -f -- "$skips"' EXIT
 declare -a failed_tests=()
 
 note() { printf '%s\n' "$*"; }
@@ -168,25 +169,55 @@ no_socket_dir_left() {
   [[ -z $left ]] || { note "    a runtime socket directory is left for:$left"; return 1; }
 }
 
+processes_naming() {
+  local entry
+  local -a argv
+  for entry in /proc/[0-9]*; do
+    [[ ${entry#/proc/} == "$BASHPID" ]] && continue
+    { mapfile -d '' -t argv < "$entry/cmdline"; } 2> /dev/null || continue
+    [[ ${argv[*]-} == *"$1/"* ]] && printf '%s\n' "${entry#/proc/}"
+  done
+}
+
+end_processes_naming() {
+  local round i
+  local -a left
+  for round in TERM KILL; do
+    mapfile -t left < <(processes_naming "$1")
+    (( ${#left[@]} )) || return 0
+    kill "-$round" "${left[@]}" 2> /dev/null
+    for (( i = 0; i < 40; i++ )); do
+      mapfile -t left < <(processes_naming "$1")
+      (( ${#left[@]} )) || return 0
+      sleep 0.05
+    done
+  done
+  note "  FAIL: the test left processes that name its scratch $1 and outlive SIGKILL: ${left[*]}"
+  return 1
+}
+
 cleanup() {
-  local home
+  local home status=0
+  [[ -n ${scratch-} && -d $scratch ]] || return 0
   if command -v gpgconf > /dev/null; then
     while IFS= read -r home; do
       agent_of "$home" && gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
       gpgconf --homedir "$home" --remove-socketdir > /dev/null 2>&1
     done < <(key_homes)
   fi
-  [[ -S ${run-}/$label ]] && tmux -S "$run/$label" kill-server 2> /dev/null
+  [[ -n ${label-} && -S ${run-}/$label ]] && tmux -S "$run/$label" kill-server 2> /dev/null
   if [[ -n ${label-} ]] && command -v systemctl > /dev/null; then
     timeout 30 systemctl --user stop -- "workplace-carrier-$label.service" > /dev/null 2>&1
   fi
-  [[ -n ${label2-} && -S $root/config2/BUILD/RUN/$label2 ]] && tmux -S "$root/config2/BUILD/RUN/$label2" kill-server 2> /dev/null
-  if [[ $TMUX_TMPDIR == "$scratch"/* ]]; then
+  [[ -n ${label2-} && -S ${root-}/config2/BUILD/RUN/$label2 ]] && tmux -S "$root/config2/BUILD/RUN/$label2" kill-server 2> /dev/null
+  if [[ ${TMUX_TMPDIR-} == "$scratch"/* ]]; then
     for home in "$TMUX_TMPDIR/tmux-$UID"/*; do
       [[ -S $home ]] && tmux -S "$home" kill-server 2> /dev/null
     done
   fi
+  end_processes_naming "$scratch" || status=1
   rm -rf -- "$scratch"
+  return "$status"
 }
 
 pane_by_title() {
@@ -250,6 +281,7 @@ view_ops() {
         elif $c[$i] == "--perms" then walk_ops($i + 2)
         elif $c[$i] == "--tmpfs" or $c[$i] == "--proc" or $c[$i] == "--dev" then "\($c[$i][2:]) \($c[$i + 1])", walk_ops($i + 2)
         elif $c[$i] == "--bind" or $c[$i] == "--ro-bind" then "\($c[$i][2:]) \($c[$i + 2])", walk_ops($i + 3)
+        elif $c[$i] == "--remount-ro" then "remount-ro \($c[$i + 1])", walk_ops($i + 2)
         else "unknown \($c[$i])", walk_ops($i + 1) end;
       walk_ops($start + 1)' <<< "$1"
 }
@@ -513,9 +545,10 @@ bind $root/harbor/vault/shelf
 tmpfs $clone"
   [[ -d $TMUX_TMPDIR/tmux-$UID ]] && expected+=$'\n'"tmpfs $TMUX_TMPDIR/tmux-$UID"
   [[ -d /tmp/tmux-$UID && /tmp/tmux-$UID != "$TMUX_TMPDIR/tmux-$UID" ]] && expected+=$'\n'"tmpfs /tmp/tmux-$UID"
-  [[ -d /run/user/$EUID/gnupg ]] && expected+=$'\n'"tmpfs /run/user/$EUID/gnupg"
+  [[ -d /run/user/$EUID ]] && expected+=$'\n'"tmpfs /run/user/$EUID"
   expected+=$'\n'"tmpfs $HOME/.local/state/workplace"
-  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order, then the frame's masks (C39, C52, C68)" \
+  [[ -d /run/user/$EUID ]] && expected+=$'\n'"remount-ro /run/user/$EUID"
+  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order, then the frame's masks (C39, C52, C68, C84), the runtime directory's made read-only last" \
     test "$(view_ops "$(seat_command 'Harbor Keeper')" | sed 's/^ro-bind /bind /')" = "$expected"
   check "[C12] bwrap is named by its absolute path" \
     test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Keeper')")" = "$(command -v bwrap)"
@@ -1071,7 +1104,7 @@ t_the_reference_plan_as_printed() {
   reference_paths=$(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort)
   local shape
   shape=$(shape_of "$reference")
-  trap 'leave_reference; cleanup' EXIT
+  trap 'leave_reference; cleanup || exit 1' EXIT
   check "[C2] the reader's plan, as printed, builds" exit_is 0 wp build
   check "[C8] and comes up" exit_is 0 wp up
   check "[C9] its five seats stand, and no other pane" \
@@ -1548,7 +1581,7 @@ t_plan_end_to_end() {
   reference_paths=$(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort)
   local shape
   shape=$(shape_of "$reference")
-  trap 'leave_reference; cleanup' EXIT
+  trap 'leave_reference; cleanup || exit 1' EXIT
   check "[C28] plan with the reader $(typify --version)" exit_is 0 wp plan
   (( test_failed == 0 )) || return 0
   check "[C29] PLAN/ now holds the folded view" test -f "$clone/PLAN/view.json"
@@ -1657,6 +1690,18 @@ t_identity() {
     | add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/report", "identity=" + $root + "/harbor/berth",
                                             "commit=" + $root + "/harbor/berth|Harbor Keeper|harbor.dock.keeper@WORKPLACE"])
     | add("harbor/tower/watch/seat.typify"; ["report=" + $root + "/harbor/charts/report", "identity=/nowhere"])'
+  local runtime=/run/user/$EUID agents=(gcr/ssh keyring/ssh openssh_agent ssh-agent.socket) agent
+  if [[ -d $runtime/systemd ]]; then
+    panes+='
+    | add("harbor/dock/keeper/seat.typify"; ["entries=RUNTIME", "bus=RUNTIME/bus", "connect=RUNTIME/systemd/private"] + ($agents | split(" ") | map("connect=RUNTIME/" + .)))
+    | add("orchard/barn/picker/seat.typify"; ["report=" + $root + "/orchard/crate-picker/report", "identity=" + $root + "/orchard/crate-picker", "list=RUNTIME"])
+    | add("harbor/tower/watch/seat.typify"; ["scratch=RUNTIME/systemd"])
+    | .programs[-1].recorded += [st("orchard"; "barn"; "picker"; "seat"; "RUNTIME"; "hidden"; 21),
+                                 st("orchard"; "barn"; "picker"; "seat"; $root + "/orchard/crate-picker"; "read-write"; 22),
+                                 st("harbor"; "tower"; "watch"; "seat"; "RUNTIME/systemd"; "scratch"; 23)]'
+    panes=${panes//\$agents/\"${agents[*]}\"}
+    panes=${panes//RUNTIME/$runtime}
+  fi
   statements_plan "$key_terms | ${panes//WORKPLACE/$w}"
   check "plan" exit_is 0 wplan
   check "[C35] build makes the keys" exit_is 0 wp build
@@ -1735,6 +1780,32 @@ t_identity() {
   agent_of "$verify" && gpgconf --homedir "$verify" --kill gpg-agent > /dev/null 2>&1
   gpgconf --homedir "$verify" --remove-socketdir > /dev/null 2>&1
   check "watch ran" wait_for_probe "Harbor Watch" watch
+  if [[ -d $runtime/systemd ]]; then
+    check "[C84] in keeper's view, / read-only and no chain, the user's runtime directory is an empty file system" r "entries $runtime: "
+    if command -v busctl > /dev/null && timeout 10 busctl --address="unix:path=$runtime/bus" call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Properties Get ss org.freedesktop.systemd1.Manager Version > /dev/null 2>&1; then
+      check "[C84] outside every view the user's manager answers over the bus, and from keeper's pane it is refused there" r "bus $runtime/bus: refused"
+    else
+      skip "[C84] no user manager answers over the session bus here, so its refusal from a pane is tried where one does"
+    fi
+    check "[C84] and its own socket, which stands outside, is not there" \
+      bash -c '[[ -S $1/systemd/private ]] && grep -qxF "connect $1/systemd/private: absent" "$2"' _ "$runtime" "$report"
+    local found=0
+    for agent in "${agents[@]}"; do
+      [[ -S $runtime/$agent ]] || continue
+      found=1
+      check "[C84] the user's ssh agent's socket $runtime/$agent, which stands outside, is not there" r "connect $runtime/$agent: absent"
+    done
+    (( found )) || skip "[C84] no ssh agent of the user's keeps its socket in $runtime here, so its absence from a pane is shown by the empty runtime directory alone"
+    check "[C84] keeper, under the mask, signs through its own agent" bash -c 'grep -qxF "key gpg sign: ok" "$1" && grep -qxF "key ssh sign: ok" "$1"' _ "$report"
+    check "picker ran" wait_for_probe "Orchard Picker" picker
+    check "[C84] picker's hidden row at the runtime directory stands as written, closed, with no mask over it" grep -qxF "list $runtime: refused" "$root/orchard/crate-picker/report"
+    check "[C84] picker, whose row hides the runtime directory, signs through its own agent too" \
+      bash -c 'grep -qxF "key gpg sign: ok" "$1" && grep -qxF "key ssh sign: ok" "$1"' _ "$root/orchard/crate-picker/report"
+    check "[C84] watch's scratch row beneath the runtime directory stands, after the mask: empty and writable" \
+      grep -qxF "scratch $runtime/systemd: entries=0 write=ok" "$root/harbor/charts/report"
+  else
+    skip "[C84] no runtime directory with a manager's socket stands here, so the runtime directory's mask is tried from a pane where one does"
+  fi
   check "[C39] a seat that holds no key has no key home" grep -qxF "key home: none" "$root/harbor/charts/report"
   check "[C39] nor reaches the agents' runtime sockets" grep -qxF "key runtime sockets: unseen" "$root/harbor/charts/report"
   check "[C39] nor holds GNUPGHOME or SSH_AUTH_SOCK, which keeper holds" \
@@ -2494,6 +2565,7 @@ t_keys_and_names() {
     '..|it is ..'
     'Harbor/Pilot|it holds a /'
     $'Harbor\tPilot|it holds a control character'
+    '|it is empty'
   )
   for entry in "${names[@]}"; do
     json=$(jq -n --arg k "${entry%%|*}" '$k')
@@ -2634,6 +2706,13 @@ t_comms_carrier() {
     answered keeper half.md "refused the carrier stopped while it served this, and it went to none; leave it in out again"
   check "[C57] and what it had written into the store is removed" test ! -e "$s/mail/harbor dock keeper/in/stray.md"
   check "[C66] both are recorded" test "$(jq -r 'select(.request == "again.md" or .request == "half.md") | .outcome' "$s/comms/record" | tr '\n' ',')" = "ok,refused,"
+  check "down" exit_is 0 wp down
+  check "up again" exit_is 0 wp up
+  local pid3
+  pid3=$(carrier_pid)
+  rm -rf -- "$run/carrier"
+  check "[C57] a carrier whose mark, RUN/carrier, is removed ends of itself at its next pass" \
+    eventually_long bash -c '! kill -0 "$1" 2> /dev/null' _ "$pid3"
   check "down" exit_is 0 wp down
   local box_out="$s/comms/harbor dock keeper/out"
   if bwrap --dev-bind / / --tmpfs "$box_out" -- true 2> /dev/null; then
@@ -3010,7 +3089,6 @@ t_records_fold() {
     "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "harbor"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/harbor lies at or beneath the record path '"$root"'/harbor, where the frame shows a seat the records it may read'
     "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "statement" or .term[4] != "workplace")) | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; "/"; "read-only"; 25), st("orchard"; "-"; "-"; "office"; "/"; "read-only"; 26)]|seat Harbor Watch (harbor/tower/watch): no row for /: it has no view, and a seat with no view could reach its own record, which the plan keeps (the record at programs/LOGS.typify:1)'
     "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/systemd/journal"; "read-only"; 22)]|seat Harbor Keeper (harbor/dock/keeper): /run/systemd/journal (read-only, from programs/policy.typify:22) lies at or beneath /run/systemd/journal, which the frame hides in every view of a workplace that keeps a chain, as a hidden row would'
-    "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/user/'"$EUID"'/systemd/private"; "read-only"; 22)]|/run/user/'"$EUID"'/systemd/private (read-only, from programs/policy.typify:22) lies at or beneath /run/user/'"$EUID"'/systemd, which the frame hides in every view of a workplace that keeps a chain'
   )
   for entry in "${refusals[@]}"; do
     statements_plan "${entry%|*}"
@@ -3073,14 +3151,14 @@ t_records_in_panes() {
     said "the seat's records: shown by the frame after the rows (Logs) at $root/records, read-only: one directory for each seat whose record it may read, under that seat's name: Harbor Pilot"
   check "[C73] keeper's view masks the journal's places, the closed masks after its rows" \
     bash -c 'for m in "${@:2}"; do [[ -d $m ]] || continue; [[ $(jq -r --arg d "$m" ". as \$a | [range(0; length) | select(\$a[.] == \"--tmpfs\" and \$a[. + 1] == \$d) | \$a[. - 1]] | join(\",\")" <<< "$1") == 0000 ]] || exit 1; done' _ \
-    "$(seat_command 'Harbor Keeper')" /var/log/journal /run/log/journal /run/systemd/journal "/run/user/$EUID/systemd"
+    "$(seat_command 'Harbor Keeper')" /var/log/journal /run/log/journal /run/systemd/journal
   local bus=/run/user/$EUID/bus
   if [[ -S $bus ]] && command -v busctl > /dev/null \
     && timeout 10 busctl --address="unix:path=$bus" call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Properties Get ss org.freedesktop.systemd1.Manager Version > /dev/null 2>&1; then
-    check "[C73] outside every view the user manager answers over the session bus, and in keeper's view the same call is refused" \
+    check "[C84] outside every view the user manager answers over the session bus, and in keeper's view, which keeps a chain, the same call is refused" \
       grep -qxF "bus $bus: refused" "$report"
   else
-    skip "[C73] no user manager answers over the session bus here, so its mask is tried where one does"
+    skip "[C84] no user manager answers over the session bus here, so the runtime directory's mask is tried where one does"
   fi
   local carrier
   carrier=$(carrier_pid)
@@ -3191,6 +3269,12 @@ t_records_verify() {
   check "[C80] saying how much its chain covers" said "harbor dock keeper/$day.pane is gone; its chain covers"
   cp -- "$scratch/kept" "$file"
   check "[C80] and with the file as it was, it agrees again" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  local chain=$(state_of)/records/chain
+  cp -- "$chain" "$scratch/chain-kept"
+  jq -c --arg f "harbor dock keeper/$day.pane" 'select(.file != $f or .offset != 0)' "$scratch/chain-kept" > "$chain"
+  check "[C80] an entry missing from the sink, as one the journal dropped or removed, is named as a skip" exit_is 1 wp record verify "Harbor Keeper" "$day"
+  check "[C80] at the entry after it" said "the chain skips from byte 0 to byte $(jq -r '.[1]' <<< "${entries[0]}") at its entry of $(jq -r '.[2]' <<< "${entries[1]}")"
+  cp -- "$scratch/chain-kept" "$chain"
   check "[C75] record verify refuses a seat the workplace does not make, with exit 2" exit_is 2 wp record verify "Ghost" "$day"
   check "up" exit_is 0 wp up
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
@@ -3198,7 +3282,82 @@ t_records_verify() {
   mkdir -- "$(state_of)/records/chain"
   check "down, with the file sink made unwritable" exit_is 0 wp down
   check "[C75] status exits 1 for a sink that did not take an entry" exit_is 1 wp status
-  check "[C75] naming the sink and when" bash -c 'grep -qE "^gone    the chain'"'"'s sink, the file, did not take an entry at [0-9-]+T[0-9:]+Z$" "$1"' _ "$scratch/out"
+  check "[C75] naming the sink and when" bash -c 'grep -qE "^gone    the chain'"'"'s sink, the file, did not take its last entry, at [0-9-]+T[0-9:]+Z, and has taken none since$" "$1"' _ "$scratch/out"
+  rmdir -- "$(state_of)/records/chain"
+  check "up, with the file sink as it should be" exit_is 0 wp up
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  local stood
+  stood=$(jq -r '.files["comms/record"].offset' "$(state_of)/records/chain.state")
+  mv -- "$(state_of)/records/chain" "$scratch/chain"
+  mkdir -- "$(state_of)/records/chain"
+  request pilot refused.md "to: Harbor Keeper" "subject: while the sink refuses" --- "body"
+  check "a mail is served while the sink refuses" answered_ok pilot refused.md
+  check "[C75] while the run is up and the sink's last entry was refused, status exits 1" status_comes_to 1
+  check "[C75] naming the sink and when" bash -c 'grep -qE "^gone    the chain'"'"'s sink, the file, did not take its last entry, at [0-9-]+T[0-9:]+Z, and has taken none since$" "$1"' _ "$scratch/out"
+  rmdir -- "$(state_of)/records/chain"
+  mv -- "$scratch/chain" "$(state_of)/records/chain"
+  request pilot taken.md "to: Harbor Keeper" "subject: once it takes again" --- "body"
+  check "a mail is served once the sink takes again" answered_ok pilot taken.md
+  check "[C75] once the sink takes an entry again, status exits 0 for it" status_comes_to 0
+  check "[C75] and names the time of the last refusal for the rest of the run" \
+    bash -c 'grep -qE "^ok      the chain'"'"'s sink, the file, takes entries again; it last refused one at [0-9-]+T[0-9:]+Z$" "$1"' _ "$scratch/out"
+  check "[C75] a refused entry moved nothing forward: the entry the sink took next begins at byte $stood of the frame's record, where the chain stood before the refusal" \
+    bash -c 'jq -s -e --argjson o "$2" "[.[] | select(.file == \"comms/record\" and .offset == \$o)] | length == 1" "$1" > /dev/null' _ "$(state_of)/records/chain" "$stood"
+  check "down" exit_is 0 wp down
+}
+
+status_exits() {
+  "$BASH" "$loop" status > "$scratch/out" 2>&1
+  [[ $? == "$1" ]]
+}
+status_comes_to() {
+  eventually_long status_exits "$1" && return 0
+  note "    status said:"
+  sed 's/^/    | /' "$scratch/out"
+  return 1
+}
+
+t_the_runtime_directory() {
+  scoped_clone
+  local runtime=/run/user/$EUID planned entry state
+  statements_plan
+  check "plan" exit_is 0 wplan
+  planned=$(cat "$clone/PLAN/plan.json" "$clone/PLAN/manifest.json" | sha256sum)
+  local refusals=(
+    '.programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "RUNTIME"; "read-only"; 22)]|seat Harbor Keeper (harbor/dock/keeper): RUNTIME (read-only, from programs/policy.typify:22) lies at or beneath RUNTIME, the user'"'"'s runtime directory, which the frame shows to no seat as the machine has it; a row there may be hidden, searchable-only or scratch'
+    '.programs[-1].recorded += [st("orchard"; "barn"; "-"; "room"; "RUNTIME/systemd/private"; "read-write"; 23)]|seat Orchard Picker (orchard/barn/picker): RUNTIME/systemd/private (read-write, from programs/policy.typify:23) lies at or beneath RUNTIME, the user'"'"'s runtime directory'
+  )
+  for entry in "${refusals[@]}"; do
+    entry=${entry//RUNTIME/$runtime}
+    statements_plan "${entry%|*}"
+    check "[C84] plan refuses, with exit 1, a read-only or read-write row at or beneath the runtime directory, chain or none: ${entry##*|}" exit_is 1 wplan
+    check "[C84] naming the seat, the row and its origin" said "${entry##*|}"
+  done
+  check "[C84] each seat that the row speaks for is named" said "seat Orchard Grower (orchard/barn/grower): $runtime/systemd/private (read-write, from programs/policy.typify:23) lies at or beneath $runtime"
+  check "[C84] and PLAN/ is as it was" test "$(cat "$clone/PLAN/plan.json" "$clone/PLAN/manifest.json" | sha256sum)" = "$planned"
+  for state in hidden searchable-only scratch; do
+    statements_plan '.programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "'"$runtime"'"; "'"$state"'"; 22), st("harbor"; "dock"; "keeper"; "seat"; "'"$runtime"'/gnupg"; "hidden"; 23)]'
+    check "[C84] a $state row at the runtime directory stands, and a hidden one beneath it: plan takes them" exit_is 0 wplan
+  done
+  statements_plan
+  check "plan" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  edit_plan '.programs[-1].recorded += [{term: ["statement", "harbor", "dock", "keeper", "seat", "'"$runtime"'/bus", "read-only"], origin: {kind: "program", line: 22, path: "programs/policy.typify"}}]'
+  check "[C84] build refuses a plan written by hand with such a row, with exit 1" exit_is 1 wp build
+  check "[C84] naming the seat and the row" said "seat Harbor Keeper (harbor/dock/keeper): $runtime/bus (read-only, from programs/policy.typify:22) lies at or beneath $runtime"
+  if [[ -d $runtime ]]; then
+    statements_plan '.programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "'"$runtime"'/gnupg"; "hidden"; 23)]'
+    check "plan" exit_is 0 wplan
+    wp why "Harbor Keeper" "$runtime/bus" > "$scratch/out" 2>&1
+    check "[C84] why names the mask" said "masked by the frame after the rows: $runtime, the user's runtime directory, where the user's manager, its bus and the user's agents keep their sockets, is shown to this seat as an empty read-only file system, since its row / read-only would show it as the machine has it; the seat's own rows beneath it stand: $runtime/gnupg hidden"
+    check "[C84] and says that the mask, not the nearest row, decides" said "  the frame's mask above decides for the path, and the row does not"
+    wp why "Harbor Keeper" "$runtime/gnupg/x" > "$scratch/out" 2>&1
+    check "[C84] beneath the mask, the seat's own row decides" bash -c '! grep -qF "the frame'"'"'s mask above decides" "$1" && grep -qxF "no row at the path; its nearest ancestor'"'"'s row is $2/gnupg hidden" "$1"' _ "$scratch/out" "$runtime"
+    wp why "Harbor Pilot" "$runtime/bus" > "$scratch/out" 2>&1
+    check "[C84] the mask stands for every seat whose rows would show the machine's runtime directory" said "masked by the frame after the rows: $runtime, the user's runtime directory"
+  else
+    skip "[C84] no runtime directory $runtime here, so why's word on its mask is tried where one stands"
+  fi
 }
 
 t_records_journal() {
@@ -3216,10 +3375,11 @@ t_records_journal() {
   check "[C72] the unit runs under no-new-privileges" test "$(systemctl --user show -p NoNewPrivileges --value "$unit")" = yes
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   check "down" exit_is 0 wp down
-  check "[C72] down ends the unit" eventually_long bash -c '! systemctl --user is-active --quiet "$1"' _ "$unit"
+  check "[C72] down ends the unit through its manager: it is inactive when down returns" bash -c '! systemctl --user is-active --quiet "$1"' _ "$unit"
   check "[C83] record verify reads the chain from the journal, and the file agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
   local ident size
   ident=$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o json --no-pager | jq -r 'select(.MESSAGE | strings | test("workplace-record")) | .SYSLOG_IDENTIFIER' | head -n 1)
+  check "[C72] the carrier's entries carry the identifier workplace-carrier" test "$ident" = workplace-carrier
   size=$(stat -c %s "$(record_of keeper)/$day.pane")
   forged=$(jq -n -c --arg w "$label" --arg f "harbor dock keeper/$day.pane" --argjson o "$size" \
     '{chain: "workplace-record", at: "2030-01-01T00:00:00Z", workplace: $w, seat: "Harbor Keeper", file: $f, offset: $o, length: 1, hash: ("f" * 64), previous: ("0" * 64)}')
@@ -3288,6 +3448,7 @@ tests=(
   t_records_keys_that_tmux_expands
   t_records_verify
   t_records_journal
+  t_the_runtime_directory
   t_source_and_contract
 )
 (( $# )) && tests=("$@")
@@ -3297,8 +3458,8 @@ for name in "${tests[@]}"; do
   (
     test_failed=0
     label2=""
+    trap 'cleanup || exit 1' EXIT
     setup "${name#t_}"
-    trap cleanup EXIT
     "$name"
     exit "$test_failed"
   )

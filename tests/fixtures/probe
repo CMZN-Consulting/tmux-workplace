@@ -208,6 +208,13 @@ for argument in "$@"; do
       if tmux -S "$place" list-sessions > /dev/null 2>&1; then got=answered; else got=refused; fi
       say "socket $place: $got"
       ;;
+    connect=*)
+      place=${argument#connect=}
+      if [[ ! -e $place ]]; then got=absent
+      elif python3 -I -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1])' "$place" 2> /dev/null; then got=connected
+      else got=refused; fi
+      say "connect $place: $got"
+      ;;
     bus=*)
       place=${argument#bus=}
       if timeout 10 busctl --address="unix:path=$place" call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Properties Get ss org.freedesktop.systemd1.Manager Version > /dev/null 2>&1; then got=answered; else got=refused; fi

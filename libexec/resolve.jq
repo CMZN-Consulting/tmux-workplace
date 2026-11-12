@@ -77,6 +77,7 @@ $b[0] as $binding
            ($rest[] | emit(.)[]),
            (after_rows($spec; $st)[]
             | (resolve_all(.args; $st)[] | .v),
+              (if has("rows-beneath") then one(.["rows-beneath"]; $st) as $under | ($rest[] | select(beneath(.path; $under)) | emit(.)[]) else empty end),
               (if has("ro-bind-pairs") then (one(.["ro-bind-pairs"]; $st) | fromjson[] | "--ro-bind", .[0], .[1]) else empty end),
               (resolve_all(.["args-after"] // []; $st)[] | .v)),
            ($spec.tail[] | if type == "object" and has("seat") then $directory else . end)]

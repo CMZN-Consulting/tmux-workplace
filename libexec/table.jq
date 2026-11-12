@@ -194,6 +194,15 @@ def chain_mask_problems($binding; $plan; $view; $masks):
     | "seat \($names[$row.key[0:3] | tojson] // "?") (\($row.key[0:3] | join("/"))): \($row.key[3]) (\($row.value[0]?), from \([($row.origins // [$row.origin // {}])[] | at(.)] | join(", "))) lies at or beneath \(.), which the frame hides in every view of a workplace that keeps a chain, as a hidden row would"
   end;
 
+def runtime_row_problems($binding; $plan; $view; $runtime):
+  def inside: type == "string" and (. == $runtime or startswith($runtime + "/"));
+  def at($o): "\($o.path // "?"):\($o.line // "?")";
+  seat_names($plan) as $names
+  | $binding.tables.view as $spec
+  | table_rows($plan; $view; $spec)[]
+  | select(type == "object" and (.key | type) == "array" and (.key[3] | inside) and (.value[0]? == "read-only" or .value[0]? == "read-write"))
+  | "seat \($names[.key[0:3] | tojson] // "?") (\(.key[0:3] | join("/"))): \(.key[3]) (\(.value[0]), from \([(.origins // [.origin // {}])[] | at(.)] | join(", "))) lies at or beneath \($runtime), the user's runtime directory, which the frame shows to no seat as the machine has it; a row there may be hidden, searchable-only or scratch";
+
 def clone_row_problems($binding; $plan; $view; $clone):
   def inside: type == "string" and (. == $clone or startswith(if $clone == "/" then "/" else $clone + "/" end));
   def at($o): "\($o.path // "?"):\($o.line // "?")";

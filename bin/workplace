@@ -327,17 +327,18 @@ refuse_clone() {
 }
 
 chain_masks() {
-  printf '%s\n' /var/log/journal /run/log/journal /run/systemd/journal "/run/user/$EUID/systemd" "/run/user/$EUID/bus"
+  printf '%s\n' /var/log/journal /run/log/journal /run/systemd/journal
 }
 
 refuse_rows() {
   local plan=$1 view=$2 given=$3 found
   local -a faults
-  found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --arg given "$given" \
+  found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --arg given "$given" --arg runtime "/run/user/$EUID" \
     --argjson masks "$(json_list $(chain_masks))" --slurpfile b "$tool/host/binding.json" --slurpfile v "$view" '
     include "table";
     joined($b[0]; $root) as $plan
-    | clone_row_problems($b[0]; $plan; $v[0]; $clone), (if $given == "yes" then given_problems($b[0]; $plan; $v[0]) else empty end),
+    | clone_row_problems($b[0]; $plan; $v[0]; $clone), runtime_row_problems($b[0]; $plan; $v[0]; $runtime),
+      (if $given == "yes" then given_problems($b[0]; $plan; $v[0]) else empty end),
       (if ($v[0].records.chain? // null) != null then chain_mask_problems($b[0]; $plan; $v[0]; $masks) else empty end)' "$plan") \
     || { warn "cannot read $plan for the rows at the clone"; return 1; }
   [[ -z $found ]] && return 0
@@ -507,7 +508,7 @@ cmd_plan() {
   local planned_view=/dev/null
   [[ -n $folded ]] && planned_view=$work/view.json
   refuse_rows "$work/plan.json" "$planned_view" yes \
-    || die "the plan opens the clone to a seat, or sets in a seat's environment a name the frame gives it; PLAN/ is as it was"
+    || die "the plan shows a seat a place the frame closes, or sets in a seat's environment a name the frame gives it; PLAN/ is as it was"
   local out_json
   out_json=$(for name in "${outputs[@]}"; do printf '%s\0%s\0' "$name" "$(sha_of "$work/$name")"; done \
     | jq -R -s -c 'split("\u0000")[:-1] | [range(0; length; 2) as $i | {path: .[$i], sha256: .[$i + 1]}]')
@@ -1019,7 +1020,7 @@ cmd_build() {
       || say "the plan was folded by $planned_fold, and this loop folds by $FOLD_DERIVATION; the views are equal, so build goes on"
     view_file=$plan_dir/view.json
   fi
-  refuse_rows "$plan_dir/plan.json" "$view_file" no || die "build refuses: PLAN/plan.json opens the clone to a seat"
+  refuse_rows "$plan_dir/plan.json" "$view_file" no || die "build refuses: PLAN/plan.json shows a seat a place the frame closes"
   plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq" "$view_file"
   check_name "$manifest" || die "build refuses: the plan's workplace name is not the one its clone gives"
   if [[ $facts_member == none ]]; then
@@ -1364,17 +1365,15 @@ agent_record() {
 }
 
 start_agents() {
-  local state_dir runtime=/run/user/$EUID gnupg=""
+  local state_dir runtime=/run/user/$EUID
   state_dir=$(state_root) || state_dir=""
   if [[ -n $state_dir && ! -d $state_dir ]]; then
     mkdir -p -- "${state_dir%/*}" && mkdir -m 0700 -- "$state_dir" || { warn "cannot make $state_dir, which every view masks"; return 1; }
   fi
   if [[ -d $runtime ]]; then
     [[ -d $runtime/gnupg ]] || mkdir -m 0700 -- "$runtime/gnupg" 2> /dev/null
-    [[ -d $runtime/gnupg ]] && gnupg=$runtime/gnupg
   fi
-  state=$(jq -c --arg r "$state_dir" --arg g "$gnupg" \
-    '.slots[(["state-root"] | tojson)] = $r | .slots[(["runtime-gnupg"] | tojson)] = $g' <<< "$state")
+  state=$(jq -c --arg r "$state_dir" '.slots[(["state-root"] | tojson)] = $r' <<< "$state")
   [[ -f $build_dir/keys.json ]] || return 0
   local keys=$build_dir/keys.json made_in
   made_in=$(jq -r '.state' "$keys")
@@ -1586,11 +1585,10 @@ set_records() {
     state=$(jq -c --argjson k "$(jq -c '.seat' <<< "$entry")" --arg b "$binds" '.slots[(["record-binds"] + $k | tojson)] = $b' <<< "$state")
   done < <(jq -c '.seats[]' "$records")
   if [[ -n $chain ]]; then
-    for place in "mask-journal-var /var/log/journal" "mask-journal-run /run/log/journal" "mask-journal-sockets /run/systemd/journal" "mask-manager /run/user/$EUID/systemd"; do
+    for place in "mask-journal-var /var/log/journal" "mask-journal-run /run/log/journal" "mask-journal-sockets /run/systemd/journal"; do
       slot=${place%% *} key=${place#* }
       [[ -d $key ]] && state=$(jq -c --arg s "$slot" --arg p "$key" '.slots[([$s] | tojson)] = $p' <<< "$state")
     done
-    [[ -S /run/user/$EUID/bus ]] && state=$(jq -c --arg p "/run/user/$EUID/bus" '.slots[(["mask-bus"] | tojson)] = $p' <<< "$state")
   fi
   if [[ $chain == journal ]]; then
     need_programs_for "a plan whose chain goes to the journal" "${JOURNAL_PROGRAMS[@]}" || return 1
@@ -1598,6 +1596,17 @@ set_records() {
       || { warn "the plan's chain goes to the journal, and no user manager answers here to start the carrier as its unit"; return 1; }
   fi
   return 0
+}
+
+set_runtime() {
+  local runtime=/run/user/$EUID
+  [[ -d $runtime ]] || return 0
+  state=$(jq -c --slurpfile t "$run_dir/tables.json" --slurpfile b "$build_dir/binding.json" --arg r "$runtime" '
+    def covers($q): $q == "/" or $q == $r or ($r | startswith($q + "/"));
+    reduce ([$t[0][$b[0].tables.view.cell] // [] | .[] | select(covers(.key[3]))] | group_by(.key[0:3])[] | max_by(.key[3] | length)) as $row (.;
+      if $row.value[0] == "read-only" or $row.value[0] == "read-write"
+      then .slots[(["runtime-mask"] + $row.key[0:3] | tojson)] = $r else . end)' <<< "$state") \
+    || { warn "cannot read the views for the runtime directory $runtime"; return 1; }
 }
 
 set_pipes() {
@@ -1638,7 +1647,7 @@ start_carrier() {
     local -a environment=(--setenv=WORKPLACE_ROOT="$WORKPLACE_ROOT" --setenv=WORKPLACE_CONFIG="$WORKPLACE_CONFIG" --setenv=PATH="$PATH")
     [[ -n ${HOME-} ]] && environment+=(--setenv=HOME="$HOME")
     [[ -n ${XDG_STATE_HOME-} ]] && environment+=(--setenv=XDG_STATE_HOME="$XDG_STATE_HOME")
-    if ! systemd-run --user --quiet --collect --unit="$unit" -p WorkingDirectory=/ -p NoNewPrivileges=yes "${environment[@]}" \
+    if ! systemd-run --user --quiet --collect --unit="$unit" -p WorkingDirectory=/ -p NoNewPrivileges=yes -p SyslogIdentifier=workplace-carrier "${environment[@]}" \
       -- "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry > "$run_dir/carrier.log" 2>&1; then
       warn "the user manager did not start the carrier's unit $unit: $(tail -n 1 "$run_dir/carrier.log")"
       return 1
@@ -1737,7 +1746,7 @@ cmd_up() {
     rm -rf -- "$run_dir"
     die "up refuses before its first term, and starts nothing"
   fi
-  if ! set_homes || ! start_agents || ! set_mail || ! set_records || ! start_carrier; then
+  if ! set_homes || ! start_agents || ! set_mail || ! set_records || ! set_runtime || ! start_carrier; then
     teardown failed
     rm -rf -- "$run_dir"
     die "up stopped before its first term; every agent and carrier it started is ended"
@@ -2182,9 +2191,9 @@ chain_save() {
   local rel state_file=$records_dir/chain.state
   for rel in "${!chain_offset[@]}"; do
     printf '%s\t%s\t%s\n' "$rel" "${chain_offset[$rel]}" "${chain_hash[$rel]}"
-  done | jq -R -s --arg failed "$chain_failed" '
+  done | jq -R -s --arg failed "$chain_failed" --argjson refusing "$(( chain_refusing ? 1 : 0 ))" '
     {files: (split("\n")[:-1] | map(split("\t") | {key: .[0], value: {offset: (.[1] | tonumber), hash: .[2]}}) | from_entries)}
-    + (if $failed == "" then {} else {failed: $failed} end)' > "$state_file.new" && mv -f -- "$state_file.new" "$state_file"
+    + (if $failed == "" then {} else {failed: $failed, refusing: ($refusing == 1)} end)' > "$state_file.new" && mv -f -- "$state_file.new" "$state_file"
 }
 
 chain_put() {
@@ -2210,8 +2219,10 @@ chain_one() {
   if chain_put "$entry"; then
     chain_offset[$rel]=$size
     chain_hash[$rel]=$hash
+    chain_refusing=0
   else
     chain_failed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    chain_refusing=1
   fi
 }
 
@@ -2281,7 +2292,7 @@ cmd_carry() {
     carrier_recover
   fi
   record_names=() record_boxes=() record_dirs=() record_keys=() record_kept=() record_pane=()
-  chain_sink="" chain_last=0 chain_failed=""
+  chain_sink="" chain_last=0 chain_failed="" chain_refusing=0
   if [[ -f $records ]]; then
     while IFS= read -r entry; do
       record_names+=("$(jq -r '.name' <<< "$entry")")
@@ -2295,7 +2306,7 @@ cmd_carry() {
     [[ -n $chain_sink ]] && chain_load
   fi
   : > "$run_dir/carrier/ready"
-  while (( ! carrier_stop )) && [[ ! -f $run_dir/state.json ]]; do carrier_pause 0.2; done
+  while (( ! carrier_stop )) && [[ ! -f $run_dir/state.json && -d $run_dir/carrier ]]; do carrier_pause 0.2; done
   if [[ ! -f $run_dir/state.json ]]; then
     (( ${#record_names[@]} )) && carrier_chain 1
     exit 0
@@ -2310,7 +2321,7 @@ cmd_carry() {
   for i in "${!record_keys[@]}"; do
     record_pane[i]=$(jq -r --argjson k "${record_keys[i]}" '.slots[(["pane"] + $k | tojson)] // ""' "$run_dir/state.json")
   done
-  while (( ! carrier_stop )); do
+  while (( ! carrier_stop )) && [[ -d $run_dir/carrier ]]; do
     for i in "${!seat_names[@]}"; do
       (( carrier_stop )) && break
       carrier_serve "$i"
@@ -2356,8 +2367,8 @@ cmd_record() {
     at=$(jq -r '.at' <<< "$entry") offset=$(jq -r '.offset' <<< "$entry") length=$(jq -r '.length' <<< "$entry")
     hash=$(jq -r '.hash' <<< "$entry") previous=$(jq -r '.previous' <<< "$entry")
     [[ $offset =~ ^[0-9]+$ && $length =~ ^[0-9]+$ ]] || { say "$rel: the chain's entry of $at is not one the carrier writes"; return 1; }
+    if (( offset != expected )); then say "$rel: the chain skips from byte $expected to byte $offset at its entry of $at: an entry before it is missing"; return 1; fi
     if [[ $previous != "$prev" ]]; then say "$rel: the chain is broken at its entry of $at: it names another hash before it than the one sent before"; return 1; fi
-    if (( offset != expected )); then say "$rel: the chain skips from byte $expected to byte $offset at its entry of $at"; return 1; fi
     if [[ ! -f $file ]]; then say "$rel is gone; its chain covers $(( offset + length )) bytes, the first of them from its entry of $at"; return 1; fi
     size=$(stat -c %s -- "$file")
     if (( size < offset + length )); then
@@ -2412,9 +2423,9 @@ cmd_why() {
   fi
   [[ -f $plan ]] || die "no plan in $plan_dir" 2
   [[ -f $view ]] || view=/dev/null
-  local state_dir gnupg="" key_view=""
+  local state_dir runtime="" key_view=""
   state_dir=$(state_root) || state_dir=""
-  [[ -d /run/user/$EUID/gnupg ]] && gnupg=/run/user/$EUID/gnupg
+  [[ -d /run/user/$EUID ]] && runtime=/run/user/$EUID
   [[ -f $build_dir/keys.json ]] && key_view=$(jq -r '.state + "/gnupg"' "$build_dir/keys.json")
   local workplace seat_key names="[]" supplied='{}' values_note="" file="" i
   local -a problems fields
@@ -2439,7 +2450,7 @@ cmd_why() {
       values_note="there is no run-time file $file"
     fi
   fi
-  jq -r -L "$lib" --arg root "$root" --arg seat "$seat" --arg path "$path" --arg stateroot "$state_dir" --arg rungnupg "$gnupg" \
+  jq -r -L "$lib" --arg root "$root" --arg seat "$seat" --arg path "$path" --arg stateroot "$state_dir" --arg runtime "$runtime" \
     --arg keyview "$key_view" --argjson tmuxdirs "$(json_list "${TMUX_TMPDIR:-/tmp}/tmux-$EUID" "/tmp/tmux-$EUID")" --argjson chainmasks "$(json_list $(chain_masks))" --arg workplace "$workplace" --argjson supplied "$supplied" --arg valuesnote "$values_note" --arg values "$file" --arg clone "$clone" \
     --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
     include "table";
@@ -2465,7 +2476,11 @@ cmd_why() {
           | ($folded[0].mail.path? // null) as $mailpath
           | ($folded[0].records.path? // null) as $recordpath
           | def within($p; $q): $q != null and $q != "" and ($p == $q or beneath($p; $q));
-            (within($path; $clone) or within($path; $rungnupg) or within($path; $mailpath) or within($path; $recordpath)
+            ([$rows[] | select(.key[3] == $runtime or beneath($runtime; .key[3]))] | sort_by(.key[3] | length) | last) as $runrow
+          | ($runtime != "" and (($runrow.value[0]? // "") | IN("read-only", "read-write"))) as $runmasked
+          | [$rows[] | select(beneath(.key[3]; $runtime))] as $runrows
+          | ($runmasked and within($path; $runtime) and (($row != null and beneath($row.key[3]; $runtime)) | not)) as $runpath
+          | (within($path; $clone) or $runpath or within($path; $mailpath) or within($path; $recordpath)
              or any($tmuxdirs[]; within($path; .)) or (($folded[0].records.chain? // null) != null and any($chainmasks[]; within($path; .)))
              or (within($path; $stateroot) and (within($path; $home_path) | not)
                  and ((within($path; $keyview) and $key.state? == "held") | not))) as $masked
@@ -2488,6 +2503,10 @@ cmd_why() {
             (if $path == $clone or beneath($path; $clone) then
                "masked by the frame after the rows: \($clone), the clone the workplace is built from, with its PLAN and BUILD, is shown to no seat, whatever its rows say"
              else empty end),
+            (if $runmasked and within($path; $runtime) then
+               "masked by the frame after the rows: \($runtime), the user's runtime directory, where the user's manager, its bus and the user's agents keep their sockets, is shown to this seat as an empty read-only file system, since its row \($runrow.key[3]) \($runrow.value[0]) would show it as the machine has it"
+               + (if ($runrows | length) == 0 then "" else "; the seat's own rows beneath it stand: \([$runrows[] | "\(.key[3]) \(.value[0])"] | join(", "))" end)
+             else empty end),
             (if within($path; $recordpath) then
                "the seat's records: shown by the frame after the rows (Logs) at \($recordpath), read-only: one directory for each seat whose record it may read, under that seat's name: \(($folded_seat.reach.record? // []) | if length == 0 then "none" else join(", ") end)"
              else empty end),
@@ -2495,7 +2514,7 @@ cmd_why() {
              | "masked by the frame after the rows: \(.), where the user's tmux servers keep their sockets, is shown to no seat; the workplace's own server listens in the clone's run directory, which no view holds"),
             (if ($folded[0].records.chain? // null) == null then empty
              else $chainmasks[] | select(. as $d | within($path; $d))
-               | "masked by the frame after the rows (Logs): \(.), the journal's, the user manager's or the session bus, is shown to no seat of a workplace that keeps a chain" end),
+               | "masked by the frame after the rows (Logs): \(.), one of the journal's places, is shown to no seat of a workplace that keeps a chain" end),
             (if within($path; $mailpath) then
                "the seat's mailbox: shown by the frame after the rows (Comms) at \($mailpath), whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat's own, and no other seat's"
              else empty end),
@@ -2509,8 +2528,6 @@ cmd_why() {
                   then "; this seat holds a key and passes through it to \($keyview), where it is shown its public ring, its trust database and gpg.conf, read-only, and its agent's extra socket and ssh socket"
                   else "" end)
                + (if $home_path != null then "; this seat has a home and passes through it to \($home_path)" else "" end)
-             elif $rungnupg != "" and ($path == $rungnupg or beneath($path; $rungnupg)) then
-               "masked by the frame after the rows (Identity): \($rungnupg), where the agents keep their sockets, is shown to no seat"
              else empty end),
             (if ($rows | length) == 0 then "no view: the seat sees the machine as its user does"
              elif $row == null then "no row covers the path"
@@ -2824,10 +2841,12 @@ records_status() {
       fi
     fi
   done < <(jq -c '.seats[] | select(.pane == "kept")' "$records")
-  failed=$(jq -r '.failed // empty' "$state_file" 2> /dev/null)
-  if [[ -n $failed ]]; then
-    say "gone    the chain's sink, the $(jq -r '.chain' "$records"), did not take an entry at $failed"
+  failed=$(jq -r 'if .failed then "\(.refusing != false) \(.failed)" else empty end' "$state_file" 2> /dev/null)
+  if [[ $failed == true\ * ]]; then
+    say "gone    the chain's sink, the $(jq -r '.chain' "$records"), did not take its last entry, at ${failed#* }, and has taken none since"
     records_bad=1
+  elif [[ -n $failed ]]; then
+    say "ok      the chain's sink, the $(jq -r '.chain' "$records"), takes entries again; it last refused one at ${failed#* }"
   fi
   return 0
 }

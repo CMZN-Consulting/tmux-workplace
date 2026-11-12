@@ -51,6 +51,10 @@ $b[0] as $binding
   def call($elems; $st):
     program($elems[0]) as $p
     | (resolve_all($p.argv; $st) | map(.lit = true)) + resolve_all($elems[1:]; $st) | encode($p);
+  def after_rows($spec; $st):
+    [($spec["after-rows"] // [])[]
+     | select((if has("if-slot") then ($st.slots[key(.["if-slot"])] // "") != "" else true end)
+              and (if has("unless-slot") then ($st.slots[key(.["unless-slot"])] // "") == "" else true end))];
   def view_args($spec; $k; $directory; $st):
     [($tables[$spec.cell] // [])[] | select(.key[0:3] == $k) | {path: .key[3], state: .value[0]}] as $rows
     | if ($rows | length) == 0 then []
@@ -71,6 +75,7 @@ $b[0] as $binding
            emit($root[0])[],
            $spec["after-root"][],
            ($rest[] | emit(.)[]),
+           (after_rows($spec; $st)[] | resolve_all(.args; $st)[] | .v),
            ($spec.tail[] | if type == "object" and has("seat") then $directory else . end)]
       end;
   def seat_record($s; $st):
@@ -86,7 +91,9 @@ $b[0] as $binding
     | $binding.tables[$s.environment] as $espec
     | {name: $name, key: $k, directory: $directory,
        command: (view_args($vspec; $k; $directory; $st) + $argv),
-       environment: [($tables[$espec.cell] // [])[] | select(.key[0:3] == $k) | [.key[3], .value[0]]],
+       environment: ([($tables[$espec.cell] // [])[] | select(.key[0:3] == $k) | [.key[3], .value[0]]]
+                     + (if ([($tables[$vspec.cell] // [])[] | select(.key[0:3] == $k)] | length) > 0
+                        then [after_rows($vspec; $st)[] | (.environment // [])[] | [.[0], one(.[1]; $st)]] else [] end)),
        view: ([($tables[$vspec.cell] // [])[] | select(.key[0:3] == $k)] | length)};
   def phase_call:
     entry as $e

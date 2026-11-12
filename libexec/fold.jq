@@ -29,7 +29,7 @@ joined($b[0]; $root) as $plan
 | ($seats | map(.[0:1]) | unique) as $offices
 | ($seats | map(.[0:2]) | unique) as $rooms
 | [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key")))] as $records
 | def known($scope; $n):
     if $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
@@ -53,6 +53,13 @@ joined($b[0]; $root) as $plan
         elif known($t[4]; $t[1:4]) | not then "\($where): the clearance names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif $t[5] | whole | not then "\($where): \($t[5]) is not a whole number"
         else empty end
+      elif $t[0] == "key" then
+        if ($t | length) != 6 then "\($where): a key has the words key A B C SCOPE STATE, not \($t | length)"
+        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a key"
+        elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) key cannot name \($t[1:4] | join(" "))"
+        elif known($t[4]; $t[1:4]) | not then "\($where): the key names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
+        elif $t[5] | IN("held", "none") | not then "\($where): \($t[5]) is not held or none"
+        else empty end
       else
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
@@ -66,16 +73,20 @@ joined($b[0]; $root) as $plan
       [$records[] | select(.term[0] == "statement")] as $said
       | [$records[] | select(.term[0] == "clearance")] as $cleared
       | [$records[] | select(.term[0] == "label")] as $labelled
+      | [$records[] | select(.term[0] == "key")] as $keyed
       | [($said | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two statements of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
          ($cleared | group_by(.term[1:5])[] | select((map(.term[5] | tonumber) | unique | length) > 1)
           | "two clearances of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) differ: \(map("\(.term[5]) from \(at(.origin))") | join(", "))"),
          ($labelled | group_by(.term[1])[] | select((map(.term[2] | tonumber) | unique | length) > 1)
-          | "two labels of \(.[0].term[1]) differ: \(map("\(.term[2]) from \(at(.origin))") | join(", "))")] as $conflicts
+          | "two labels of \(.[0].term[1]) differ: \(map("\(.term[2]) from \(at(.origin))") | join(", "))"),
+         ($keyed | group_by(.term[1:5])[] | select((map(.term[5]) | unique | length) > 1)
+          | "two keys of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) differ: \(map("\(.term[5]) from \(at(.origin))") | join(", "))")] as $conflicts
       | if ($conflicts | length) > 0 then {errors: $conflicts}
         else
           entities($said) as $statements
           | entities($cleared) as $clearances
+          | entities($keyed) as $keys
           | (entities($labelled) | map({path: .term[1], value: (.term[2] | tonumber), origins}) | sort_by((.path | depth), .path)) as $labels
           | [$panes[] | . as $pane | $pane[1:4] as $k | ($kinds[$k | tojson] // "none") as $kind
              | [$statements[] | select(
@@ -92,9 +103,15 @@ joined($b[0]; $root) as $plan
              | (if ($held | length) == 0 then {value: 0, scope: null, origins: []}
                 else ($held[0].term[4]) as $scope | [$held[] | select(.term[4] == $scope)] as $same
                   | {value: ($same[0].term[5] | tonumber), scope: $scope, origins: [$same[].origins[]]} end) as $clearance
+             | ([$keys[] | select(.term[4] == "seat" and .term[1:4] == $k)]
+                + [$keys[] | select(.term[4] == "room" and .term[1:3] == $k[0:2])]
+                + [$keys[] | select(.term[4] == "office" and .term[1] == $k[0])]
+                + [$keys[] | select(.term[4] == "workplace")]) as $spoken
+             | (if ($spoken | length) == 0 then {state: "none", scope: null, origins: []}
+                else {state: $spoken[0].term[5], scope: $spoken[0].term[4], origins: $spoken[0].origins} end) as $key
              | ([$remaining[] | {key: .term[5], value: {key: ($k + [.term[5]]), value: [.term[6]], origins, source: "statement", term}}]
                 | from_entries) as $stated
-             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, mine: $mine, remaining: $remaining, stated: $stated}]
+             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, mine: $mine, remaining: $remaining, stated: $stated}]
           as $folds
           | [$folds[] | select(.stated | has("/") | not) | "seat \(.name) (\(.seat | join("/"))): no row for /"] as $rootless
           | if ($rootless | length) > 0 then {errors: $rootless}
@@ -136,6 +153,7 @@ joined($b[0]; $root) as $plan
                     seats: [$done[] | {
                       seat, kind,
                       clearance: {value: .clearance.value, origin: (.clearance.origins[0] // null), origins: .clearance.origins, scope: .clearance.scope},
+                      key,
                       rows: (.rows | length),
                       replacement_statements: .replacing,
                       exception_count: (.replacing | length),

@@ -84,6 +84,65 @@ for argument in "$@"; do
       say "pid $$ procs ${#procs[@]}"
       ;;
     ns) say "ns ipc $(stat -L -c %i /proc/self/ns/ipc) pid $(stat -L -c %i /proc/self/ns/pid)" ;;
+    identity=*)
+      place=${argument#identity=}
+      if [[ -z ${GNUPGHOME-} ]]; then
+        say "key home: none"
+      else
+        listing=("$GNUPGHOME"/*)
+        say "key home: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+        if { : > "$GNUPGHOME/probe-$name"; } 2> /dev/null; then put=ok; rm -f -- "$GNUPGHOME/probe-$name"; else put=refused; fi
+        say "key home write: $put"
+        listing=("${GNUPGHOME%/*}"/*)
+        say "key state: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+        printf '%s\n' 'a line to sign' > "$place/msg"
+        if gpg --batch --detach-sign --armor -o "$place/msg.asc" "$place/msg" 2> /dev/null; then got=ok; else got=failed; fi
+        say "key gpg sign: $got"
+        say "key export: $(gpg --batch --export-secret-keys 2> /dev/null | wc -c) bytes"
+        say "key export loopback: $(gpg --batch --pinentry-mode loopback --passphrase '' --export-secret-keys 2> /dev/null | wc -c) bytes"
+        say "key export subkeys: $(gpg --batch --export-secret-subkeys 2> /dev/null | wc -c) bytes"
+        forbidden=0 total=0
+        while IFS=: read -r kind _ _ _ _ _ _ _ _ grip _; do
+          [[ $kind == grp ]] || continue
+          for command in "READKEY $grip" "EXPORT_KEY $grip" "EXPORT_KEY --openpgp $grip" "DELETE_KEY --force $grip" "PASSWD $grip" "KEYATTR $grip Use-for-ssh: false"; do
+            total=$(( total + 1 ))
+            [[ $(gpg-connect-agent --no-autostart "$command" /bye 2>&1) == *Forbidden* ]] && forbidden=$(( forbidden + 1 ))
+          done
+        done < <(gpg --with-colons --with-keygrip --list-keys 2> /dev/null)
+        for command in "KEYWRAP_KEY --export" "IMPORT_KEY" "PRESET_PASSPHRASE 0000000000000000000000000000000000000000 -1 41" "GETINFO pid" "RELOADAGENT" "KILLAGENT"; do
+          total=$(( total + 1 ))
+          [[ $(gpg-connect-agent --no-autostart "$command" /bye 2>&1) == *Forbidden* ]] && forbidden=$(( forbidden + 1 ))
+        done
+        say "key agent: $forbidden of $total forbidden"
+        if gpg --batch --detach-sign -o "$place/msg2.sig" "$place/msg" 2> /dev/null; then got=ok; else got=failed; fi
+        say "key gpg sign after: $got"
+        ssh-add -L > "$place/seat.pub" 2> /dev/null
+        read -r kind blob _ < "$place/seat.pub"
+        say "key ssh list: $kind $blob"
+        if ssh-keygen -Y sign -f "$place/seat.pub" -n file "$place/msg" > /dev/null 2>&1; then got=ok; else got=failed; fi
+        say "key ssh sign: $got"
+        ssh-add -D > /dev/null 2>&1
+        read -r kind2 blob2 _ < <(ssh-add -L 2> /dev/null)
+        if [[ "$kind2 $blob2" == "$kind $blob" ]]; then got=listed; else got=gone; fi
+        say "key ssh after removing all: $got"
+        rm -f -- "$place/new" "$place/new.pub"
+        if ssh-keygen -q -t ed25519 -N '' -f "$place/new" < /dev/null > /dev/null 2>&1 && ssh-add "$place/new" > /dev/null 2>&1; then got=added; else got=refused; fi
+        rm -f -- "$place/new" "$place/new.pub"
+        say "key ssh add: $got"
+      fi
+      listing=("/run/user/$EUID/gnupg"/*)
+      if [[ -r /run/user/$EUID/gnupg ]] && (( ${#listing[@]} )); then got=seen; else got=unseen; fi
+      say "key runtime sockets: $got"
+      ;;
+    commit=*)
+      spec=${argument#commit=}
+      place=${spec%%|*}
+      rest=${spec#*|}
+      if git init -q "$place/repo" 2> /dev/null \
+        && git -C "$place/repo" -c user.name="${rest%%|*}" -c user.email="${rest#*|}" commit -q -S --allow-empty -m 'signed in the pane' > "$place/commit.out" 2>&1
+      then got=ok; else got=failed; fi
+      say "key commit: $got"
+      ;;
     term=*) term_file=${argument#term=} ;;
     *) say "arg [$argument]" ;;
   esac

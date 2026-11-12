@@ -4,7 +4,7 @@
 
 ## Inputs and the build
 
-- **C1.** The loop reads two variables and no other setting: `WORKPLACE_ROOT`, the absolute path of a directory, and `WORKPLACE_CONFIG`, the absolute path of a directory at or below it. Anything else is refused with exit 2. tmux itself reads `TMUX_TMPDIR` to find its socket; the loop records the socket it used, and `down` and `status` refuse to act from a shell that would reach another (C18).
+- **C1.** The loop reads two variables of its own and no other setting: `WORKPLACE_ROOT`, the absolute path of a directory, and `WORKPLACE_CONFIG`, the absolute path of a directory at or below it. Anything else is refused with exit 2. For the workplaces' state directory it reads the platform's `XDG_STATE_HOME`, else `HOME` (C35). tmux itself reads `TMUX_TMPDIR` to find its socket; the loop records the socket it used, and `down` and `status` refuse to act from a shell that would reach another (C18).
 - **C2.** `build` reads `PLAN/` in `WORKPLACE_CONFIG` and nothing else:
   - `plan.json` is the reader's output as printed;
   - `facts.json` is the facts it was planned on;
@@ -32,7 +32,7 @@
   - A program's and an origin's `path` are the reader's record of where a line was written, and the loop neither rewrites nor refuses them.
   - A `read-only` or `read-write` row whose path does not exist is refused, and so is a `hidden`, `searchable-only` or `scratch` row whose path is not a directory. The preconditions the binding names (a directory, a file) are checked at build.
 - **C5.** `up` checks `BUILD` against its `MANIFEST`, refuses a changed, missing or unlisted file, and never builds.
-- **C6.** The loop needs bash 5.2, jq 1.7 and tmux 3.5a or later, and refuses an older one; versions are compared with tmux's letter suffix, so the floor 3.5a refuses 3.5. It needs `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`, and bubblewrap only when a seat has a view. It resolves each program to an absolute path before it applies anything, and refuses a path that holds `=`.
+- **C6.** The loop needs bash 5.2, jq 1.7 and tmux 3.5a or later, and refuses an older one; versions are compared with tmux's letter suffix, so the floor 3.5a refuses 3.5. It needs `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`, and bubblewrap only when a seat has a view. GnuPG 2.4.4 or later (`gpg`, `gpg-agent`, `gpgconf`, `gpg-connect-agent`), with `setsid` and `base64`, is needed only by a plan in which a seat holds a key (C44). It resolves each program to an absolute path before it applies anything, and refuses a path that holds `=`.
 
 ## Applying the plan
 
@@ -99,11 +99,11 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-v2`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-v3`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
-  - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats.
-- **C30.** The fold reads the plan's `statement A B C SCOPE PATH STATE`, `clearance A B C SCOPE NUMBER` and `label PATH NUMBER` terms from the programs' `recorded` lists, in the plan's order. It takes the seats from the `pane` terms and each seat's kind from the `seat-kinds` cell. For each seat:
+  - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
+- **C30.** The fold reads the plan's `statement A B C SCOPE PATH STATE`, `clearance A B C SCOPE NUMBER`, `label PATH NUMBER` and `key A B C SCOPE STATE` terms from the programs' `recorded` lists, in the plan's order. It takes the seats from the `pane` terms and each seat's kind from the `seat-kinds` cell. For each seat:
   - its statements are the workplace's, its kind's, its office's, its room's and its own;
   - equal statements, clearances and labels count once, and carry the origin of each;
   - a statement is replaced by a narrower one at its path or at a directory above it, by components, and those that remain are the seat's rows;
@@ -130,7 +130,39 @@
 
   It prints each label that lies beneath a larger one, with the seats between the two, and lists the directories held by nobody as a report. None of this is in the plan.
 - **C33.** A seat's table is `view.json` when the plan holds statements, and the plan's `view` cell when it holds none.
-  - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance` and `label`.
-  - `plan`, `build`, `up` and `why` all call it. A plan that holds clearances or labels without a statement is folded too, and refused, since no seat has a row for `/`.
-  - `view.json` holds the rows and, for each seat in the order of the `pane` terms, its kind, clearance, count of rows, replacement statements and their counts, and its statements at labelled paths.
+  - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance`, `label` and `key`.
+  - `plan`, `build`, `up` and `why` all call it. A plan that holds clearances, labels or keys without a statement is folded too, and refused, since no seat has a row for `/`.
+  - `view.json` holds the rows and, for each seat in the order of the `pane` terms, its kind, clearance, key, count of rows, replacement statements and their counts, and its statements at labelled paths.
   - `why` names the statement or the label behind a folded row, and what that statement replaced.
+- **C34.** The fold reads `key A B C SCOPE STATE`, with SCOPE `workplace`, `office`, `room` or `seat` and STATE `held` or `none`. A seat holds a key by the narrowest scope that speaks: its own, else its room's, else its office's, else the workplace's, else none. `view.json` gives each seat `key: {state, scope, origins}`.
+  - It refuses, naming the origins, two keys of one scope with different states, a key that names an office, room or seat the plan does not make, and any other state.
+  - A plan that holds a key term is folded, so every seat of it has a view.
+- **C35.** The workplaces' state directory R is `${XDG_STATE_HOME:-$HOME/.local/state}/workplace`, and a workplace's own is S = `R/NAME`, with mode 0700, made by `build`.
+  - For each seat that holds a key, in the order of the panes, `build` makes a home `S/keys/NN`, NN being the seat's place among the panes.
+  - In it, under `setsid` with nothing on standard input, it makes an ed25519 key that signs and certifies, with an ed25519 subkey that authenticates. There is no passphrase, no expiry and nothing that encrypts.
+  - The user id is `NAME <A.B.C@WORKPLACE>`: the seat's name, and its place at the workplace. A user id that gpg does not make as asked refuses the build by name. The user id is passed after `--`, since gpg reads one that begins with `-` as its options.
+  - The agent of the home has `pinentry-program` set to `false` and `enable-ssh-support`. The home holds the subkey's keygrip in `sshcontrol` and `no-autostart` in `gpg.conf`.
+- **C36.** No key outlives its build.
+  - Every build removes the old homes of `S/keys`, first removing their runtime socket directories, which ends any agent of them.
+  - It removes the revocation certificate that gpg writes unasked, and ends the agent that made the key.
+- **C37.** `BUILD/keys.json`, listed in `BUILD/MANIFEST`, holds the workplace's name and S. For each holding seat it holds:
+  - its place and name, its home and its user id;
+  - the fingerprints of the key and of the subkey, and the armored public key;
+  - the OpenSSH line of the subkey, with the comment `A/B/C@WORKPLACE`, and that line's SHA256 fingerprint.
+- **C38.** Before any term, `up` starts one agent per holding seat under `setpriv --no-new-privs`, outside every view.
+  - It refuses where an agent of the home already answers, and leaves that agent alone.
+  - It refuses a socket path over 106 bytes, the most GnuPG takes. `build` refuses a state directory too long for the sockets: over 84 bytes, or over 78 where there is no runtime directory.
+  - It records in the ledger the agent, marked by its process id, and, where its sockets stand in the runtime directory, that directory. It records in the run's checks the agent's answer.
+- **C39.** After the rows, the binding's fixed part masks the runtime directory's `gnupg` in every view, and R in every view: closed for a seat that holds no key, and searchable for one that does.
+  - A holding seat is shown, at G = `S/gnupg`, a read-only directory of the frame's making. It holds the key's public ring, its trust database and `gpg.conf`, the agent's extra socket as `S.gpg-agent`, and its ssh socket as `S.gpg-agent.ssh`. It is never shown the standard socket, a private key or another seat's home.
+  - The frame gives such a seat `GNUPGHOME` and `SSH_AUTH_SOCK` after the environment's cell, and a plan that sets either for it is refused.
+- **C40.** In its view a holding seat signs with gpg and with `ssh-keygen -Y sign`, and makes a signed git commit with the committer set to its name and address alone, all with nothing set by hand. Each verifies against `keys.json`.
+- **C41.** Through its sockets a seat obtains nothing of its key and changes nothing.
+  - The secret exports give 0 bytes.
+  - The agent forbids every command that reads, exports, imports, deletes or changes a key, or reloads or ends the agent.
+  - Removing every ssh key changes nothing, and adding one is refused.
+- **C42.** `down` ends every agent that carries the run's mark, and removes its runtime socket directory once no agent of the home answers.
+- **C43.** `status` lists each agent with its key and process id. It exits 1 when one is gone, saying that the seat cannot sign until the workplace is brought down and up again.
+  - `why` names a seat's key and the term that gives it, and the masks on R and on the runtime directory's `gnupg`.
+  - `doctor` reports GnuPG and its floor, the state directory and the length it leaves for a workplace's name, and the runtime directory.
+- **C44.** GnuPG's floor is 2.4.4, the CI image's, and only a plan in which a seat holds a key needs it. An older gpg refuses such a build with exit 2, naming both versions.

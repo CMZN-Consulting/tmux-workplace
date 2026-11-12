@@ -37,4 +37,6 @@ jobs:
           tmux -V
           bash --version | head -1
           jq --version
+          gpg --version | head -1
+          ssh -V
           bash tests/run.sh

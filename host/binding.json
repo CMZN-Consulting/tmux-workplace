@@ -72,7 +72,8 @@
       "fold": [
         "statement",
         "clearance",
-        "label"
+        "label",
+        "key"
       ],
       "programs": [
         "bwrap"
@@ -164,6 +165,251 @@
         "hidden",
         "searchable-only",
         "scratch"
+      ],
+      "after-rows": [
+        {
+          "if-slot": [
+            "runtime-gnupg"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "runtime-gnupg"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "state-root"
+          ],
+          "unless-slot": [
+            "key-home",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "state-root"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "key-home",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--perms",
+            "0111",
+            "--tmpfs",
+            {
+              "slot": [
+                "state-root"
+              ]
+            },
+            "--perms",
+            "0700",
+            "--tmpfs",
+            {
+              "slot": [
+                "key-view"
+              ]
+            },
+            "--ro-bind",
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-home",
+                    {
+                      "arg": 1
+                    },
+                    {
+                      "arg": 2
+                    },
+                    {
+                      "arg": 3
+                    }
+                  ]
+                },
+                "/pubring.kbx"
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-view"
+                  ]
+                },
+                "/pubring.kbx"
+              ]
+            },
+            "--ro-bind",
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-home",
+                    {
+                      "arg": 1
+                    },
+                    {
+                      "arg": 2
+                    },
+                    {
+                      "arg": 3
+                    }
+                  ]
+                },
+                "/trustdb.gpg"
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-view"
+                  ]
+                },
+                "/trustdb.gpg"
+              ]
+            },
+            "--ro-bind",
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-home",
+                    {
+                      "arg": 1
+                    },
+                    {
+                      "arg": 2
+                    },
+                    {
+                      "arg": 3
+                    }
+                  ]
+                },
+                "/gpg.conf"
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-view"
+                  ]
+                },
+                "/gpg.conf"
+              ]
+            },
+            "--bind",
+            {
+              "slot": [
+                "key-extra",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-view"
+                  ]
+                },
+                "/S.gpg-agent"
+              ]
+            },
+            "--bind",
+            {
+              "slot": [
+                "key-ssh",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "key-view"
+                  ]
+                },
+                "/S.gpg-agent.ssh"
+              ]
+            },
+            "--remount-ro",
+            {
+              "slot": [
+                "key-view"
+              ]
+            }
+          ],
+          "environment": [
+            [
+              "GNUPGHOME",
+              {
+                "slot": [
+                  "key-view"
+                ]
+              }
+            ],
+            [
+              "SSH_AUTH_SOCK",
+              {
+                "concat": [
+                  {
+                    "slot": [
+                      "key-view"
+                    ]
+                  },
+                  "/S.gpg-agent.ssh"
+                ]
+              }
+            ]
+          ]
+        }
       ]
     },
     "environment": {

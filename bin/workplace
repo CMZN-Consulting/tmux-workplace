@@ -12,6 +12,8 @@ fi
 
 TMUX_FLOOR=3.5a
 JQ_FLOOR=1.7
+GPG_FLOOR=2.4.4
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-v3
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 
 say() { printf '%s\n' "$*"; }
@@ -26,10 +28,10 @@ esac
 tool=$(cd -P -- "$source_dir/.." && pwd -P) || die "cannot find the tool's directory" 2
 
 version_key() {
-  [[ $1 =~ ^([0-9]+)\.([0-9]+)([a-z]?)$ ]] || return 1
-  local letter=0
-  [[ -n ${BASH_REMATCH[3]} ]] && printf -v letter '%d' "'${BASH_REMATCH[3]}"
-  printf '%s\n' "$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + letter ))"
+  [[ $1 =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))?([a-z]?)$ ]] || return 1
+  local letter=0 patch=${BASH_REMATCH[4]:-0}
+  [[ -n ${BASH_REMATCH[5]} ]] && printf -v letter '%d' "'${BASH_REMATCH[5]}"
+  printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000000000 + 10#${BASH_REMATCH[2]} * 1000000 + 10#$patch * 1000 + letter ))"
 }
 
 at_least() {
@@ -42,7 +44,7 @@ at_least() {
 version_of() {
   local program=$1 flag=$2 version
   version=$("$program" "$flag" 2> /dev/null) || return 1
-  [[ $version =~ ([0-9]+\.[0-9]+[a-z]?) ]] || return 1
+  [[ $version =~ ([0-9]+\.[0-9]+(\.[0-9]+)?[a-z]?) ]] || return 1
   printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
@@ -441,12 +443,12 @@ cmd_plan() {
   local out_json
   out_json=$(for name in "${outputs[@]}"; do printf '%s\0%s\0' "$name" "$(sha_of "$work/$name")"; done \
     | jq -R -s -c 'split("\u0000")[:-1] | [range(0; length; 2) as $i | {path: .[$i], sha256: .[$i + 1]}]')
-  jq -n --arg root "$root" --arg name "$assembled_name" --arg reader "$version" \
+  jq -n --arg root "$root" --arg name "$assembled_name" --arg reader "$version" --arg fold "$FOLD_DERIVATION" \
     --argjson inputs "$assembled_inputs" --argjson generated "$assembled_generated" \
     --argjson map "$assembled_map" --argjson outputs "$out_json" '
     {root: $root, name: $name, reader: $reader,
      derivations: {assembly: "whole-bodies-v1", "root-program": "root-two-lines-v1",
-                   "workplace-name": "sha256-path-prefix12-v1", fold: "frame-5.17-5.18-5.24-v2"},
+                   "workplace-name": "sha256-path-prefix12-v1", fold: $fold},
      inputs: $inputs, generated: $generated, source_map: $map, outputs: $outputs}' > "$work/manifest.json" \
     || die "cannot write the manifest"
   trap '' INT TERM
@@ -489,6 +491,135 @@ reassemble_and_compare() {
   [[ -z $differences ]] && return 0
   while IFS= read -r line; do warn "$line"; done <<< "$differences"
   return 1
+}
+
+state_root() {
+  local base
+  if [[ -n ${XDG_STATE_HOME-} && $XDG_STATE_HOME == /* ]]; then
+    base=${XDG_STATE_HOME%/}
+  elif [[ -n ${HOME-} && $HOME == /* ]]; then
+    base=${HOME%/}/.local/state
+  else
+    return 1
+  fi
+  printf '%s\n' "$base/workplace"
+}
+
+ssh_fingerprint() {
+  local sum digits="" i encoded
+  sum=$(base64 -d <<< "$1" | sha256sum) || return 1
+  for (( i = 0; i < 64; i += 2 )); do digits+="\\x${sum:i:2}"; done
+  encoded=$(printf '%b' "$digits" | base64 -w 0) || return 1
+  printf 'SHA256:%s\n' "${encoded%%=*}"
+}
+
+key_listing() {
+  local home=$1 line section=""
+  local -a f
+  key_fpr="" key_uid="" key_usage="" sub_fpr="" sub_grip="" sub_usage=""
+  while IFS= read -r line; do
+    IFS=: read -r -a f <<< "$line"
+    case ${f[0]} in
+      pub) section=pub; key_usage=${f[11]-} ;;
+      sub) section=sub; sub_usage=${f[11]-} ;;
+      uid) [[ -z $key_uid ]] && key_uid=${f[9]-} ;;
+      fpr)
+        [[ $section == pub && -z $key_fpr ]] && key_fpr=${f[9]-}
+        [[ $section == sub && -z $sub_fpr ]] && sub_fpr=${f[9]-}
+        ;;
+      grp) [[ $section == sub && -z $sub_grip ]] && sub_grip=${f[9]-} ;;
+    esac
+  done < <(gpg --homedir "$home" --with-colons --with-keygrip --list-keys 2> /dev/null)
+}
+
+key_step() {
+  local home=$1 who=$2
+  shift 2
+  if ! setsid -w "$@" < /dev/null > "$build_dir/key.out" 2>&1; then
+    gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+    die "build refuses: the key of $who cannot be made: $(tail -n 2 "$build_dir/key.out" | tr '\n' ' ')" 2
+  fi
+}
+
+make_keys() {
+  local holders=$1 workplace=$2 state_dir
+  if ! state_dir=$(state_root); then
+    [[ $holders == '[]' ]] && return 0
+    die "build needs the workplaces' state directory, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
+  fi
+  state_dir=$state_dir/$workplace
+  mkdir -p -- "${state_dir%/*/*}" && { [[ -d ${state_dir%/*} ]] || mkdir -m 0700 -- "${state_dir%/*}"; } \
+    && { [[ -d $state_dir ]] || mkdir -m 0700 -- "$state_dir"; } || die "cannot make the state directory $state_dir" 2
+  [[ $(stat -c %a -- "$state_dir") == 700 ]] || die "the state directory $state_dir has the mode $(stat -c %a -- "$state_dir"), not 700" 2
+  local old
+  if [[ -d $state_dir/keys ]]; then
+    if command -v gpgconf > /dev/null; then
+      for old in "$state_dir"/keys/*; do
+        [[ -d $old ]] && gpgconf --homedir "$old" --remove-socketdir > /dev/null 2>&1
+      done
+    fi
+    rm -rf -- "$state_dir/keys" || die "cannot remove the old key homes in $state_dir/keys" 2
+  fi
+  [[ $holders == '[]' ]] && return 0
+  need_version gpg --version "$GPG_FLOOR"
+  local program
+  for program in gpg-agent gpgconf setsid base64; do
+    command -v "$program" > /dev/null || die "a plan in which a seat holds a key needs $program, and $program is not on PATH" 2
+  done
+  local view=$state_dir/gnupg count longest
+  (( ${#view} + 16 <= 106 )) \
+    || die "the state directory $state_dir is ${#state_dir} bytes: a seat's socket in its view, $view/S.gpg-agent.ssh, would be $(( ${#view} + 16 )) bytes, and GnuPG takes 106; set XDG_STATE_HOME to a shorter absolute path, or give the clone a shorter name" 2
+  count=$(jq 'length' <<< "$holders")
+  if [[ ! -d /run/user/$EUID ]]; then
+    printf -v longest '%s/keys/%02d/S.gpg-agent.browser' "$state_dir" "$(jq '[.[].n] | max' <<< "$holders")"
+    (( ${#longest} <= 106 )) \
+      || die "there is no runtime directory, so the agents' sockets stand in the key homes, and $longest would be ${#longest} bytes, over the 106 that GnuPG takes; set XDG_STATE_HOME to a shorter absolute path" 2
+  fi
+  mkdir -m 0700 -- "$state_dir/keys" || die "cannot make $state_dir/keys" 2
+  local no; no=$(command -v false) || die "build needs false, for the agents' pinentry" 2
+  local entries='[]' holder n name nn home uid who wanted pub line type blob comment fingerprint
+  local -a seat
+  while IFS= read -r holder; do
+    n=$(jq -r '.n' <<< "$holder")
+    name=$(jq -r '.name' <<< "$holder")
+    mapfile -t seat < <(jq -r '.seat[]' <<< "$holder")
+    printf -v nn '%02d' "$n"
+    home=$state_dir/keys/$nn
+    who="seat ${seat[0]}/${seat[1]}/${seat[2]} ($name)"
+    uid="$name <${seat[0]}.${seat[1]}.${seat[2]}@$workplace>"
+    mkdir -m 0700 -- "$home" || die "cannot make the key home $home" 2
+    printf '%s\n' "pinentry-program $no" enable-ssh-support > "$home/gpg-agent.conf" || die "cannot write $home/gpg-agent.conf" 2
+    key_step "$home" "$who" gpg --homedir "$home" --batch --pinentry-mode loopback --passphrase '' --quick-gen-key -- "$uid" ed25519 sign never
+    key_listing "$home"
+    wanted=${uid//\\/\\x5c}
+    wanted=${wanted//:/\\x3a}
+    if [[ $key_uid != "$wanted" ]]; then
+      gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+      die "build refuses: gpg did not make the user id ${uid@Q} for $who; it made ${key_uid@Q}"
+    fi
+    key_step "$home" "$who" gpg --homedir "$home" --batch --pinentry-mode loopback --passphrase '' --quick-add-key -- "$key_fpr" ed25519 auth never
+    key_listing "$home"
+    if [[ -z $sub_grip || $key_usage == *[eE]* || $sub_usage != a ]]; then
+      gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+      die "build refuses: the key of $who has the usage ${key_usage@Q} and its subkey ${sub_usage@Q}, not signing and authentication alone" 2
+    fi
+    printf '%s 0\n' "$sub_grip" > "$home/sshcontrol" && printf '%s\n' no-autostart > "$home/gpg.conf" \
+      && rm -rf -- "$home/openpgp-revocs.d" || die "cannot finish the key home $home" 2
+    pub=$(gpg --homedir "$home" --armor --export -- "$key_fpr" 2> /dev/null) && line=$(gpg --homedir "$home" --export-ssh-key -- "$key_fpr" 2> /dev/null) \
+      || die "cannot export the public key of $who" 2
+    read -r type blob comment <<< "$line"
+    fingerprint=$(ssh_fingerprint "$blob") || die "cannot compute the ssh fingerprint of $who" 2
+    gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+    entries=$(jq -c --argjson seat "$(jq -c '.seat' <<< "$holder")" --arg name "$name" --arg home "keys/$nn" --arg uid "$uid" \
+      --arg fpr "$key_fpr" --arg sub "$sub_fpr" --arg pub "$pub" --arg ssh "$type $blob ${seat[0]}/${seat[1]}/${seat[2]}@$workplace" \
+      --arg sshfp "$fingerprint" \
+      '. + [{seat: $seat, name: $name, home: $home, uid: $uid, fingerprint: $fpr, authentication: $sub,
+             public_key: $pub, ssh: $ssh, ssh_fingerprint: $sshfp}]' <<< "$entries")
+  done < <(jq -c '.[]' <<< "$holders")
+  rm -f -- "$build_dir/key.out"
+  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir/keys.json" \
+    || die "cannot write $build_dir/keys.json" 2
+  say "keys: $count made in $state_dir/keys"
 }
 
 manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
@@ -543,6 +674,7 @@ cmd_build() {
     reassemble_and_compare "$manifest" || die "build refuses: the clone no longer assembles to what the plan was made from"
   fi
   local view_file=/dev/null
+  folded=""
   refuse_paths "$plan_dir/plan.json" || die "build refuses: PLAN/plan.json holds a path that cannot be joined"
   if folds "$plan_dir/plan.json" "$tool/host/binding.json"; then
     [[ -f $plan_dir/view.json ]] || die "the plan holds statements, and PLAN/view.json, its folded view, is missing" 2
@@ -560,11 +692,15 @@ cmd_build() {
       end, (if . == $now[0] then "same" else "differs" end)' "$plan_dir/view.json" 2> /dev/null)
     rm -f -- "$refolded"
     (( ${#differing[@]} )) || die "PLAN/view.json is not JSON that jq can read"
+    local planned_fold
+    planned_fold=$(jq -r '.derivations.fold // "unnamed"' "$manifest")
     [[ ${differing[-1]} == same ]] || {
       unset 'differing[-1]'
       local IFS=,
-      die "PLAN/view.json is not the fold of PLAN/plan.json; it differs for ${differing[*]:-its form}"
+      die "PLAN/view.json is not the fold of PLAN/plan.json; it differs for ${differing[*]:-its form}. The plan was folded by $planned_fold, and this loop folds by $FOLD_DERIVATION; run plan again"
     }
+    [[ $planned_fold == "$FOLD_DERIVATION" ]] \
+      || say "the plan was folded by $planned_fold, and this loop folds by $FOLD_DERIVATION; the views are equal, so build goes on"
     view_file=$plan_dir/view.json
   fi
   plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq" "$view_file"
@@ -632,6 +768,15 @@ cmd_build() {
       die "the copy of ${sources[i]} differs from its source; $build_dir was removed"
     fi
   done
+  local holders='[]'
+  if [[ -n $folded ]]; then
+    holders=$(jq -c '.report.names as $names | [.view.seats | to_entries[] | select(.value.key.state == "held")
+      | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson]}]' <<< "$folded") || die "cannot read the seats that hold a key" 2
+  fi
+  make_keys "$holders" "$(jq -r '.name // "default"' <<< "$report")"
+  if [[ -f $build_dir/keys.json ]]; then
+    copy_sums+=("$(cd -- "$build_dir" && sha256sum -- keys.json)") || die "cannot hash $build_dir/keys.json"
+  fi
   printf '%s\n' "${copy_sums[@]}" > "$build_dir/MANIFEST" || die "cannot write $build_dir/MANIFEST"
   local sum
   sum=$(sha_of "$build_dir/MANIFEST") || die "cannot hash $build_dir/MANIFEST"
@@ -847,6 +992,79 @@ name_an_empty_server() {
   warn "the tmux server at ${lines[1]} is left running with no session, and the loop never ends a server; to end it: tmux -S ${lines[1]@Q} kill-server"
 }
 
+agent_record() {
+  jq -c -n --arg what "$1" --arg is "$2" --argjson words "$(json_list "${@:3}")" \
+    '{what: $what, when: $words[0:6], is: $is, call: $words[6:]}'
+}
+
+start_agents() {
+  local state_dir runtime=/run/user/$EUID gnupg=""
+  state_dir=$(state_root) || state_dir=""
+  if [[ -n $state_dir && ! -d $state_dir ]]; then
+    mkdir -p -- "${state_dir%/*}" && mkdir -m 0700 -- "$state_dir" || { warn "cannot make $state_dir, which every view masks"; return 1; }
+  fi
+  if [[ -d $runtime ]]; then
+    [[ -d $runtime/gnupg ]] || mkdir -m 0700 -- "$runtime/gnupg" 2> /dev/null
+    [[ -d $runtime/gnupg ]] && gnupg=$runtime/gnupg
+  fi
+  state=$(jq -c --arg r "$state_dir" --arg g "$gnupg" \
+    '.slots[(["state-root"] | tojson)] = $r | .slots[(["runtime-gnupg"] | tojson)] = $g' <<< "$state")
+  [[ -f $build_dir/keys.json ]] || return 0
+  local keys=$build_dir/keys.json made_in
+  made_in=$(jq -r '.state' "$keys")
+  if [[ $made_in != "$state_dir/$(jq -r '.workplace' "$keys")" ]]; then
+    warn "the keys were made in $made_in, and this shell's state directory is ${state_dir:-unknown}; build again from this shell"
+    return 1
+  fi
+  local program connect kill_with agent
+  for program in gpg-agent gpgconf gpg-connect-agent; do
+    command -v "$program" > /dev/null || { warn "this workplace holds keys, and $program is not on PATH"; return 1; }
+  done
+  agent=$(command -v gpg-agent) connect=$(command -v gpg-connect-agent) kill_with=$(command -v gpgconf)
+  local setpriv_program; setpriv_program=$(command -v setpriv) || { warn "up needs setpriv"; return 1; }
+  local view=$made_in/gnupg holder home name pid answer extra ssh socket_dir who socket
+  local -a seat ask
+  while IFS= read -r holder; do
+    home=$made_in/$(jq -r '.home' <<< "$holder")
+    name=$(jq -r '.name' <<< "$holder")
+    mapfile -t seat < <(jq -r '.seat[]' <<< "$holder")
+    who="the agent of $name"
+    [[ -d $home ]] || { warn "the key home $home of $name is missing; build again"; return 1; }
+    ask=("$connect" --homedir "$home" --no-autostart "GETINFO pid" /bye)
+    answer=$("${ask[@]}" 2> /dev/null)
+    if [[ $answer == D\ * ]]; then
+      warn "an agent of $home already answers (${answer%%$'\n'*}); another run of this workplace may be up, and up leaves it alone"
+      return 1
+    fi
+    "$setpriv_program" --no-new-privs "$agent" --homedir "$home" --daemon > "$run_dir/agent.out" 2>&1 \
+      || { warn "$who did not start: $(tail -n 1 "$run_dir/agent.out")"; return 1; }
+    answer=$("${ask[@]}" 2> /dev/null)
+    pid=${answer#D }
+    pid=${pid%%$'\n'*}
+    [[ $answer == D\ * && $pid =~ ^[0-9]+$ ]] || { warn "$who does not answer"; "$kill_with" --homedir "$home" --kill gpg-agent > /dev/null 2>&1; return 1; }
+    socket_dir=$("$kill_with" --homedir "$home" --list-dirs socketdir)
+    [[ $socket_dir == "$home" ]] || agent_record "the runtime sockets of $name's agent" "" "${ask[@]}" "$kill_with" --homedir "$home" --remove-socketdir >> "$run_dir/ledger"
+    agent_record "$who" "$answer" "${ask[@]}" "$kill_with" --homedir "$home" --kill gpg-agent >> "$run_dir/ledger"
+    jq -c -n --arg what "$who, key $(jq -r '.fingerprint[-16:]' <<< "$holder"), pid $pid" --arg is "$answer" \
+      --arg note "$name cannot sign until the workplace is brought down and up again" --argjson call "$(json_list "${ask[@]}")" \
+      '{what: $what, is: $is, note: $note, call: $call}' >> "$run_dir/checks"
+    where=up
+    meets no-new-privs-if-running "$pid" || return 1
+    extra=$("$kill_with" --homedir "$home" --list-dirs agent-extra-socket)
+    ssh=$("$kill_with" --homedir "$home" --list-dirs agent-ssh-socket)
+    for socket in "$extra" "$ssh"; do
+      (( ${#socket} <= 106 )) || { warn "$who's socket $socket is ${#socket} bytes, over the 106 that GnuPG takes"; return 1; }
+      [[ -S $socket ]] || { warn "$who made no socket at $socket"; return 1; }
+    done
+    state=$(jq -c --arg v "$view" --arg h "$home" --arg e "$extra" --arg s "$ssh" --argjson k "$(jq -c '.seat' <<< "$holder")" '
+      .slots[(["key-view"] | tojson)] = $v
+      | .slots[(["key-home"] + $k | tojson)] = $h
+      | .slots[(["key-extra"] + $k | tojson)] = $e
+      | .slots[(["key-ssh"] + $k | tojson)] = $s' <<< "$state")
+    say "up: $who, pid $pid"
+  done < <(jq -c '.seats[]' "$keys")
+}
+
 cmd_up() {
   (( $# == 0 )) || die "up takes no arguments" 2
   need_jq
@@ -869,6 +1087,11 @@ cmd_up() {
   : > "$run_dir/ledger"
   : > "$run_dir/checks"
   : > "$run_dir/calls.jsonl"
+  if ! start_agents; then
+    teardown failed
+    rm -rf -- "$run_dir"
+    die "up stopped before its first term; every agent it started is ended"
+  fi
   local -a records
   local ordered
   ordered=$(jq -c -L "$build_dir/libexec" --arg root "$root" --slurpfile b "$build_dir/binding.json" '
@@ -959,7 +1182,12 @@ cmd_why() {
   fi
   [[ -f $plan ]] || die "no plan in $plan_dir" 2
   [[ -f $view ]] || view=/dev/null
-  jq -r -L "$lib" --arg root "$root" --arg seat "$seat" --arg path "$path" --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
+  local state_dir gnupg="" key_view=""
+  state_dir=$(state_root) || state_dir=""
+  [[ -d /run/user/$EUID/gnupg ]] && gnupg=/run/user/$EUID/gnupg
+  [[ -f $build_dir/keys.json ]] && key_view=$(jq -r '.state + "/gnupg"' "$build_dir/keys.json")
+  jq -r -L "$lib" --arg root "$root" --arg seat "$seat" --arg path "$path" --arg stateroot "$state_dir" --arg rungnupg "$gnupg" \
+    --arg keyview "$key_view" --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
     include "table";
     . as $raw
     | joined($b[0]; $root) as $plan
@@ -976,7 +1204,19 @@ cmd_why() {
           $keys[0] as $k
           | [table_rows($plan; $folded[0]; $spec)[] | select(.key[0:3] == $k)] as $rows
           | ([$rows[] | select(.key[3] == $path or beneath($path; .key[3]))] | sort_by(.key[3] | length) | last) as $row
+          | ([($folded[0].seats // [])[] | select(.seat == $k) | .key][0]) as $key
           | "seat \($seat) (\($k | join("/"))), path \($path)",
+            (if $key == null then empty
+             elif $key.scope == null then "key: none; no key term speaks for the seat"
+             else "key: \($key.state), by the \($key.scope)'s term, from \([$key.origins[] | at(.)] | join(", "))" end),
+            (if $stateroot != "" and ($path == $stateroot or beneath($path; $stateroot)) then
+               "masked by the frame after the rows (Identity): \($stateroot), where workplaces keep their state, is shown to no seat"
+               + (if $keyview != "" and $key.state? == "held"
+                  then "; this seat holds a key and passes through it to \($keyview), where it is shown its public ring, its trust database and gpg.conf, read-only, and its agent's extra socket and ssh socket"
+                  else "" end)
+             elif $rungnupg != "" and ($path == $rungnupg or beneath($path; $rungnupg)) then
+               "masked by the frame after the rows (Identity): \($rungnupg), where the agents keep their sockets, is shown to no seat"
+             else empty end),
             (if ($rows | length) == 0 then "no view: the seat sees the machine as its user does"
              elif $row == null then "no row covers the path"
              elif $row.key[3] == $path then "row: \($path) \($row.value[0])"
@@ -1073,6 +1313,31 @@ cmd_doctor() {
   else
     say "absent  bwrap: needed only by a plan in which a seat has a view"
   fi
+  if found=$(command -v gpg); then
+    if version=$(version_of "$found" --version); then
+      if at_least "$version" "$GPG_FLOOR"; then say "ok      gpg $version $found"
+      else say "old     gpg $version; a plan in which a seat holds a key needs $GPG_FLOOR or later"; fi
+    else
+      say "unknown gpg: its version cannot be read"
+    fi
+  else
+    say "absent  gpg: needed only by a plan in which a seat holds a key"
+  fi
+  for program in gpg-agent gpgconf gpg-connect-agent setsid base64; do
+    if found=$(command -v "$program"); then say "ok      $program $found"
+    else say "absent  $program: needed only by a plan in which a seat holds a key"; fi
+  done
+  local state_dir
+  if state_dir=$(state_root); then
+    say "ok      the workplaces' state directory $state_dir: a workplace whose seats hold keys may have a name of at most $(( 84 - ${#state_dir} - 1 )) bytes"
+  else
+    say "absent  a state directory: neither XDG_STATE_HOME nor HOME is an absolute path, and a plan with a key needs one"
+  fi
+  if [[ -d /run/user/$EUID ]]; then
+    say "ok      the runtime directory /run/user/$EUID, where the agents' sockets stand"
+  else
+    say "note    no runtime directory /run/user/$EUID: the agents' sockets stand in the key homes, and a workplace's name may be at most $(( 78 - ${#state_dir} - 1 )) bytes"
+  fi
   return "$bad"
 }
 
@@ -1137,14 +1402,15 @@ cmd_status() {
   local record what is out
   mapfile -t records < "$run_dir/checks"
   for record in "${records[@]}"; do
-    mapfile -d '' -t fields < <(jq --raw-output0 '.what, (.is // ""), .call[]' <<< "$record")
+    mapfile -d '' -t fields < <(jq --raw-output0 '.what, (.is // ""), (.note // ""), .call[]' <<< "$record")
     what=${fields[0]}
     is=${fields[1]}
-    call=("${fields[@]:2}")
+    call=("${fields[@]:3}")
     if run_call out "${call[@]}" && [[ $out == "$is" ]]; then
       say "ok      $what"
     else
       say "gone    $what"
+      [[ -n ${fields[2]} ]] && say "        ${fields[2]}"
       bad=1
     fi
   done

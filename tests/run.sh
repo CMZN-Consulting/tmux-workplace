@@ -137,6 +137,12 @@ make_plan() {
 }
 
 cleanup() {
+  local home
+  if command -v gpgconf > /dev/null; then
+    for home in "$scratch"/home/.local/state/workplace/*/keys/* "$scratch"/state-*/workplace/*/keys/*; do
+      [[ -d $home ]] && gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+    done
+  fi
   if [[ $TMUX_TMPDIR == "$scratch"/* ]]; then
     tmux -S "$TMUX_TMPDIR/tmux-$UID/$label" kill-server 2> /dev/null
     [[ -n ${label2-} ]] && tmux -S "$TMUX_TMPDIR/tmux-$UID/$label2" kill-server 2> /dev/null
@@ -464,7 +470,9 @@ tmpfs $root/harbor/ledger
 tmpfs $root/harbor/scratch
 tmpfs $root/harbor/vault
 bind $root/harbor/vault/shelf"
-  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order" \
+  [[ -d /run/user/$EUID/gnupg ]] && expected+=$'\n'"tmpfs /run/user/$EUID/gnupg"
+  expected+=$'\n'"tmpfs $HOME/.local/state/workplace"
+  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order, then the frame's masks (C39)" \
     test "$(view_ops "$(seat_command 'Harbor Keeper')" | sed 's/^ro-bind /bind /')" = "$expected"
   check "[C12] bwrap is named by its absolute path" \
     test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Keeper')")" = "$(command -v bwrap)"
@@ -1049,7 +1057,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-v2
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-v3
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1467,6 +1475,188 @@ t_plan_end_to_end() {
   check "[C28] and the root is left as the test found it: every entry's type, mode and size" test "$(shape_of "$reference")" = "$shape"
 }
 
+key_terms='def k($a; $b; $c; $scope; $state; $line): {term: ["key", $a, $b, $c, $scope, $state], origin: {kind: "program", line: $line, path: "programs/IDENTITY.typify"}};
+  .programs[-1].recorded += [k("-"; "-"; "-"; "workplace"; "held"; 1), k("harbor"; "-"; "-"; "office"; "none"; 2),
+                             k("harbor"; "dock"; "-"; "room"; "held"; 3), k("harbor"; "dock"; "pilot"; "seat"; "none"; 4)]'
+
+t_identity_selection() {
+  scoped_clone
+  statements_plan "$key_terms"
+  check "plan with keys at four scopes" exit_is 0 wplan
+  check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
+    test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
+    '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
+  check "[C34] the fold's version is the one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-v3
+  statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
+  check "plan with the workplace's key alone" exit_is 0 wplan
+  check "[C34] the workplace's key alone reaches every seat" \
+    test "$(jq -c '[.seats[] | .key.state] | unique' "$clone/PLAN/view.json")" = '["held"]'
+  statements_plan "$key_terms"' | .programs[-1].recorded += [k("harbor"; "dock"; "-"; "room"; "none"; 5)]'
+  check "[C34] two keys of one scope with different states refuse the plan" exit_is 1 wplan
+  check "[C34] naming both origins" said "two keys of the room harbor/dock differ: held from programs/IDENTITY.typify:3, none from programs/IDENTITY.typify:5"
+  statements_plan "$key_terms"' | .programs[-1].recorded += [k("harbor"; "dock"; "ghost"; "seat"; "held"; 5), k("-"; "-"; "-"; "workplace"; "maybe"; 6)]'
+  check "[C34] a key naming a seat the plan does not make, or a state other than held and none, refuses the plan" exit_is 1 wplan
+  check "[C34] naming each" bash -c 'grep -qF "IDENTITY.typify:5: the key names the seat harbor/dock/ghost, which the plan does not make" "$1" && grep -qF "IDENTITY.typify:6: maybe is not held or none" "$1"' _ "$scratch/out"
+  statements_plan "$key_terms"' | .programs[-1].recorded |= map(select(.term[0] == "key"))'
+  check "[C34] a plan with keys and no statement is folded, and refused for want of a row for /" exit_is 1 wplan
+  check "[C34] naming a seat" said "no row for /"
+  statements_plan
+  check "plan with no key" exit_is 0 wplan
+  local manifest=$clone/PLAN/manifest.json
+  jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
+  check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
+  check "[C29] says so in one line and goes on" \
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-v3; the views are equal, so build goes on"
+  check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
+    bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
+  rm -rf -- "$clone/BUILD"
+  jq '.rows[0].value = ["read-write"]' "$clone/PLAN/view.json" > "$scratch/v" && cp -- "$scratch/v" "$clone/PLAN/view.json"
+  jq --arg s "$(sha256sum < "$clone/PLAN/view.json" | cut -d' ' -f1)" '(.outputs[] | select(.path == "view.json") | .sha256) = $s' "$manifest" > "$scratch/m" \
+    && cp -- "$scratch/m" "$manifest"
+  check "[C29] where the views differ, build refuses" exit_is 1 wp build
+  check "[C29] naming both versions and saying to plan again" \
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-v3; run plan again"
+  statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
+  check "plan with an environment row the frame owns" exit_is 0 wplan
+  check "[C39] build refuses a holding seat's row for GNUPGHOME" exit_is 1 wp build
+  check "[C39] naming the seat, the name and the origin" \
+    said "state environment: harbor/dock/keeper holds a key, and its environment may not set GNUPGHOME, which the frame gives (programs/policy.typify:40)"
+  statements_plan "$key_terms"
+  check "plan with keys" exit_is 0 wplan
+  local old=$scratch/oldgpg
+  mkdir -p -- "$old"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "gpg (GnuPG) 2.4.3"' > "$old/gpg"
+  chmod +x -- "$old/gpg"
+  check "[C44] GnuPG 2.4.3, below the floor 2.4.4, is refused for a plan in which a seat holds a key, with exit 2" exit_is 2 env PATH="$old:$PATH" "$BASH" "$loop" build
+  check "[C44] naming both versions" said "gpg 2.4.3 found; 2.4.4 or later is needed"
+  check "[C44] and leaving no BUILD" test ! -e "$clone/BUILD"
+  wp doctor > "$scratch/out" 2>&1
+  check "[C43] doctor names the state directory and the room it leaves for a workplace's name" \
+    said "the workplaces' state directory $HOME/.local/state/workplace: a workplace whose seats hold keys may have a name of at most"
+}
+
+t_identity() {
+  local program
+  for program in gpg gpg-agent gpgconf gpg-connect-agent ssh-keygen ssh-add git setsid base64; do
+    command -v "$program" > /dev/null || { skip "[C35] $program is not on PATH here, so no key is made and used in a pane"; return; }
+  done
+  scoped_clone
+  local w=$label state=$HOME/.local/state/workplace/$label
+  local panes='
+    def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
+    .programs[-1].recorded += [st("harbor"; "tower"; "watch"; "seat"; $root + "/harbor/charts"; "read-write"; 20)]
+    | (.programs[] | select(.path == "orchard/barn/grower/seat.typify") | .plan[0][4]) = "Orchard Grower (L0)"
+    | add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/report", "identity=" + $root + "/harbor/berth",
+                                            "commit=" + $root + "/harbor/berth|Harbor Keeper|harbor.dock.keeper@WORKPLACE"])
+    | add("harbor/tower/watch/seat.typify"; ["report=" + $root + "/harbor/charts/report", "identity=/nowhere"])'
+  statements_plan "$key_terms | ${panes//WORKPLACE/$w}"
+  check "plan" exit_is 0 wplan
+  check "[C35] build makes the keys" exit_is 0 wp build
+  check "[C35] three: keeper's, the grower's and the picker's" said "keys: 3 made in $state/keys"
+  local keys=$clone/BUILD/keys.json home=$state/keys/01
+  check "[C37] keys.json names the workplace and its state directory" test "$(jq -r '"\(.workplace) \(.state)"' "$keys")" = "$w $state"
+  check "[C35] one key home per holding seat, named by its place among the panes" \
+    test "$(jq -r '[.seats[] | "\(.seat | join("/")) \(.home)"] | join(", ")' "$keys")" = "harbor/dock/keeper keys/01, orchard/barn/grower keys/04, orchard/barn/picker keys/05"
+  check "[C35] the user id is the seat's name and an address of its place at the workplace" \
+    test "$(jq -r '.seats[0].uid' "$keys")" = "Harbor Keeper <harbor.dock.keeper@$w>"
+  check "[C35] a name with parentheses passes" test "$(jq -r '.seats[1].uid' "$keys")" = "Orchard Grower (L0) <orchard.barn.grower@$w>"
+  check "[C35] an ed25519 key that signs and certifies, with an ed25519 subkey that authenticates, and nothing that encrypts" \
+    test "$(gpg --homedir "$home" --with-colons --list-keys | grep -E '^(pub|sub):' | cut -d: -f1,4,12 | tr '\n' ' ')" = "pub:22:scSCA sub:22:a "
+  check "[C35] no passphrase protects it: both key files are stored in the clear" \
+    bash -c 'files=("$1"/private-keys-v1.d/*.key); (( ${#files[@]} == 2 )) && ! grep -q protected-private-key "${files[@]}"' _ "$home"
+  check "[C36] gpg's revocation certificate is removed" test ! -e "$home/openpgp-revocs.d"
+  check "[C36] the state directory is 0700" test "$(stat -c %a "$state")" = 700
+  check "[C37] the two fingerprints are the key's own" \
+    test "$(jq -r '.seats[0] | "\(.fingerprint) \(.authentication)"' "$keys")" = "$(gpg --homedir "$home" --with-colons --list-keys | grep '^fpr' | cut -d: -f10 | paste -sd' ')"
+  check "[C37] the ssh line is gpg's own, with the seat's place at the workplace for its comment" \
+    test "$(jq -r '.seats[0].ssh' "$keys")" = "$(gpg --homedir "$home" --export-ssh-key "$(jq -r '.seats[0].fingerprint' "$keys")" | cut -d' ' -f1,2) harbor/dock/keeper@$w"
+  check "[C37] its fingerprint is the one ssh-keygen gives" \
+    test "$(jq -r '.seats[0].ssh_fingerprint' "$keys")" = "$(jq -r '.seats[0].ssh' "$keys" | ssh-keygen -lf - | cut -d' ' -f2)"
+  check "[C37] the build's manifest lists keys.json" grep -qE '^[0-9a-f]{64}  keys\.json$' "$clone/BUILD/MANIFEST"
+  check "[C35] build leaves no agent running" \
+    bash -c 'for h in "$1"/keys/*; do [[ $(gpg-connect-agent --homedir "$h" --no-autostart "GETINFO pid" /bye 2> /dev/null) != D* ]] || exit 1; done' _ "$state"
+  gpg-agent --homedir "$home" --daemon > /dev/null 2>&1
+  check "[C38] up refuses while an agent of a key home answers" exit_is 1 wp up
+  check "[C38] naming it" said "an agent of $home already answers"
+  check "[C38] and leaves that agent alone" bash -c '[[ $(gpg-connect-agent --homedir "$1" --no-autostart "GETINFO pid" /bye 2> /dev/null) == D* ]]' _ "$home"
+  check "[C38] and starts no server" no_server
+  gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+  check "[C38] up" exit_is 0 wp up
+  check "[C38] it started one agent for each holding seat" test "$(grep -c '^up: the agent of ' "$scratch/out")" = 3
+  local pid
+  pid=$(gpg-connect-agent --homedir "$home" --no-autostart 'GETINFO pid' /bye | sed -n 's/^D //p')
+  if [[ $(nnp_of $$) == NoNewPrivs:1 ]]; then
+    skip "[C38] keeper's agent reports NoNewPrivs:1, but so would any process this shell starts; measured where the shell does not run under it"
+  else
+    check "[C38] the agent runs under no-new-privileges" test "$(nnp_of "$pid")" = "NoNewPrivs:1"
+  fi
+  wp status > "$scratch/out" 2>&1
+  check "[C43] status lists each agent, its key and its pid" said "ok      the agent of Harbor Keeper, key $(jq -r '.seats[0].fingerprint[-16:]' "$keys"), pid $pid"
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  local report=$root/harbor/berth/report
+  r() { grep -qxF -- "$1" "$report"; }
+  check "[C39] keeper is shown its key home: the public ring, the trust database, gpg.conf and two sockets" \
+    r "key home: S.gpg-agent S.gpg-agent.ssh gpg.conf pubring.kbx trustdb.gpg "
+  check "[C39] read-only" r "key home write: refused"
+  check "[C39] in a state directory that holds nothing else" r "key state: gnupg "
+  check "[C39] the agents' runtime sockets are not seen" r "key runtime sockets: unseen"
+  check "[C40] keeper signs with gpg, with nothing set by hand" r "key gpg sign: ok"
+  check "[C41] exporting the private key gives nothing" bash -c 'grep -qxF "key export: 0 bytes" "$1" && grep -qxF "key export loopback: 0 bytes" "$1" && grep -qxF "key export subkeys: 0 bytes" "$1"' _ "$report"
+  check "[C41] every agent command that reads, exports, imports, deletes or changes a key, or reloads or ends the agent, is forbidden" r "key agent: 18 of 18 forbidden"
+  check "[C41] and keeper still signs after them" r "key gpg sign after: ok"
+  check "[C40] keeper's agent offers the manifest's ssh key" r "key ssh list: $(jq -r '.seats[0].ssh' "$keys" | cut -d' ' -f1,2)"
+  check "[C40] keeper signs with ssh" r "key ssh sign: ok"
+  check "[C41] removing every ssh key changes nothing" r "key ssh after removing all: listed"
+  check "[C41] adding a key is refused" r "key ssh add: refused"
+  check "[C40] keeper commits with a signature, the committer set to its name and address alone" r "key commit: ok"
+  local verify=$scratch/verify
+  mkdir -m 0700 -- "$verify"
+  jq -r '.seats[0].public_key' "$keys" | gpg --homedir "$verify" --batch --import 2> /dev/null
+  check "[C40] the gpg signature verifies against keys.json's public key" \
+    env GNUPGHOME="$verify" gpg --batch --verify "$root/harbor/berth/msg.asc" "$root/harbor/berth/msg"
+  printf 'keeper %s\n' "$(jq -r '.seats[0].ssh' "$keys" | cut -d' ' -f1,2)" > "$scratch/allowed"
+  check "[C40] the ssh signature verifies against keys.json's line" \
+    bash -c 'ssh-keygen -Y verify -f "$1" -I keeper -n file -s "$2.sig" < "$2"' _ "$scratch/allowed" "$root/harbor/berth/msg"
+  check "[C40] the commit verifies against keys.json's public key" env GNUPGHOME="$verify" git -C "$root/harbor/berth/repo" verify-commit HEAD
+  check "[C40] its committer is the seat's name and address" \
+    test "$(git -C "$root/harbor/berth/repo" log -1 --format='%cn <%ce>')" = "Harbor Keeper <harbor.dock.keeper@$w>"
+  check "watch ran" wait_for_probe "Harbor Watch" watch
+  check "[C39] a seat that holds no key has no key home" grep -qxF "key home: none" "$root/harbor/charts/report"
+  check "[C39] nor reaches the agents' runtime sockets" grep -qxF "key runtime sockets: unseen" "$root/harbor/charts/report"
+  check "[C39] nor holds GNUPGHOME or SSH_AUTH_SOCK, which keeper holds" \
+    bash -c '[[ $1 != *GNUPGHOME* && $1 != *SSH_AUTH_SOCK* && $2 == *GNUPGHOME*SSH_AUTH_SOCK* ]]' _ "$(screen_of 'Harbor Watch' | grep '^env ')" "$(screen_of 'Harbor Keeper' | grep '^env ')"
+  wp why "Harbor Keeper" "$home" > "$scratch/out" 2>&1
+  check "[C43] why names the mask on the state directory" said "masked by the frame after the rows (Identity): $HOME/.local/state/workplace, where workplaces keep their state, is shown to no seat"
+  check "[C43] and what a holding seat is shown" said "passes through it to $state/gnupg"
+  check "[C43] and the seat's key with its term" said "key: held, by the room's term, from programs/IDENTITY.typify:3"
+  gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+  check "[C43] status exits 1 when an agent is gone" exit_is 1 wp status
+  check "[C43] saying the seat cannot sign until down and up" said "Harbor Keeper cannot sign until the workplace is brought down and up again"
+  local -a socket_dirs=()
+  for program in "$state"/keys/*; do socket_dirs+=("$(gpgconf --homedir "$program" --list-dirs socketdir)"); done
+  check "[C42] down" exit_is 0 wp down
+  check "[C42] no runtime socket directory is left (${#socket_dirs[@]} looked at, noted while the agents ran)" \
+    bash -c 'for d in "${@:2}"; do [[ $d == "$1"/keys/* || ! -e $d ]] || exit 1; done' _ "$state" "${socket_dirs[@]}"
+  check "[C42] and no agent answers after down" \
+    bash -c 'for h in "$1"/keys/*; do [[ $(gpg-connect-agent --homedir "$h" --no-autostart "GETINFO pid" /bye 2> /dev/null) != D* ]] || exit 1; done' _ "$state"
+  local before
+  before=$(jq -r '.seats[0].fingerprint' "$keys")
+  rm -rf -- "$clone/BUILD"
+  check "build again" exit_is 0 wp build
+  check "[C36] a new build makes new keys, and no home keeps an old one" \
+    bash -c '[[ $(jq -r ".seats[0].fingerprint" "$1") != "$2" ]] || exit 1; for h in "$3"/keys/*; do ! gpg --homedir "$h" --list-keys "$2" > /dev/null 2>&1 || exit 1; done' _ "$keys" "$before" "$state"
+  rm -rf -- "$clone/BUILD"
+  local long=$scratch/state-$(printf 'x%.0s' {1..40})
+  mkdir -p -- "$long"
+  check "[C38] a state directory too long for the sockets refuses the build, with exit 2" exit_is 2 env XDG_STATE_HOME="$long" "$BASH" "$loop" build
+  check "[C38] naming the socket's length and the limit" said "and GnuPG takes 106"
+  check "[C38] and leaving no BUILD" test ! -e "$clone/BUILD"
+  statements_plan "$key_terms"' | (.programs[] | select(.path == "orchard/barn/picker/seat.typify") | .plan[0][4]) = " Orchard Picker"'
+  check "plan with a name that gpg trims" exit_is 0 wplan
+  check "[C35] a user id that gpg does not make as asked refuses the build" exit_is 1 wp build
+  check "[C35] naming both" said "gpg did not make the user id ' Orchard Picker <orchard.barn.picker@$w>'"
+}
+
 t_source_and_contract() {
   check "[C8] the loop holds no eval" bash -c '! grep -nw eval "$1"/bin/workplace "$1"/libexec/*' _ "$tool"
   check "[C8] the loop holds no sh -c or bash -c" \
@@ -1534,6 +1724,8 @@ tests=(
   t_plan_relative
   t_the_folded_view_in_the_panes
   t_plan_end_to_end
+  t_identity_selection
+  t_identity
   t_source_and_contract
 )
 (( $# )) && tests=("$@")

@@ -28,7 +28,8 @@ What each term does is one entry of `host/binding.json`. What the loop does with
 - bash 5.2, jq 1.7 and tmux 3.5a or later;
 - `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`;
 - bubblewrap, only when a seat has a view, on a Linux host with unprivileged user namespaces;
-- the reader, `typify` on the path, for `plan` alone.
+- the reader, `typify` on the path, for `plan` alone;
+- GnuPG 2.4.4 or later (`gpg`, `gpg-agent`, `gpgconf`, `gpg-connect-agent`), with `setsid` and `base64`, only when a seat holds a key. Each such seat gets a key made at every build. In its view it signs and authenticates through its agent's restricted socket, and never sees its private key.
 
 `doctor` checks each of these. The tests pass on tmux 3.5a, built from its release archive by the workflow in `.github/workflows/`, and on tmux 3.8.
 

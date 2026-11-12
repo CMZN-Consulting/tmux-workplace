@@ -1,3 +1,5 @@
+include "table";
+
 def term_of: if type == "object" and .unchecked == true then .term else . end;
 def canonical: type == "string" and (. == "/" or (startswith("/") and (endswith("/") | not) and (.[1:] | split("/") | all(. != "" and . != "." and . != ".."))));
 def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
@@ -21,7 +23,7 @@ def entities($rs):
     | if $i == null then . + [{term: $r.term, origins: [$r.origin]}] else .[$i].origins += [$r.origin] end);
 def statement_object: {term, origins};
 
-. as $plan
+joined($b[0]; $root) as $plan
 | [$plan.programs[] | (.plan // [])[] | term_of | select(type == "array" and .[0] == "pane")] as $panes
 | [$panes[] | .[1:4]] as $seats
 | ($seats | map(.[0:1]) | unique) as $offices

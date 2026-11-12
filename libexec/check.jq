@@ -1,6 +1,6 @@
 include "table";
 $b[0] as $binding
-| . as $plan
+| joined($binding; $root) as $plan
 | def source_rows($spec): table_rows($plan; $folded[0]; $spec);
   def term: if type == "object" and .unchecked == true then .term else . end;
   def strings_list: type == "array" and ([.[] | type] | unique) == ["string"];
@@ -81,6 +81,7 @@ $b[0] as $binding
          else empty end)
       end;
   def problems:
+    path_problems($binding),
     (if any($binding.tables[]; folded($plan; .)) and $folded[0] == null
      then "the plan holds statements, clearances or labels, and no folded view was given with it" else empty end),
     (if (.status | type) != "string" or (.status | IN("ok", "unchecked") | not)

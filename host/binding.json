@@ -171,6 +171,27 @@
       "name": "^[A-Za-z_][A-Za-z0-9_]*$"
     }
   },
+  "paths": {
+    "recorded": {
+      "statement": [
+        5
+      ],
+      "label": [
+        1
+      ],
+      "claim": [
+        4
+      ],
+      "record-directory": [
+        4
+      ]
+    },
+    "cells": {
+      "view": [
+        3
+      ]
+    }
+  },
   "primitives": {
     "server": {
       "arity": 2,

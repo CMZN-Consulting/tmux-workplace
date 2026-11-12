@@ -227,11 +227,21 @@ t_inputs_and_refusals() {
   make_plan '.programs[1].plan[0][2] = "Har\u0007bor"'
   check "[C3] a plan with a control character does not build" exit_is 1 wp build
   make_plan '.programs[6].plan[1].term[4] = "harbor"'
-  check "[C4] a relative path in a term is refused" exit_is 1 wp build
-  check "[C4] the refusal names the path" said "harbor is not an absolute, canonical path"
+  check "[C4] a relative path in a term builds: the frame joins it to the root" exit_is 0 wp build
   make_plan '.state.view[1].key[3] = "harbor/holdall"'
-  check "[C4] a relative path in a row is refused" exit_is 1 wp build
-  check "[C4] the refusal names it" said "harbor/holdall is not an absolute, canonical path"
+  check "[C4] a relative path in a row builds" exit_is 0 wp build
+  make_plan '.programs[6].plan[1].term[4] = "harbor//dock"'
+  check "[C4] a relative path with an empty component is refused" exit_is 1 wp build
+  check "[C4] naming the term and the path" said 'harbor/dock/keeper/seat.typify, term 2 (start): the path "harbor//dock" is refused: it has an empty component'
+  make_plan '.state.view[1].key[3] = "./harbor/holdall"'
+  check "[C4] a relative path with a . component is refused" exit_is 1 wp build
+  check "[C4] naming the row's origin" said 'harbor/dock/keeper/seat.typify:11 (state view): the path "./harbor/holdall" is refused: it has a . or .. component'
+  make_plan '.programs[0].plan[0][2] = "config/../config/tmux.conf"'
+  check "[C4] a relative path with a .. component is refused" exit_is 1 wp build
+  check "[C4] naming the server's term" said 'workplace.typify, term 1 (server): the path "config/../config/tmux.conf" is refused: it has a . or .. component'
+  make_plan '.state.view[1].key[3] = "harbor/holdall/"'
+  check "[C4] a relative path with a slash at its end is refused" exit_is 1 wp build
+  check "[C4] saying so" said '(state view): the path "harbor/holdall/" is refused: it ends in a slash'
   make_plan '.state.view[0].value = ["open"]'
   check "[C3] a view row with an unknown state does not build" exit_is 1 wp build
   check "[C3] the refusal names the state" said "open is not one of"
@@ -461,6 +471,45 @@ bind $root/harbor/vault/shelf"
   check "[C12] watch's command has no bubblewrap" test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Watch')")" = "$root/tools/probe"
   check "picker ran" wait_for_probe "Orchard Picker" picker
   check "the probes removed every file they wrote" test -z "$(find "$root" -name 'probe-*' -print -quit)"
+}
+
+relative_filter='
+  def rel: if . == $root then "." elif startswith($root + "/") then .[($root | length) + 1:] else . end;
+  def relterm:
+    if .[0] == "server" then .[2] |= rel
+    elif .[0] == "start" then (.[4] |= rel) | (.[5] |= (fromjson | .[0] |= rel | tojson))
+    else . end;
+  .programs[].plan[] |= (if type == "object" and has("term") then .term |= relterm else relterm end)
+  | .state.view |= map(.key[3] |= rel)'
+dot_row='.state.view += [{key: ["harbor", "dock", "pilot", $root], value: ["read-only"], masked: false,
+                          origin: {kind: "program", path: "harbor/dock/pilot/seat.typify", line: 20}}]'
+seats_as_built() { jq -c '{name, key, directory, command, environment}' "$run"/seats/*.json | sort; }
+
+t_relative_paths() {
+  FACTS_MEMBER=none up_fixture --arg root "$root" "$dot_row" || { fail "the plan written absolute does not stand"; return; }
+  seats_as_built > "$scratch/seats-absolute"
+  check "keeper ran, from the plan written absolute" wait_for_probe "Harbor Keeper" keeper
+  wp down > /dev/null 2>&1
+  FACTS_MEMBER=none up_fixture --arg root "$root" "$dot_row | $relative_filter" || { fail "[C4] the plan written relative to the root does not stand"; return; }
+  check "[C4] the plan holds its paths as written" \
+    test "$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "start") | .[4]] | unique | join(" ")' "$clone/BUILD/plan.json")" = "harbor orchard"
+  seats_as_built > "$scratch/seats-relative"
+  check "[C4] every seat's directory, view, program and environment equal those of the plan written absolute" \
+    cmp -s "$scratch/seats-absolute" "$scratch/seats-relative"
+  check "[C4] the seat's directory is joined" test "$(jq -r 'select(.name == "Harbor Keeper") | .directory' "$run"/seats/*.json)" = "$root/harbor"
+  check "[C4] a relative program is joined" test "$(seat_command "Harbor Keeper" | jq -r '.[index("--") + 1]')" = "$root/tools/probe"
+  check "[C4] . is the root: a row written . binds the root, and no /. is made" \
+    bash -c '[[ $1 == *"\"--ro-bind\",\"$2\",\"$2\""* && $1 != *"/.\""* ]]' _ "$(seat_command "Harbor Pilot")" "$root"
+  check "[C4] the server's configuration is joined in every tmux call" \
+    test "$(grep -c -F -- "\"-f\",\"$clone/tmux.conf\"" "$run/calls.jsonl")" = "$(grep -c '' "$run/calls.jsonl")"
+  check "[C4] keeper ran, from the plan written relative" wait_for_probe "Harbor Keeper" keeper
+  check "[C4] in its view: ledger hidden, holdall writable" \
+    bash -c 'grep -qxF "hidden ledger: unseen" <<< "$1" && grep -qxF "rw holdall: write=ok" <<< "$1"' _ "$(screen_of "Harbor Keeper")"
+  wp why "Harbor Keeper" "$root/harbor/holdall" > "$scratch/out" 2>&1
+  check "[C4] why prints the path as written beside the joined one" said "the row's path is written harbor/holdall and joined to $root/harbor/holdall"
+  wp why "Harbor Keeper" "/" > "$scratch/out" 2>&1
+  check "[C4] and nothing more where they are the same" bash -c '! grep -q "is written" "$1"' _ "$scratch/out"
+  wp down > /dev/null 2>&1
 }
 
 t_environment() {
@@ -708,13 +757,15 @@ t_structure_and_form_refusals() {
   check "[C3] an unknown layout is refused at build" exit_is 1 wp build
   check "[C3] the refusal names it" said "spiral is not one of"
   make_plan '.programs[7].plan[1].term[5] = (["tools/probe", "pilot"] | tojson)'
-  check "[C3] a relative program is refused at build" exit_is 1 wp build
-  check "[C3] the refusal names it" said "the program tools/probe is neither an absolute path nor a bare name"
+  check "[C4] a relative program with a slash builds: the frame joins it to the root" exit_is 0 wp build
+  make_plan '.programs[7].plan[1].term[5] = (["./tools/probe", "pilot"] | tojson)'
+  check "[C4] a relative program with a . component is refused at build" exit_is 1 wp build
+  check "[C4] naming it" said 'harbor/dock/pilot/seat.typify, term 2 (start): the program "./tools/probe" is refused: it has a . or .. component'
   make_plan '.programs[7].plan[0][4] = "-x"'
   check "[C3] a seat whose name begins with - is refused" exit_is 1 wp build
   make_plan --arg root "$root" '.state.view[1].key[3] = ($root + "/harbor/holdall/")'
   check "[C4] a path with a trailing slash is refused" exit_is 1 wp build
-  check "[C4] as not canonical" said "holdall/ is not an absolute, canonical path"
+  check "[C4] as ending in a slash" said "holdall/\" is refused: it ends in a slash"
   make_plan --arg root "$root" '.programs[7].plan[1].term[4] = ($root + "/harbor/../harbor")'
   check "[C4] a path with .. is refused" exit_is 1 wp build
   make_plan --arg root "$root" '.state.view += [{key: ["harbor", "dock", "keeper", ($root + "/harbor/charts/page")], value: ["hidden"]}]'
@@ -1278,9 +1329,66 @@ t_the_fold() {
   statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "ghost"; "seat"; "1"; 9)]'
   check "[C31] a clearance naming a seat the plan does not make refuses the plan" exit_is 1 wplan
   check "[C31] naming it" said "the clearance names the seat harbor/dock/ghost, which the plan does not make"
-  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/harbor/"; "read-only"; 9), cl("harbor"; "-"; "-"; "office"; "01"; 10)]'
-  check "[C31] a path that is not canonical and a number that is not whole refuse the plan" exit_is 1 wplan
-  check "[C31] naming each" bash -c 'grep -qF -- "$1/harbor/ is not an absolute, canonical path" "$2" && grep -qF "01 is not a whole number" "$2"' _ "$root" "$scratch/out"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/harbor/"; "read-only"; 9)]'
+  check "[C4] a statement's path that is not canonical refuses the plan" exit_is 1 wplan
+  check "[C4] naming its origin" said "programs/policy.typify:9 (statement): the path \"$root/harbor/\" is refused: it ends in a slash"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "01"; 10)]'
+  check "[C31] a number that is not whole refuses the plan" exit_is 1 wplan
+  check "[C31] naming it" said "01 is not a whole number"
+}
+
+t_plan_relative() {
+  scoped_clone
+  local extra='.programs[-1].recorded += [lb($root + "/orchard"; "2"; 9), cl("harbor"; "dock"; "keeper"; "seat"; "3"; 10)]'
+  local rel='def rel: if . == $root then "." elif startswith($root + "/") then .[($root | length) + 1:] else . end;
+    .programs[-1].recorded |= map(if .term[0] == "statement" then .term[5] |= rel elif .term[0] == "label" then .term[1] |= rel else . end)'
+  statements_plan "$extra"
+  check "plan of statements written absolute" exit_is 0 wplan
+  cp -- "$clone/PLAN/view.json" "$scratch/view-absolute"
+  statements_plan "$extra | $rel"
+  check "[C4] plan of the same statements written relative to the root" exit_is 0 wplan
+  check "[C4] plan.json keeps the paths as written" \
+    test "$(jq '[.programs[-1].recorded[] | select(.term[0] == "statement") | .term[5] | select(startswith("/") | not)] | length' "$clone/PLAN/plan.json")" = 7
+  check "[C4] view.json is the same, byte for byte: the fold reads joined paths" cmp -s "$scratch/view-absolute" "$clone/PLAN/view.json"
+  wp why "Harbor Keeper" "$root/harbor/ledger" > "$scratch/out" 2>&1
+  check "[C4] why prints a statement's path as written beside the joined one" said "the row's path is written harbor/ledger and joined to $root/harbor/ledger"
+  statements_plan '.programs[-1].recorded = [st("-"; "-"; "-"; "workplace"; "."; "read-only"; 1), st("-"; "-"; "-"; "workplace"; "usr"; "read-only"; 2)]'
+  check "[C4] plan under the root /" exit_is 0 env PATH="$STUB_DIR/bin:$PATH" WORKPLACE_ROOT=/ "$BASH" "$loop" plan
+  check "[C4] under /, . is / and usr is /usr: no /. and no //" \
+    test "$(jq -r '[.rows[].key[3]] | unique | join(" ")' "$clone/PLAN/view.json")" = "/ /usr"
+  statements_plan '.programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; "harbor/ledger"; "hidden"; 9)]'
+  check "[C4] one path spelt relative and absolute, with one state, is one statement" exit_is 0 wplan
+  check "[C4] whose row carries both origins" \
+    test "$(jq -c --arg p "$root/harbor/ledger" '[.rows[] | select(.key[2] == "watch" and .key[3] == $p) | [.origins[].line]][0]' "$clone/PLAN/view.json")" = '[2,9]'
+  statements_plan '.programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; "harbor/ledger"; "read-only"; 9)]'
+  check "[C4] with two states, it is a conflict that refuses the plan" exit_is 1 wplan
+  check "[C4] naming the joined path" said "two statements of the office harbor about $root/harbor/ledger differ: hidden from programs/policy.typify:2, read-only from programs/policy.typify:9"
+  statements_plan "$extra"
+  check "plan again" exit_is 0 wplan
+  local before
+  before=$(cat "$clone/PLAN/manifest.json")
+  statements_plan '.programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; "harbor//vault"; "hidden"; 9)]'
+  check "[C4] a statement whose relative path has an empty component refuses the plan" exit_is 1 wplan
+  check "[C4] naming its origin" said 'programs/policy.typify:9 (statement): the path "harbor//vault" is refused: it has an empty component'
+  statements_plan '.programs[-1].recorded += [lb("orchard/"; "1"; 9)]'
+  check "[C4] a label whose path ends in a slash refuses the plan" exit_is 1 wplan
+  check "[C4] naming its origin" said 'programs/policy.typify:9 (label): the path "orchard/" is refused: it ends in a slash'
+  statements_plan '.programs[0].plan[0][2] = "config/"'
+  check "[C4] a server's configuration that ends in a slash refuses the plan" exit_is 1 wplan
+  check "[C4] naming the term" said 'workplace.typify, term 1 (server): the path "config/" is refused: it ends in a slash'
+  statements_plan '(.programs[] | select(.path == "harbor/dock/pilot/seat.typify") | .plan[1].term[4]) = "harbor/."'
+  check "[C4] a seat's directory with a . component refuses the plan" exit_is 1 wplan
+  check "[C4] naming the term" said 'harbor/dock/pilot/seat.typify, term 2 (start): the path "harbor/." is refused: it has a . or .. component'
+  statements_plan '(.programs[] | select(.path == "harbor/dock/pilot/seat.typify") | .plan[1].term[5]) = (["../tools/probe", "pilot"] | tojson)'
+  check "[C4] a relative program with a .. component refuses the plan" exit_is 1 wplan
+  check "[C4] naming the term" said 'harbor/dock/pilot/seat.typify, term 2 (start): the program "../tools/probe" is refused: it has a . or .. component'
+  statements_plan '(.programs[] | select(.path == "harbor/dock/pilot/seat.typify") | .plan[1].term[5]) = (["probe", "../text", "a//b"] | tojson)'
+  check "[C4] a bare program and text with slashes in the other words plan" exit_is 0 wplan
+  before=$(cat "$clone/PLAN/manifest.json")
+  statements_plan '.programs[-1].recorded += [{term: ["record-directory", "harbor", "dock", "keeper", "harbor/"], origin: at(9)}]'
+  check "[C4] a recorded directory that ends in a slash refuses the plan" exit_is 1 wplan
+  check "[C4] naming its origin" said 'programs/policy.typify:9 (record-directory): the path "harbor/" is refused: it ends in a slash'
+  check "[C28] the refused plans left PLAN/ as it was" test "$(cat "$clone/PLAN/manifest.json")" = "$before"
 }
 
 t_the_folded_view_in_the_panes() {
@@ -1399,6 +1507,7 @@ tests=(
   t_programs_out_of_order
   t_room_of_eight
   t_views
+  t_relative_paths
   t_environment
   t_exec_by_hand
   t_fixed_part
@@ -1422,6 +1531,7 @@ tests=(
   t_plan_assembles
   t_plan_refusals
   t_the_fold
+  t_plan_relative
   t_the_folded_view_in_the_panes
   t_plan_end_to_end
   t_source_and_contract

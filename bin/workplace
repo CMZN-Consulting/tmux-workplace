@@ -102,7 +102,7 @@ json_list() {
 
 plan_report() {
   local plan=$1 binding=$2 checker=$3 folded_view=${4:-/dev/null} errors
-  report=$(jq -c -L "${checker%/*}" --slurpfile b "$binding" --slurpfile folded "$folded_view" -f "$checker" "$plan" 2>&1) \
+  report=$(jq -c -L "${checker%/*}" --arg root "$root" --slurpfile b "$binding" --slurpfile folded "$folded_view" -f "$checker" "$plan" 2>&1) \
     || die "the plan is not JSON that jq can read: $report"
   [[ -n $report ]] || die "the plan $plan is empty"
   mapfile -t errors < <(jq -r '.errors[]' <<< "$report")
@@ -307,8 +307,17 @@ folds() {
   jq -e -L "$tool/libexec" --slurpfile b "$2" 'include "table"; . as $plan | any($b[0].tables[]; folded($plan; .))' "$1" > /dev/null 2>&1
 }
 
+refuse_paths() {
+  local -a faults
+  mapfile -t faults < <(jq -r -L "$tool/libexec" --slurpfile b "$tool/host/binding.json" 'include "table"; path_problems($b[0])' "$1")
+  (( ${#faults[@]} == 0 )) && return 0
+  printf 'workplace: %s\n' "${faults[@]}" >&2
+  return 1
+}
+
 fold_plan() {
-  folded=$(jq -c -L "$tool/libexec" -f "$tool/libexec/fold.jq" "$1" 2>&1) || die "the fold cannot read $1: $folded" 2
+  folded=$(jq -c -L "$tool/libexec" --arg root "$root" --slurpfile b "$tool/host/binding.json" -f "$tool/libexec/fold.jq" "$1" 2>&1) \
+    || die "the fold cannot read $1: $folded" 2
   local -a errors
   mapfile -t errors < <(jq -r '.errors[]?' <<< "$folded")
   if (( ${#errors[@]} )); then
@@ -421,6 +430,7 @@ cmd_plan() {
   facts=$(jq -r '.facts // "absent" | tostring' "$work/plan.json") || die "the reader's plan is not JSON that jq can read" 2
   [[ $facts == none ]] \
     || die "the plan was made on facts ($facts); a plan whose facts member is not none is refused for now, since 5.15 leaves open which facts build compares"
+  refuse_paths "$work/plan.json" || die "the plan refuses a path; PLAN/ is as it was"
   local -a outputs=(plan.json)
   folded=""
   if folds "$work/plan.json" "$tool/host/binding.json"; then
@@ -533,6 +543,7 @@ cmd_build() {
     reassemble_and_compare "$manifest" || die "build refuses: the clone no longer assembles to what the plan was made from"
   fi
   local view_file=/dev/null
+  refuse_paths "$plan_dir/plan.json" || die "build refuses: PLAN/plan.json holds a path that cannot be joined"
   if folds "$plan_dir/plan.json" "$tool/host/binding.json"; then
     [[ -f $plan_dir/view.json ]] || die "the plan holds statements, and PLAN/view.json, its folded view, is missing" 2
     fold_plan "$plan_dir/plan.json" || die "build refuses: the fold refuses PLAN/plan.json"
@@ -860,8 +871,10 @@ cmd_up() {
   : > "$run_dir/calls.jsonl"
   local -a records
   local ordered
-  ordered=$(jq -c --slurpfile b "$build_dir/binding.json" '
+  ordered=$(jq -c -L "$build_dir/libexec" --arg root "$root" --slurpfile b "$build_dir/binding.json" '
+    include "table";
     $b[0].order as $order
+    | joined($b[0]; $root)
     | [.programs[] | .path as $p | .plan | to_entries[]
        | {path: $p, n: (.key + 1), term: (.value | if type == "object" then .term else . end)}]
     | sort_by(.term[0] as $name | $order | index($name))[]' "$build_dir/plan.json") \
@@ -946,9 +959,10 @@ cmd_why() {
   fi
   [[ -f $plan ]] || die "no plan in $plan_dir" 2
   [[ -f $view ]] || view=/dev/null
-  jq -r -L "$lib" --arg seat "$seat" --arg path "$path" --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
+  jq -r -L "$lib" --arg root "$root" --arg seat "$seat" --arg path "$path" --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
     include "table";
-    . as $plan
+    . as $raw
+    | joined($b[0]; $root) as $plan
     | $b[0].tables.view as $spec
     | def term: if type == "object" and .unchecked == true then .term else . end;
       def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
@@ -967,6 +981,19 @@ cmd_why() {
              elif $row == null then "no row covers the path"
              elif $row.key[3] == $path then "row: \($path) \($row.value[0])"
              else "no row at the path; its nearest ancestor's row is \($row.key[3]) \($row.value[0])" end),
+            (if $row == null then empty
+             else
+               (if ($row | has("source")) then
+                  (($b[0].paths.recorded[$row.source] // [])[0]) as $i
+                  | [$raw.programs[] | (.recorded // [])[] | select(.term[0] == $row.source)
+                     | select(.origin as $o | $row.origins | index([$o]) != null) | .term[$i] | strings]
+                else
+                  [($raw.state[$spec.cell] // [])[] | select(.key[0:3] == $k)
+                   | select(.key[3] | path_fault == null and joined_path($root) == $row.key[3]) | .key[3]]
+                end) as $written
+               | ($written | unique | map(select(. != $row.key[3])))[]
+               | "the row's path is written \(.) and joined to \($row.key[3])"
+             end),
             (if $row == null then empty
              elif ($row | has("source")) then
                "made by a \($row.source), from \([$row.origins[] | at(.)] | join(", "))",

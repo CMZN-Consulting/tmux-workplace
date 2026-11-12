@@ -19,12 +19,18 @@
   - a status other than `ok` or `unchecked`, or a control character;
   - a term with no binding, outside the binding's order, or of the wrong arity;
   - a value that a term gives for a closed set, such as a layout, outside its set;
-  - a command that is not a JSON list of strings whose program is an absolute path or a bare name;
+  - a command that is not a JSON list of strings whose program is a bare name or a path (C4);
   - a name that is empty, holds `/` or begins with `-`;
   - a state row that is not four strings and one value, names a seat the plan does not make, or holds an unknown state;
   - two seats of one name;
   - and against the binding's structure: not exactly one `server`; two `session` terms for an office, two `window` or `arrange` terms for a room, two `pane` or `start` terms for a seat; a session with no window, a window with no pane or arrangement, a pane with no window or no start, and the reverse.
-- **C4.** Every path that a term or a row gives as a place on the machine is absolute and canonical (no empty, `.` or `..` component, no trailing slash), and any other is refused by name. A program's and an origin's `path` are the reader's record of where a line was written, and the loop neither rewrites nor refuses them. A `read-only` or `read-write` row whose path does not exist is refused, and so is a `hidden`, `searchable-only` or `scratch` row whose path is not a directory; the preconditions the binding names (a directory, a file) are checked at build.
+- **C4.** A path that a term, a recorded term or a row gives as a place on the machine is written absolute or relative to the root, and the plan keeps it as written. The frame joins a relative path: the root, a slash and the path, where `.` is the root, with no doubled slash under the root `/` and never `/.`. An absolute path is taken as written.
+  - The places are the binding's: each `path` argument of a primitive; the program of a seat's command when it holds a slash; and those under `paths`, which are a statement's and a label's path, a claim's, a recorded directory, and a row of the `view` cell. The root that the plan's `configure root` records is not joined again.
+  - A bare program is looked up on the seat's path. The other words of a command and every value of the environment are text, and are not touched.
+  - A path with an empty component, a `.` or `..` component other than the single `.`, or a slash at its end is refused by `plan` and by `build`, with exit 1, naming the term or the row's origin.
+  - `view.json`, every row, the fold and everything `build` writes carry the joined path, and `why` prints the path as written beside the joined one where they differ.
+  - A program's and an origin's `path` are the reader's record of where a line was written, and the loop neither rewrites nor refuses them.
+  - A `read-only` or `read-write` row whose path does not exist is refused, and so is a `hidden`, `searchable-only` or `scratch` row whose path is not a directory. The preconditions the binding names (a directory, a file) are checked at build.
 - **C5.** `up` checks `BUILD` against its `MANIFEST`, refuses a changed, missing or unlisted file, and never builds.
 - **C6.** The loop needs bash 5.2, jq 1.7 and tmux 3.5a or later, and refuses an older one; versions are compared with tmux's letter suffix, so the floor 3.5a refuses 3.5. It needs `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`, and bubblewrap only when a seat has a view. It resolves each program to an absolute path before it applies anything, and refuses a path that holds `=`.
 

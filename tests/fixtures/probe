@@ -354,6 +354,7 @@ if [[ -n $screen_file ]]; then
       case $state in
         ready) printf 'probe %s waits\nwaiting> \n? for shortcuts\033[1A\033[10G' "$name" ;;
         menu) printf '%s\n' "waiting>" "Do you want to go on?" "> 1. Yes" "  2. Yes, and do not ask again" "  3. No" "Esc to cancel" ;;
+        far) printf '%s\n' "probe $name waits" "waiting>" "" "  one" "" "  two" "  three" "" "  four" ;;
         *) printf 'waiting>\n'; for (( i = 0; i < 100; i++ )); do printf '\n'; done; printf 'working\n' ;;
       esac
       shown=$state

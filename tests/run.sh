@@ -3214,7 +3214,7 @@ t_comms_mail() {
   for entry in "${writes[@]}"; do
     check "[C58] refused: ${entry#*|}" answered keeper "${entry%%|*}" "${entry#*|}"
   done
-  local session mark
+  local session mark pane
   session=$(T display -p -t "$(pane_by_title 'Orchard Grower')" '#{session_id}')
   mark=$(T show-options -qv -t "$session" @workplace)
   T set-option -u -t "$session" @workplace
@@ -3222,6 +3222,15 @@ t_comms_mail() {
   check "[C60] a write to a pane whose session has lost the run's mark is refused, and nothing is typed" \
     answered keeper w16.write "refused the pane of Orchard Grower does not carry this run's mark, or is gone"
   T set-option -t "$session" @workplace "$mark"
+  pane=$(pane_by_title 'Orchard Grower')
+  T copy-mode -t "$pane"
+  request keeper w17.write "seat: Orchard Grower" --- "in a mode"
+  check "[C60] a write to a pane that is in a mode is refused, naming the mode, and nothing is typed" \
+    answered keeper w17.write "refused the pane of Orchard Grower is in copy-mode, so its program would not read what is typed"
+  check "[C66] and recorded so, with no length" \
+    test "$(jq -c 'select(.request == "w17.write") | [.outcome, has("length")]' "$s/comms/record")" = '["refused",false]'
+  T copy-mode -q -t "$pane"
+  check "the pane leaves the mode" test "$(T display-message -p -t "$pane" '#{pane_in_mode}')" = 0
   check "[C60] each line is typed into the pane as it stands, then its key; none: no key; Tab" \
     file_comes_to "$root/orchard/almanac/typed" "$(printf '%s\n' "hello world" "#{pane_id} #(touch $root/pwned) \$(touch $root/pwned2) %s%n" \
       "-l -t %0 kill-server" "ends;" ";" 'a\;' $'x\t')"
@@ -3239,7 +3248,7 @@ t_comms_mail() {
   check "[C66] and the refused one of 4,097 bytes is recorded with no length" \
     test "$(jq -c 'select(.request == "w11.write") | [.outcome, has("length")]' "$s/comms/record")" = '["refused",false]'
   check "[C66] one line for each request, served or refused, a name with a line break included" \
-    test "$(records)" = 44
+    test "$(records)" = 45
   T set-option -u -t "$(T display -p -t "$(pane_by_title 'Harbor Pilot')" '#{session_id}')" @workplace
   request picker g10.grab "seat: Harbor Pilot"
   check "[C60] a grab of a pane whose session has lost the run's mark is refused" answered picker g10.grab "refused the pane of Harbor Pilot does not carry this run's mark, or is gone"
@@ -3423,7 +3432,7 @@ t_wake_fold() {
 t_wake() {
   scoped_clone
   mkdir -p -- "$root/mailbox"
-  local s b=$root/harbor/berth c=$root/harbor/charts a=$root/orchard/almanac own id1 p1 p2 at1 newest first line
+  local s b=$root/harbor/berth c=$root/harbor/charts a=$root/orchard/almanac own id1 p1 p2 p4 at1 newest first line pane
   s=$(state_of)
   printf '%s\n' ready > "$b/screen"
   printf '%s\n' busy > "$c/screen"
@@ -3484,8 +3493,18 @@ t_wake() {
     bash -c 'grep -q "^wake    Harbor Keeper (harbor/dock/keeper): 3 delivered and not yet pointed out, the first at " "$1" && grep -qxF "wake    Orchard Grower (orchard/barn/grower): 1 delivered and not yet pointed out, the first at $2" "$1"' _ "$scratch/out" "$at1"
   check "[C56] the carrier keeps what is to be pointed out in S/comms/wake.json, mode 0600" \
     bash -c '[[ $(stat -c %a "$1") == 600 ]] && jq -e ".seats[\"harbor tower watch\"].count == 2" "$1" > /dev/null' _ "$s/comms/wake.json"
+  pane=$(pane_by_title "Harbor Watch")
+  T copy-mode -t "$pane"
+  check "watch's pane is put in copy mode" test "$(T display-message -p -t "$pane" '#{pane_in_mode} #{pane_mode}')" = "1 copy-mode"
   printf '%s\n' ready > "$c/screen"
-  check "[C94] a pane that was not ready gets one pointer when it becomes ready, for all that came since" \
+  check "watch's program shows its prompt beneath the mode" eventually_long screen_has "Harbor Watch" "? for shortcuts"
+  sleep 3
+  check "[C94] a reader whose pane is in a mode gets no pointer, though its program shows the prompt: nothing is typed, and nothing is recorded for it" \
+    bash -c '[[ ! -e $1 && -z $(jq -c "select(.action == \"wake\" and .target == [\"Harbor Watch\"])" "$2") ]]' _ "$c/typed" "$s/comms/record"
+  check "[C95] status lists it as a pane that is not ready" \
+    bash -c '"$BASH" "$1" status > "$2" 2>&1; grep -qxF "wake    Harbor Watch (harbor/tower/watch): 2 delivered and not yet pointed out, the first at $3" "$2"' _ "$loop" "$scratch/out" "$at1"
+  T copy-mode -q -t "$pane"
+  check "[C94] once the mode is left, the pane gets one pointer, for all that came since" \
     file_comes_to "$c/typed" "mail: 2 new, newest $p2.md"
   check "[C94] three mails delivered between two pointers give one pointer, with the count 3 and the newest id" \
     file_comes_to "$b/typed" "$(printf '%s\n' "mail: 1 new, newest $id1.md" "mail: 3 new, newest $newest.md")"
@@ -3502,6 +3521,24 @@ t_wake() {
   check "status" exit_is 0 wp status
   check "[C95] a seat reached leaves the list, and one not yet reached stands in it" \
     bash -c '! grep -q "^wake    Harbor Keeper" "$1" && ! grep -q "^wake    Harbor Watch" "$1" && grep -qxF "wake    Orchard Grower (orchard/barn/grower): 1 delivered and not yet pointed out, the first at $2" "$1"' _ "$scratch/out" "$at1"
+  printf '%s\n' far > "$a/screen"
+  check "[C94] a pane whose prompt stands fifth from the bottom among the lines that are not empty, with empty lines between, is ready" \
+    file_comes_to "$a/typed" "mail: 1 new, newest $p1.md"
+  printf '%s\n' busy > "$c/screen"
+  check "watch's pane works again" eventually_long screen_has "Harbor Watch" "working"
+  request picker p3.md "to: Harbor Watch" "subject: three" --- "body"
+  check "a third mail to watch is served" answered_ok picker p3.md
+  request picker p4.md "to: Harbor Watch" "subject: four" --- "body"
+  check "and a fourth" answered_ok picker p4.md
+  p4=$(answer_of picker p4.md) p4=${p4#ok }
+  check "down, with two mails to watch not yet pointed out" exit_is 0 wp down
+  check "up again" exit_is 0 wp up
+  check "watch's pane works, as it did" eventually_long screen_has "Harbor Watch" "working"
+  check "[C95] what was to be pointed out outlives the run: status lists it after down and up" \
+    bash -c '"$BASH" "$1" status > "$2" 2>&1; grep -q "^wake    Harbor Watch (harbor/tower/watch): 2 delivered and not yet pointed out, the first at " "$2"' _ "$loop" "$scratch/out"
+  printf '%s\n' ready > "$c/screen"
+  check "[C94] and once the pane is ready, the pointer comes with that count and the newest id" \
+    file_comes_to "$c/typed" "$(printf '%s\n' "mail: 2 new, newest $p2.md" "mail: 2 new, newest $p4.md")"
   check "down" exit_is 0 wp down
 }
 
@@ -3558,6 +3595,11 @@ t_records_fold() {
     check "[C69] plan refuses, with exit 1: ${entry##*|}" exit_is 1 wplan
     check "[C69] naming it" said "${entry##*|}"
   done
+  statements_plan "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "record" and .term[0] != "reach" and (.term[0] != "statement" or .term[4] != "workplace")))
+    | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; "/"; "read-only"; 25), st("orchard"; "-"; "-"; "office"; "/"; "read-only"; 26)]'
+  check "[C76] a plan that holds a record path, and no record kept, no reach and no mail, refuses a seat with no row for /, with exit 1" exit_is 1 wplan
+  check "[C76] naming the seat and the record-path term's origin" \
+    said "seat Harbor Watch (harbor/tower/watch): no row for /: it has no view to hold the frame's file system at the record path $root/records, which the frame puts in every seat's view (the record-path at programs/LOGS.typify:2)"
   check "[C69] and after every refusal PLAN/ is as it was" test "$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)" = "$planned"
   statements_plan "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "record-chain")) | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/systemd/journal"; "read-only"; 22)]'
   check "[C73] a workplace that keeps no chain masks no journal, so a row there is taken" exit_is 0 wplan

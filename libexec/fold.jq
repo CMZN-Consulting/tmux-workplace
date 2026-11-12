@@ -329,6 +329,8 @@ joined($b[0]; $root) as $plan
                   then ": it has no view, and a seat with no view could write as any seat, which the plan's \(if $mail != null then "mail" else "reach" end) terms do not allow (at \(ats(if $mail != null then $mail.origins else [$asks[].origin] end)))"
                   elif .record.pane? == "kept"
                   then ": it has no view, and a seat with no view could reach its own record, which the plan keeps (the record at \(ats(.record.origins)))"
+                  elif $record_path != null
+                  then ": it has no view to hold the frame's file system at the record path \($record_path), which the frame puts in every seat's view (the record-path at \(ats([$rpaths[].origin])))"
                   else "" end)] as $rootless
           | [$folds[] | select(.ssh != null) | . as $f | $f.ssh.unreached[] | select(.scope == "seat")
              | "seat \($f.name) (\($f.seat | join("/"))): the ssh-grant at \(ats(.origins)) grants the key \(.name) at the seat's own scope, and the seat holds no key, so it has no agent to hold it"

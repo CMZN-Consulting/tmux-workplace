@@ -2067,8 +2067,10 @@ carrier_type() {
     (( ${#args[@]} )) && args+=(';')
     args+=(send-keys -t "$pane" "$key")
   fi
-  mark=$(carrier_tmux display-message -p -t "$pane" '#{@workplace}' 2> /dev/null) || return 1
-  [[ $mark == "$carrier_run" ]] || return 2
+  mark=$(carrier_tmux display-message -p -t "$pane" '#{pane_in_mode}:#{pane_mode}:#{@workplace}' 2> /dev/null) || return 1
+  carrier_mode=${mark#*:} carrier_mode=${carrier_mode%%:*}
+  [[ ${mark#*:*:} == "$carrier_run" ]] || return 2
+  [[ ${mark%%:*} == 0 ]] || return 4
   if (( ${#args[@]} )); then
     carrier_tmux "${args[@]}" > /dev/null 2>&1 || return 3
   fi
@@ -2278,6 +2280,7 @@ carrier_serve() {
             case $? in
               1) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not answer" ;;
               2) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone" ;;
+              4) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} is in ${carrier_mode:-a mode}, so its program would not read what is typed" ;;
               3)
                 carrier_answer "${seat_answers[i]}" "$name" "refused tmux did not take the line"
                 carrier_record "${seat_names[i]}" "$name" write "$targets" refused "tmux did not take the line" "$written"
@@ -2356,9 +2359,9 @@ carrier_wake() {
     (( carrier_stop )) && break
     [[ -n ${seat_wake[i]} ]] && (( wake_n[i] > 0 && EPOCHSECONDS - wake_last[i] >= WAKE_PERIOD )) || continue
     [[ -n ${seat_pane[i]-} ]] || continue
-    out=$(carrier_tmux display-message -p -t "${seat_pane[i]}" '#{@workplace}' \; capture-pane -p -t "${seat_pane[i]}" 2> /dev/null) || continue
+    out=$(carrier_tmux display-message -p -t "${seat_pane[i]}" '#{pane_in_mode}:#{@workplace}' \; capture-pane -p -t "${seat_pane[i]}" 2> /dev/null) || continue
     mark=${out%%$'\n'*}
-    [[ $mark == "$carrier_run" ]] || continue
+    [[ ${mark#*:} == "$carrier_run" && ${mark%%:*} == 0 ]] || continue
     [[ $out == *$'\n'* ]] && out=${out#*$'\n'} || out=""
     mapfile -t shown <<< "$out"
     ready=0 count=0
@@ -2375,6 +2378,7 @@ carrier_wake() {
       0) outcome=ok reason="" ;;
       1) outcome=refused reason="the pane of ${seat_names[i]} does not answer" ;;
       2) outcome=refused reason="the pane of ${seat_names[i]} does not carry this run's mark, or is gone" ;;
+      4) outcome=refused reason="the pane of ${seat_names[i]} is in ${carrier_mode:-a mode}, so its program would not read what is typed" ;;
       *) outcome=refused reason="tmux did not take the line" ;;
     esac
     wake_last[i]=$EPOCHSECONDS

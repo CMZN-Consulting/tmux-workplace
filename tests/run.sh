@@ -1904,6 +1904,12 @@ t_ssh_grants_fold() {
     said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
   check "[C85] the fold's version is one that reads ssh grants" \
     test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
+  statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "node", "keys/node"]; 10), s(["ssh-key", "tower", "keys/tower"]; 11), s(["ssh-grant", "harbor", "tower", "-", "room", "tower", "granted"]; 12)]'
+  check "plan with a key that no grant takes, and one granted to a room whose seat holds no key" exit_is 0 wplan
+  check "[C85] plan names a key that no grant takes to a seat that holds a key as reaching no seat" \
+    bash -c 'for k in node:10 tower:11; do grep -qxF "ssh key ${k%:*}: $2/keys/${k%:*} (programs/SSH.typify:${k#*:}), and it reaches no seat: no grant takes it to a seat that holds a key" "$1" || exit 1; done' _ "$scratch/out" "$root"
+  check "[C85] and a key that reaches one by its file alone" \
+    bash -c 'for k in account:1 node-rsa:2 node-ec:3; do grep -qxF "ssh key ${k%:*}: $2/keys/${k%:*} (programs/SSH.typify:${k#*:})" "$1" || exit 1; done' _ "$scratch/out" "$root"
   check "[C85] two ssh-key terms of one name that differ refuse the plan with exit 1, naming both" \
     ssh_refused 's(["ssh-key", "account", "keys/other"]; 10)' "two ssh-key terms of the name account differ: $root/keys/account from programs/SSH.typify:1, $root/keys/other from programs/SSH.typify:10"
   check "[C85] two ssh-grant terms of one scope and name with different states refuse it, naming both" \

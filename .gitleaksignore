@@ -1,0 +1,16 @@
+# The places that gitleaks flags in this repository's history, each reviewed and none of them a secret.
+# Each entry is the scan's own fingerprint, COMMIT:PATH:RULE:LINE, naming the commit that added the line,
+# so an entry stands while later commits move the line and is flagged again if one changes it.
+# The flagged text is not written here, since the scanner reads this file too.
+
+# tests/fixtures/sk-key, line 23: the first line that the fixture writes into the security key's file
+# it makes for a test at run time. The fixture is a generator and holds no key of its own; the file it
+# writes is made up and is removed with the test's scratch.
+dc3677c90bbdd5efa59f07d704a3df119911b6ad:tests/fixtures/sk-key:private-key:23
+
+# tests/run.sh, in t_values, three lines of a test plan's arguments: each names the environment
+# variables that a seat of the test expects, by name only. The values those names stand for are
+# made up within the test and are not on these lines.
+e0f8846bdd7d9a803a824be2118e44e39440fbc6:tests/run.sh:generic-api-key:1936
+e0f8846bdd7d9a803a824be2118e44e39440fbc6:tests/run.sh:generic-api-key:1937
+e0f8846bdd7d9a803a824be2118e44e39440fbc6:tests/run.sh:generic-api-key:1938

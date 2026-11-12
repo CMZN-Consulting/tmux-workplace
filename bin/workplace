@@ -407,10 +407,11 @@ print_fold_report() {
     def said($s): "\($s.term[4]) \([$s.term[1:4][] | select(. != "-")] | join("/") | if . == "" then "" else . + " " end)\($s.term[5]) \($s.term[6]) (\(ats($s.origins)))";
     .report.names as $names
     | (.report.reach // {}) as $reach
+    | ([.view.seats[]?.ssh.granted[]?.name] | unique) as $reached
     | (if .view.mail == null then empty else "mail: \(.view.mail.path), where each seat is shown its own mailbox (\(ats(.view.mail.origins)))" end),
       (if .view.records == null then empty
        else "records: \(if .view.records.path == null then "shown to no seat" else "shown at \(.view.records.path)" end); \(.view.records.limit) bytes a day for a pane; \(if .view.records.chain == null then "no chain is made, and the files are kept" else "chained to the \(.view.records.chain)" end)" end),
-      (.view.ssh.keys[]? | "ssh key \(.name): \(.path) (\(ats(.origins)))"),
+      (.view.ssh.keys[]? | "ssh key \(.name): \(.path) (\(ats(.origins)))" + (if .name | IN($reached[]) then "" else ", and it reaches no seat: no grant takes it to a seat that holds a key" end)),
       (.view.seats[]
        | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); clearance \(.clearance.value)"
          + (if .clearance.scope == null then ", by default" else ", the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)

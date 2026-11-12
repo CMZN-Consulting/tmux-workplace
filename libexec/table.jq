@@ -76,6 +76,47 @@ def clone_problems($binding; $clone):
      | .term[$d.path] as $p | select($p | inside)
      | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies in the clone \($clone), which the frame masks in every view");
 
+def seat_names($plan):
+  [($plan | if type == "object" then .programs[]? else empty end) | select(type == "object") | (.plan // [])[]
+   | (if type == "object" and has("term") then .term else . end)
+   | select(type == "array" and length > 4 and .[0] == "pane") | {key: (.[1:4] | tojson), value: .[4]}] | from_entries;
+
+def clone_row_problems($binding; $plan; $view; $clone):
+  def inside: type == "string" and (. == $clone or startswith(if $clone == "/" then "/" else $clone + "/" end));
+  def at($o): "\($o.path // "?"):\($o.line // "?")";
+  seat_names($plan) as $names
+  | $binding.tables.view as $spec
+  | table_rows($plan; $view; $spec)[]
+  | select(type == "object" and (.key | type) == "array" and (.key[3] | inside) and (.value[0]? != "hidden"))
+  | "seat \($names[.key[0:3] | tojson] // "?") (\(.key[0:3] | join("/"))): \(.key[3]) (\(.value[0]?), from \([(.origins // [.origin // {}])[] | at(.)] | join(", "))) lies at or beneath the clone \($clone), which the frame hides in every view as a hidden row would";
+
+def given_problems($binding; $plan; $view):
+  ($binding["kept-names"] // []) as $kept
+  | (($view // {}).seats // []) as $seats
+  | seat_names($plan) as $names
+  | def at($o): "\($o.path // "?"):\($o.line // "?")";
+    def ats($os): [$os[] | at(.)] | join(", ");
+    def who($k): "\($names[$k | tojson] // "?") (\($k | join("/")))";
+    def given($seat):
+      (if $seat.key.state? == "held" then [$kept[] | {name: ., by: "holds a key", what: "the key", origins: $seat.key.origins}] else [] end)
+      + (if $seat.home != null
+         then [{name: $seat.home.variable, by: "has a home", what: "the home", origins: $seat.home.origins}]
+              + [$seat.home.variables[] | {name, by: "has a home", what: "the home variable", origins}]
+         else [] end);
+    ($seats[] | select(.home != null) | . as $s
+     | ([.home.kind] + .seat | unique[]) | select(. == "" or . == "." or . == ".." or contains("/"))
+     | "seat \(who($s.seat)): its home is named by its kind and its keys, \($s.home.kind)/\($s.seat | join("/")), and \(tojson) cannot be one directory of that name"),
+    ($binding.tables[] | select(has("name")) | . as $spec
+     | table_rows($plan; $view; $spec)[] | . as $row
+     | ($seats[] | select(.seat == $row.key[0:3])) as $seat
+     | (given($seat) | map(select(.name == $row.key[3])) | first) as $g
+     | if $g != null then
+         "state \($spec.cell): \(who($row.key[0:3])) \($g.by), and its environment may not set \($row.key[3]), which the frame gives (the row at \(at($row.origin // {})); \($g.what) at \(ats($g.origins)))"
+       else
+         (($seat.expects // [])[] | select(.name == $row.key[3])
+          | "state \($spec.cell): \(who($row.key[0:3])) expects the value \($row.key[3]) at its start, and its environment may not set it (the row at \(at($row.origin // {})); the expect at \(ats(.origins)))")
+       end);
+
 def joined($binding; $root):
   ($binding.paths.recorded // {}) as $recorded
   | ($binding.paths.cells // {}) as $cells

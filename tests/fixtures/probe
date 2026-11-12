@@ -107,8 +107,10 @@ for argument in "$@"; do
         say "home entries: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
         listing=("${place%/*}"/*)
         say "home siblings: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
-        listing=("${place%/*/*}"/*)
+        listing=("${place%/homes/*}"/*)
         say "home state: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+        listing=("${place%/homes/*}"/homes/*)
+        say "home kinds: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
         if [[ -f $place/seeded ]]; then say "home seeded: $(tr '\n' ' ' < "$place/seeded")"; else say "home seeded: no"; fi
       fi
       ;;

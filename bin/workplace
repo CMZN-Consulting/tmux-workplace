@@ -13,6 +13,7 @@ fi
 TMUX_FLOOR=3.5a
 JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
+ENV_FLOOR=8.30
 FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-v4
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 
@@ -318,6 +319,21 @@ refuse_clone() {
   return 1
 }
 
+refuse_rows() {
+  local plan=$1 view=$2 given=$3 found
+  local -a faults
+  found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --arg given "$given" \
+    --slurpfile b "$tool/host/binding.json" --slurpfile v "$view" '
+    include "table";
+    joined($b[0]; $root) as $plan
+    | clone_row_problems($b[0]; $plan; $v[0]; $clone), (if $given == "yes" then given_problems($b[0]; $plan; $v[0]) else empty end)' "$plan") \
+    || { warn "cannot read $plan for the rows at the clone"; return 1; }
+  [[ -z $found ]] && return 0
+  mapfile -t faults <<< "$found"
+  printf 'workplace: %s\n' "${faults[@]}" >&2
+  return 1
+}
+
 refuse_paths() {
   local -a faults
   mapfile -t faults < <(jq -r -L "$tool/libexec" --slurpfile b "$tool/host/binding.json" 'include "table"; path_problems($b[0])' "$1")
@@ -452,6 +468,10 @@ cmd_plan() {
     jq '.view' <<< "$folded" > "$work/view.json" || die "cannot write the view"
     outputs+=(view.json)
   fi
+  local planned_view=/dev/null
+  [[ -n $folded ]] && planned_view=$work/view.json
+  refuse_rows "$work/plan.json" "$planned_view" yes \
+    || die "the plan opens the clone to a seat, or sets in a seat's environment a name the frame gives it; PLAN/ is as it was"
   local out_json
   out_json=$(for name in "${outputs[@]}"; do printf '%s\0%s\0' "$name" "$(sha_of "$work/$name")"; done \
     | jq -R -s -c 'split("\u0000")[:-1] | [range(0; length; 2) as $i | {path: .[$i], sha256: .[$i + 1]}]')
@@ -643,9 +663,30 @@ seat_directories() {
   jq -c -L "$tool/libexec" --arg root "$root" --slurpfile b "$tool/host/binding.json" '
     include "table";
     ($b[0].directories // {}) as $d
+    | $b[0].primitives as $p
     | joined($b[0]; $root)
-    | [.programs[] | (.recorded // [])[] | .term | select(type == "array" and .[0] == $d.recorded and length > $d.path)]
-    | reduce .[] as $t ({}; ([$t[$d.seat[]]] | tojson) as $k | if (.[$k] // []) | index([$t[$d.path]]) then . else .[$k] += [$t[$d.path]] end)' "$1"
+    | [.programs[] | (.plan // [])[] | (if type == "object" and has("term") then .term else . end)
+       | select(type == "array" and (.[0] | type) == "string") | . as $t
+       | ($p[$t[0]].seat // null) | select(. != null and .directory.path? != null and .directory.path < ($t | length))
+       | {key: ([.key[].arg as $i | $t[$i]] | tojson), path: $t[.directory.path]}]
+      + [.programs[] | (.recorded // [])[] | .term | select(type == "array" and .[0] == $d.recorded and length > $d.path)
+         | {key: ([.[$d.seat[]]] | tojson), path: .[$d.path]}]
+    | reduce .[] as $e ({}; if (.[$e.key] // []) | index([$e.path]) then . else .[$e.key] += [$e.path] end)' "$1"
+}
+
+home_parents() {
+  local homes=$1 name=$2 make=${3-} part
+  local -a parts
+  IFS=/ read -r -a parts <<< "$name"
+  bad_dir=$homes
+  for part in "${parts[@]:0:${#parts[@]}-1}"; do
+    bad_dir=$bad_dir/$part
+    if [[ ! -e $bad_dir && ! -L $bad_dir ]]; then
+      [[ -n $make ]] || return 1
+      mkdir -m 0700 -- "$bad_dir" || return 1
+    fi
+    [[ -d $bad_dir && ! -L $bad_dir && $(stat -c %a -- "$bad_dir") == 700 && $(stat -c %u -- "$bad_dir") == "$EUID" ]] || return 1
+  done
 }
 
 record_homes() {
@@ -668,35 +709,35 @@ make_homes() {
   fi
   local directories
   directories=$(seat_directories "$plan_dir/plan.json") || die "cannot read the seats' directories" 2
-  local entries='[]' holder n name nn place path state variable seed kind owner made pairs who out status
+  local entries='[]' holder name place path state variable seed kind owner made pairs who out status hname dir
   local -a seat words environment inherit
   mapfile -t inherit < <(jq -r '.inherit[]' "$tool/host/binding.json")
   local setpriv_program env_program
   setpriv_program=$(command -v setpriv) && env_program=$(command -v env) || die "build needs setpriv and env for the seeds" 2
   while IFS= read -r holder; do
-    n=$(jq -r '.n' <<< "$holder")
     name=$(jq -r '.name' <<< "$holder")
     mapfile -t seat < <(jq -r '.seat[]' <<< "$holder")
-    printf -v nn '%02d' "$n"
     place=${seat[0]}/${seat[1]}/${seat[2]}
     who="$name ($place)"
-    path=$homes/$nn
     state=$(jq -r '.home.state' <<< "$holder")
     kind=$(jq -r '.home.kind' <<< "$holder")
+    hname=$kind/$place
+    path=$homes/$hname
     variable=$(jq -r '.home.variable' <<< "$holder")
     seed=$(jq -r '.home.seed.path // ""' <<< "$holder")
     pairs=$(jq -c --arg p "$path" '[[.home.variable, $p]] + [.home.variables[] | [.name, (if .path == "." then $p else $p + "/" + .path end)]]' <<< "$holder")
     made=false
     if [[ $state == kept ]]; then
-      owner=$(jq -r --arg nn "$nn" '.[$nn].seat // ""' <<< "$owners")
+      owner=$(jq -r --arg h "$hname" '.[$h].seat // ""' <<< "$owners")
       if [[ -e $path || -L $path ]]; then
-        if [[ $owner == "$place" && $(jq -r --arg nn "$nn" '.[$nn].state' <<< "$owners") == seeding ]]; then
+        home_parents "$homes" "$hname" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where build keeps the homes of the kind $kind"
+        if [[ $owner == "$place" && $(jq -r --arg h "$hname" '.[$h].state' <<< "$owners") == seeding ]]; then
           rm -rf -- "$path" || die "cannot remove $path, whose seed did not finish" 2
           say "home: $path of $who was left unseeded by an earlier build, and is made again"
         elif [[ -z $owner ]]; then
           die "build refuses: $path exists, and $record names no seat for it; the frame did not make it, so it is left alone"
         elif [[ $owner != "$place" ]]; then
-          die "build refuses: the home $path was made for the seat $owner, and the plan now places $who at $nn among the panes; move the home by hand"
+          die "build refuses: $record gives the home $path to the seat $owner, not to $who; it is left alone"
         else
           [[ -d $path && ! -L $path && $(stat -c %a -- "$path") == 700 && $(stat -c %u -- "$path") == "$EUID" ]] \
             || die "build refuses: the home $path of $who is not a directory of this user's with mode 700"
@@ -706,13 +747,14 @@ make_homes() {
         if [[ -n $seed ]]; then
           [[ -f $seed && -x $seed ]] || die "build refuses: the seed $seed of the kind $kind is not an executable file"
         fi
+        home_parents "$homes" "$hname" make || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where build keeps the homes of the kind $kind"
         mkdir -m 0700 -- "$path" || die "cannot make the home $path" 2
         made=true
-        owners=$(jq -c --arg nn "$nn" --arg s "$place" --arg st "$([[ -n $seed ]] && printf seeding || printf made)" '.[$nn] = {seat: $s, state: $st}' <<< "$owners")
+        owners=$(jq -c --arg h "$hname" --arg s "$place" --arg st "$([[ -n $seed ]] && printf seeding || printf made)" '.[$h] = {seat: $s, state: $st}' <<< "$owners")
         record_homes "$owners" "$record" || die "cannot write $record" 2
         if [[ -n $seed ]]; then
           words=("$path")
-          mapfile -t -O 1 words < <(jq -r --arg k "$(jq -c '.seat' <<< "$holder")" '.[$k] // [] | .[]' <<< "$directories")
+          mapfile -t -O 1 words < <(jq -r --arg k "$(jq -c '.seat' <<< "$holder")" --arg home "$path" '.[$k] // [] | .[] | select(. != $home)' <<< "$directories")
           environment=()
           for out in "${inherit[@]}"; do [[ -n ${!out+x} ]] && environment+=("$out=${!out}"); done
           mapfile -t -O "${#environment[@]}" environment < <(jq -r '.[] | "\(.[0])=\(.[1])"' <<< "$pairs")
@@ -722,11 +764,11 @@ make_homes() {
           if (( status != 0 )); then
             out=$(tail -n 2 "$build_dir/seed.out" | tr '\n' ' ')
             rm -rf -- "$path"
-            owners=$(jq -c --arg nn "$nn" 'del(.[$nn])' <<< "$owners")
+            owners=$(jq -c --arg h "$hname" 'del(.[$h])' <<< "$owners")
             record_homes "$owners" "$record"
             die "build refuses: the seed $seed of the kind $kind failed for $who with exit $status, and its new home is removed: $out"
           fi
-          owners=$(jq -c --arg nn "$nn" '.[$nn].state = "made"' <<< "$owners")
+          owners=$(jq -c --arg h "$hname" '.[$h].state = "made"' <<< "$owners")
           record_homes "$owners" "$record" || die "cannot write $record" 2
           say "home: $path made for $who, and seeded by $seed"
         else
@@ -735,7 +777,7 @@ make_homes() {
       fi
     fi
     entries=$(jq -c --argjson seat "$(jq -c '.seat' <<< "$holder")" --arg name "$name" --arg kind "$kind" --arg state "$state" \
-      --arg home "homes/$nn" --arg path "$path" --arg variable "$variable" --argjson pairs "$pairs" --arg seed "$seed" --argjson made "$made" \
+      --arg home "homes/$hname" --arg path "$path" --arg variable "$variable" --argjson pairs "$pairs" --arg seed "$seed" --argjson made "$made" \
       '. + [{seat: $seat, name: $name, kind: $kind, state: $state, home: $home, path: $path, variable: $variable,
              environment: $pairs, seed: (if $seed == "" then null else $seed end), made: $made}]' <<< "$entries")
   done < <(jq -c '.[]' <<< "$holders")
@@ -826,6 +868,7 @@ cmd_build() {
       || say "the plan was folded by $planned_fold, and this loop folds by $FOLD_DERIVATION; the views are equal, so build goes on"
     view_file=$plan_dir/view.json
   fi
+  refuse_rows "$plan_dir/plan.json" "$view_file" no || die "build refuses: PLAN/plan.json opens the clone to a seat"
   plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq" "$view_file"
   check_name "$manifest" || die "build refuses: the plan's workplace name is not the one its clone gives"
   if [[ $facts_member == none ]]; then
@@ -1366,6 +1409,9 @@ cmd_up() {
   [[ -f $build_dir/plan-view.json ]] && view_file=$build_dir/plan-view.json
   plan_report "$build_dir/plan.json" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
+  if [[ -f $build_dir/plan-view.json ]] && jq -e 'any(.seats[]?; has("expects"))' "$build_dir/plan-view.json" > /dev/null 2>&1; then
+    need_version env --version "$ENV_FLOOR"
+  fi
   mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
   local run
   printf -v run 'workplace-%08x%08x' "$SRANDOM" "$SRANDOM"
@@ -1464,6 +1510,7 @@ cmd_exec() {
   mapfile -t expected < <(jq -r '.expects[]?' <<< "$record")
   if (( ${#expected[@]} )); then
     local file key i split=""
+    need_version env --version "$ENV_FLOOR"
     file=$(jq -r '.values // ""' <<< "$record")
     key=$(jq -c '.key' <<< "$record")
     [[ -n $file ]] || die "the seat $seat expects a value at its start, and its record names no run-time file" 2
@@ -1553,9 +1600,13 @@ cmd_why() {
           | ([$rows[] | select(.key[3] == $path or beneath($path; .key[3]))] | sort_by(.key[3] | length) | last) as $row
           | ([($folded[0].seats // [])[] | select(.seat == $k) | .key][0]) as $key
           | ([($folded[0].seats // [])[] | select(.seat == $k)][0]) as $folded_seat
-          | (($folded[0].seats // []) | map(.seat) | index([$k])) as $at
           | (if $folded_seat.home? == null or $stateroot == "" then null
-             else "\($stateroot)/\($workplace)/homes/\(if $at + 1 < 10 then "0" else "" end)\($at + 1)" end) as $home_path
+             else "\($stateroot)/\($workplace)/homes/\($folded_seat.home.kind)/\($k | join("/"))" end) as $home_path
+          | def within($p; $q): $q != null and $q != "" and ($p == $q or beneath($p; $q));
+            (within($path; $clone) or within($path; $rungnupg)
+             or (within($path; $stateroot) and (within($path; $home_path) | not)
+                 and ((within($path; $keyview) and $key.state? == "held") | not))) as $masked
+          | [$rows[] | select(beneath(.key[3]; $path))] as $below
           | "seat \($seat) (\($k | join("/"))), path \($path)",
             (if $key == null then empty
              elif $key.scope == null then "key: none; no key term speaks for the seat"
@@ -1590,7 +1641,22 @@ cmd_why() {
             (if ($rows | length) == 0 then "no view: the seat sees the machine as its user does"
              elif $row == null then "no row covers the path"
              elif $row.key[3] == $path then "row: \($path) \($row.value[0])"
-             else "no row at the path; its nearest ancestor's row is \($row.key[3]) \($row.value[0])" end),
+             else "no row at the path; its nearest ancestor's row is \($row.key[3]) \($row.value[0])",
+               (if $masked then "  the frame's mask above decides for the path, and the row does not"
+                else ($below | sort_by(.key[3]) | map(.key[3])) as $under
+                  | (if ($under | length) == 1 then "the row beneath it at \($under[0])"
+                     else "the \($under | length) rows beneath it, the first at \($under[0])" end) as $rows_below
+                  | "  " + ({
+                      "read-only": "so the path is as the machine has it, read-only",
+                      "read-write": "so the path is as the machine has it, read-write",
+                      "hidden": "so the seat cannot reach the path",
+                      "scratch": (if ($under | length) == 0 then "so the path is not there until the seat makes it"
+                                  else "so the path is a directory of the seat's scratch, made to hold \($rows_below); the rest is the seat's to make" end),
+                      "searchable-only": (if ($under | length) == 0 then "so the path is not there, and the seat cannot make it"
+                                          else "so the path is a directory that the seat passes through to \($rows_below), and nothing more" end)
+                    }[$row.value[0]] // "so the path has the row's state, \($row.value[0])")
+                end)
+             end),
             (if $row == null then empty
              else
                (if ($row | has("source")) then
@@ -1709,7 +1775,12 @@ cmd_doctor() {
     say "note    no runtime directory /run/user/$EUID: the agents' sockets stand in the key homes, and a workplace's name may be at most $(( 78 - ${#state_dir} - 1 )) bytes"
   fi
   if found=$(command -v env) && [[ $("$found" -i -S 'X=${PATH}' "$found" 2> /dev/null) == "X=$PATH" ]]; then
-    say "ok      env takes -S and fills a variable's place in it: a seat that expects a value is given it so"
+    version=$(version_of env --version) || version=unknown
+    if [[ $version != unknown ]] && at_least "$version" "$ENV_FLOOR"; then
+      say "ok      env $version takes -S and fills a variable's place in it: a seat that expects a value is given it so"
+    else
+      say "old     env $version; a plan in which a seat expects a value needs GNU env $ENV_FLOOR or later"
+    fi
   else
     say "absent  env -S: needed only by a plan in which a seat expects a value"
   fi

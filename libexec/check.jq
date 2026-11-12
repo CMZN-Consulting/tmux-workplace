@@ -80,22 +80,7 @@ $b[0] as $binding
                | if length > 0 then "the view of \($who) is refused whole: \(join("; "))" else empty end))
          else empty end)
       end;
-  def frame_problems:
-    ($binding["kept-names"] // []) as $kept
-    | ($folded[0].seats // []) as $seats
-    | def given($seat):
-        (if $seat.key.state? == "held" then [$kept[] | {name: ., by: "holds a key"}] else [] end)
-        + (if $seat.home != null then [{name: $seat.home.variable, by: "has a home"}, ($seat.home.variables[] | {name, by: "has a home"})] else [] end);
-      def at($o): "\($o.path // "?"):\($o.line // "?")";
-      $binding.tables[] | select(has("name")) | . as $spec
-      | source_rows($spec)[] | . as $row
-      | ($seats[] | select(.seat == $row.key[0:3])) as $seat
-      | (given($seat) | map(select(.name == $row.key[3])) | first) as $g
-      | if $g != null then
-          "state \($spec.cell): \($row.key[0:3] | join("/")) \($g.by), and its environment may not set \($row.key[3]), which the frame gives (\(at($row.origin // {})))"
-        elif any(($seat.expects // [])[]; .name == $row.key[3]) then
-          "state \($spec.cell): \($row.key[0:3] | join("/")) expects the value \($row.key[3]) at its start, and its environment may not set it (\(at($row.origin // {})))"
-        else empty end;
+  def frame_problems: given_problems($binding; $plan; $folded[0]);
   def problems:
     path_problems($binding),
     (if any($binding.tables[]; folded($plan; .)) and $folded[0] == null

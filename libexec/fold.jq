@@ -118,14 +118,15 @@ joined($b[0]; $root) as $plan
          ($seeded | group_by(.term[1])[] | select((map(.term[2]) | unique | length) > 1)
           | "two seeds of the kind \(.[0].term[1]) differ: \(map("\(.term[2]) from \(at(.origin))") | join(", "))"),
          (($homed | map({key: .term[1], value: .term}) | from_entries) as $home_of
-          | ($home_variables[] | select($home_of[.term[1]] == null)
+          | def home_at($kind; f): ats([$homed[] | select(.term[1] == $kind and (.term | f)) | .origin]);
+            ($home_variables[] | select($home_of[.term[1]] == null)
              | "\(at(.origin)): the kind \(.term[1]) has a home variable and no home"),
-            ($home_variables[] | select($home_of[.term[1]] != null and $home_of[.term[1]][2] == .term[2])
-             | "\(at(.origin)): the home variable \(.term[2]) of the kind \(.term[1]) is the variable that names its home"),
+            ($home_variables[] | . as $v | select($home_of[.term[1]] != null and $home_of[.term[1]][2] == .term[2])
+             | "the home variable \(.term[2]) of the kind \(.term[1]) is the variable that names its home (the home variable at \(at(.origin)); the home at \(home_at(.term[1]; .[2] == $v.term[2])))"),
             ($seeded[] | select($home_of[.term[1]] == null)
              | "\(at(.origin)): the kind \(.term[1]) has a seed and no home"),
             ($seeded[] | select($home_of[.term[1]] != null and $home_of[.term[1]][3] == "scratch")
-             | "\(at(.origin)): the kind \(.term[1]) has a scratch home, and build seeds only a kept one"))] as $conflicts
+             | "the kind \(.term[1]) has a seed and a scratch home, and build seeds only a kept one (the seed at \(at(.origin)); the home at \(home_at(.term[1]; .[3] == "scratch")))"))] as $conflicts
       | if ($conflicts | length) > 0 then {errors: $conflicts}
         else
           entities($said) as $statements

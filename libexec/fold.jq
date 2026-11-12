@@ -34,7 +34,7 @@ joined($b[0]; $root) as $plan
 | ($seats | map(.[0:2]) | unique) as $rooms
 | [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake")))] as $records
 | def known($scope; $n):
     if $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
@@ -136,6 +136,11 @@ joined($b[0]; $root) as $plan
         elif ($t[5] | key_fault) != null then "\($where): the ssh key's name \($t[5] | tojson) is refused: \($t[5] | key_fault)"
         elif $t[6] | IN("granted", "none") | not then "\($where): \($t[6]) is not granted or none"
         else empty end
+      elif $t[0] == "wake" then
+        if ($t | length) != 3 then "\($where): a wake has the words wake KIND PATTERN, not \($t | length)"
+        elif ($made_kinds | index($t[1])) == null then "\($where): the wake names the kind \($t[1]), which the plan does not make"
+        elif $t[2] == "" then "\($where): the wake's pattern is empty, and an empty pattern finds every screen ready"
+        else empty end
       else
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
@@ -167,6 +172,7 @@ joined($b[0]; $root) as $plan
       | [$records[] | select(.term[0] == "ssh-grant")] as $sshgrants
       | ([$sshkeys, $sshgrants] | add | length > 0) as $ssh
       | ($sshkeys | map(.term[1]) | unique) as $ssh_names
+      | [$records[] | select(.term[0] == "wake")] as $waked
       | [($said | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two statements of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
          ($cleared | group_by(.term[1:5])[] | select((map(.term[5] | tonumber) | unique | length) > 1)
@@ -199,6 +205,10 @@ joined($b[0]; $root) as $plan
           | "two ssh-key terms of the name \(.[0].term[1]) differ: \(map("\(.term[2]) from \(at(.origin))") | join(", "))"),
          ($sshgrants | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two ssh-grant terms of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) for the key \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
+         ($waked | group_by(.term[1])[] | select((map(.term[2]) | unique | length) > 1)
+          | "two wake terms of the kind \(.[0].term[1]) differ: \(map("\(.term[2] | tojson) from \(at(.origin))") | join(", "))"),
+         (if ($waked | length) > 0 and ($mailed | length) == 0
+          then "the plan holds wake terms and no mail term, so no mail is delivered to point out (the wake at \(ats([$waked[].origin])))" else empty end),
          ($sshgrants[] | select(.term[5] as $n | $ssh_names | index($n) | not)
           | "\(at(.origin)): the ssh-grant names the key \(.term[5]), which no ssh-key term declares"),
          ([$reached[] | select(.term[5] != "record")] as $asks
@@ -237,6 +247,7 @@ joined($b[0]; $root) as $plan
           | entities($recs) as $record_terms
           | entities($sshkeys) as $ssh_keys_e
           | entities($sshgrants) as $ssh_grants_e
+          | entities($waked) as $wakes
           | (if ($rpaths | length) == 0 then null else $record_paths[0] end) as $record_path
           | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
           | def holds($scope; $n; $k):
@@ -303,7 +314,9 @@ joined($b[0]; $root) as $plan
              | (if $ssh | not then null
                 elif $key.state == "held" then {granted: $ssh_granted, unreached: []}
                 else {granted: [], unreached: $ssh_granted} end) as $ssh_seat
-             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record, ssh: $ssh_seat}]
+             | ([$wakes[] | select(.term[1] == $kind)][0]) as $w
+             | (if $w == null then null else {pattern: $w.term[2], origins: $w.origins} end) as $wake
+             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record, ssh: $ssh_seat, wake: $wake}]
           as $folds
           | [$folds[] | select(.home != null) | . as $f
              | ([$f.home.variable] + [$f.home.variables[].name]) as $given
@@ -377,6 +390,7 @@ joined($b[0]; $root) as $plan
                      + (if .reach == null then {} else {reach: (.reach | map_values(map(.name)))} end)
                      + (if .record == null then {} else {record} end)
                      + (if .ssh == null then {} else {ssh} end)
+                     + (if .wake == null then {} else {wake} end)
                      + {
                       rows: (.rows | length),
                       replacement_statements: .replacing,
@@ -391,6 +405,7 @@ joined($b[0]; $root) as $plan
                                        origins: [$limits[].origin, $chains[].origin, $rpaths[].origin]}} end)),
                    report: {
                      names: [$done[] | {key: (.seat | tojson), value: .name}] | from_entries,
+                     wakes: [$wakes[] | {kind: .term[1], pattern: .term[2], origins}],
                      reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,
                      pairs: [$labels[] as $upper | $labels[] | . as $lower
                        | select(beneath($lower.path; $upper.path) and $lower.value < $upper.value)

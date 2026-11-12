@@ -15,12 +15,13 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-v7
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
 LOG_PROGRAMS=(dd date tail head)
 JOURNAL_PROGRAMS=(systemd-run systemctl journalctl)
 CHAIN_PERIOD=10
+WAKE_PERIOD=60
 MAIL_LIMIT=256000
 TEXT_LIMIT=4096
 
@@ -373,6 +374,13 @@ fold_plan() {
     || die "the fold cannot read $1: $folded" 2
   local -a errors
   mapfile -t errors < <(jq -r '.errors[]?' <<< "$folded")
+  if (( ${#errors[@]} == 0 )); then
+    local pattern where
+    while IFS= read -r -d '' pattern && IFS= read -r -d '' where; do
+      [[ "" =~ $pattern ]] 2> /dev/null
+      (( $? == 2 )) && errors+=("$where: the wake's pattern $(jq -rn --arg p "$pattern" '$p | tojson') is not an extended regular expression that the frame's bash reads")
+    done < <(jq --raw-output0 '.report.wakes[]? | .pattern, ([.origins[] | "\(.path // "?"):\(.line // "?")"] | join(", "))' <<< "$folded")
+  fi
   if (( ${#errors[@]} )); then
     printf '%s\n' "${errors[@]/#/workplace: the fold refuses: }" >&2
     return 1
@@ -426,6 +434,7 @@ print_fold_report() {
           end),
          (.ssh.granted[]? | "  ssh key \(.name): granted, by the \(.scope)'"'"'s term (\(ats(.origins)))"),
          (.ssh.unreached[]? | "  ssh key \(.name): the \(.scope)'"'"'s grant does not reach it, since the seat holds no key (\(ats(.origins)))"),
+         (.wake // empty | "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \(.pattern | tojson), by its kind'"'"'s term (\(ats(.origins)))"),
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
@@ -970,7 +979,7 @@ make_mail() {
     done
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg store "$store" --arg comms "$comms" \
       '. + [$s + {box: $box, in: "\($store)/\($box)/in", sent: "\($store)/\($box)/sent", out: "\($comms)/\($box)/out", answers: "\($comms)/\($box)/answers"}]' <<< "$entries")
-  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach}' <<< "$folded")
+  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)' <<< "$folded")
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
     '{workplace: $w, state: $s, path: $p, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
     || die "cannot write $build_dir/mail.json" 2
@@ -2041,6 +2050,25 @@ carrier_git() {
 
 carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 9>&-; }
 
+carrier_type() {
+  local pane=$1 text=$2 key=$3 mark
+  local -a args=()
+  if [[ -n $text ]]; then
+    [[ $text == *';' ]] && text=${text%;}'\;'
+    args+=(send-keys -t "$pane" -l -- "$text")
+  fi
+  if [[ $key != none ]]; then
+    (( ${#args[@]} )) && args+=(';')
+    args+=(send-keys -t "$pane" "$key")
+  fi
+  mark=$(carrier_tmux display-message -p -t "$pane" '#{@workplace}' 2> /dev/null) || return 1
+  [[ $mark == "$carrier_run" ]] || return 2
+  if (( ${#args[@]} )); then
+    carrier_tmux "${args[@]}" > /dev/null 2>&1 || return 3
+  fi
+  return 0
+}
+
 carrier_next_id() {
   local n=0
   [[ -f $comms/next ]] && { IFS= read -r n < "$comms/next" || :; }
@@ -2152,7 +2180,7 @@ carrier_journal() {
 
 carrier_serve() {
   local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied changed now
-  local -a entries readers keep paths args
+  local -a entries readers keep paths
   entries=("${seat_out[i]}"/[!.]*)
   (( ${#entries[@]} )) || return 0
   entry=${entries[0]}
@@ -2211,6 +2239,7 @@ carrier_serve() {
           done
           if (( copied )) && carrier_git add -- "${paths[@]}" > /dev/null 2>&1 \
             && carrier_git commit -q -m "deliver $carrier_id" > /dev/null 2>&1; then
+            carrier_wake_note "$carrier_at" "${seat_names[i]}" "${readers[@]}"
             carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
             carrier_record "${seat_names[i]}" "$name" mail "$targets" ok ""
           else
@@ -2239,26 +2268,19 @@ carrier_serve() {
             key=$(jq -r '.key' <<< "$verdict")
             sum=$(printf '%s' "$text" | sha256sum)
             written="${#text} ${sum%% *}"
-            args=()
-            if [[ -n $text ]]; then
-              [[ $text == *';' ]] && text=${text%;}'\;'
-              args+=(send-keys -t "$pane" -l -- "$text")
-            fi
-            if [[ $key != none ]]; then
-              (( ${#args[@]} )) && args+=(';')
-              args+=(send-keys -t "$pane" "$key")
-            fi
-            if ! mark=$(carrier_tmux display-message -p -t "$pane" '#{@workplace}' 2> /dev/null); then
-              carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not answer"
-            elif [[ $mark != "$carrier_run" ]]; then
-              carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone"
-            elif (( ${#args[@]} )) && ! carrier_tmux "${args[@]}" > /dev/null 2>&1; then
-              carrier_answer "${seat_answers[i]}" "$name" "refused tmux did not take the line"
-              carrier_record "${seat_names[i]}" "$name" write "$targets" refused "tmux did not take the line" "$written"
-            else
-              carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
-              carrier_record "${seat_names[i]}" "$name" write "$targets" ok "" "$written"
-            fi
+            carrier_type "$pane" "$text" "$key"
+            case $? in
+              1) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not answer" ;;
+              2) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone" ;;
+              3)
+                carrier_answer "${seat_answers[i]}" "$name" "refused tmux did not take the line"
+                carrier_record "${seat_names[i]}" "$name" write "$targets" refused "tmux did not take the line" "$written"
+                ;;
+              *)
+                carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
+                carrier_record "${seat_names[i]}" "$name" write "$targets" ok "" "$written"
+                ;;
+            esac
           fi
         fi
       fi
@@ -2266,6 +2288,94 @@ carrier_serve() {
     fi
   fi
   rm -f -- "$comms/serving"
+}
+
+carrier_wake_save() {
+  local i
+  for i in "${!seat_names[@]}"; do
+    [[ -n ${seat_wake[i]} ]] || continue
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${seat_boxes[i]}" "${seat_names[i]}" "${wake_n[i]}" "${wake_ids[i]}" "${wake_since[i]}" "${wake_last[i]}"
+  done | jq -R -s '{seats: (split("\n")[:-1] | map(split("\t")
+      | {key: .[0], value: {name: .[1], count: (.[2] | tonumber), ids: (.[3] | split(" ") | map(select(. != ""))),
+                           since: (if .[4] == "" then null else .[4] end), last: (.[5] | tonumber)}}) | from_entries)}' > "$comms/wake.json.new" \
+    && mv -f -- "$comms/wake.json.new" "$comms/wake.json"
+}
+
+carrier_wake_load() {
+  local i
+  local -a fields
+  wake_any=0
+  for i in "${!seat_names[@]}"; do
+    wake_n[i]=0 wake_ids[i]="" wake_since[i]="" wake_last[i]=0
+    [[ -n ${seat_wake[i]} ]] && wake_any=1
+  done
+  (( wake_any )) && [[ -f $comms/wake.json ]] || return 0
+  for i in "${!seat_boxes[@]}"; do
+    [[ -n ${seat_wake[i]} ]] || continue
+    mapfile -d '' -t fields < <(jq --raw-output0 --arg b "${seat_boxes[i]}" \
+      '.seats[$b] // empty | (.count | tostring), (.ids | join(" ")), (.since // ""), (.last | tostring)' "$comms/wake.json" 2> /dev/null)
+    (( ${#fields[@]} == 4 )) && [[ ${fields[0]} =~ ^[0-9]+$ && ${fields[3]} =~ ^[0-9]+$ ]] || continue
+    wake_n[i]=${fields[0]} wake_ids[i]=${fields[1]} wake_since[i]=${fields[2]} wake_last[i]=${fields[3]}
+  done
+}
+
+carrier_wake_note() {
+  local at=$1 writer=$2 p j noted=0
+  shift 2
+  for p in "$@"; do
+    [[ $p == "$writer" ]] && continue
+    j=$(carrier_seat_of "$p") || continue
+    [[ -n ${seat_wake[j]} ]] || continue
+    (( wake_n[j] )) || wake_since[j]=$at
+    wake_n[j]=$(( wake_n[j] + 1 ))
+    wake_ids[j]+="${wake_ids[j]:+ }$carrier_id"
+    noted=1
+  done
+  (( noted )) && carrier_wake_save
+  return 0
+}
+
+carrier_wake_record() {
+  jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg target "$1" --arg ids "$2" --arg outcome "$3" --arg reason "$4" --arg written "$5" '
+    {at: $at, seat: "the frame", action: "wake", target: [$target], covers: ($ids | split(" ")), outcome: $outcome}
+    + (if $reason == "" then {} else {reason: $reason} end)
+    + ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]})' >> "$comms/record"
+}
+
+carrier_wake() {
+  local i n count ready out mark text sum outcome reason
+  local -a shown
+  (( wake_any )) || return 0
+  for i in "${!seat_names[@]}"; do
+    (( carrier_stop )) && break
+    [[ -n ${seat_wake[i]} ]] && (( wake_n[i] > 0 && EPOCHSECONDS - wake_last[i] >= WAKE_PERIOD )) || continue
+    [[ -n ${seat_pane[i]-} ]] || continue
+    out=$(carrier_tmux display-message -p -t "${seat_pane[i]}" '#{@workplace}' \; capture-pane -p -t "${seat_pane[i]}" 2> /dev/null) || continue
+    mark=${out%%$'\n'*}
+    [[ $mark == "$carrier_run" ]] || continue
+    [[ $out == *$'\n'* ]] && out=${out#*$'\n'} || out=""
+    mapfile -t shown <<< "$out"
+    ready=0 count=0
+    for (( n = ${#shown[@]} - 1; n >= 0 && count < 5; n-- )); do
+      [[ -n ${shown[n]} ]] || continue
+      count=$(( count + 1 ))
+      if [[ ${shown[n]} =~ ${seat_wake[i]} ]]; then ready=1; break; fi
+    done
+    (( ready )) || continue
+    text="mail: ${wake_n[i]} new, newest ${wake_ids[i]##* }.md"
+    sum=$(printf '%s' "$text" | sha256sum)
+    carrier_type "${seat_pane[i]}" "$text" Enter
+    case $? in
+      0) outcome=ok reason="" ;;
+      1) outcome=refused reason="the pane of ${seat_names[i]} does not answer" ;;
+      2) outcome=refused reason="the pane of ${seat_names[i]} does not carry this run's mark, or is gone" ;;
+      *) outcome=refused reason="tmux did not take the line" ;;
+    esac
+    wake_last[i]=$EPOCHSECONDS
+    carrier_wake_record "${seat_names[i]}" "${wake_ids[i]}" "$outcome" "$reason" "${#text} ${sum%% *}"
+    [[ $outcome == ok ]] && wake_n[i]=0 wake_ids[i]="" wake_since[i]=""
+    carrier_wake_save
+  done
 }
 
 carrier_recover() {
@@ -2385,7 +2495,8 @@ cmd_carry() {
   trap 'carrier_stop=1' TERM INT
   trap '' HUP
   exec {pause_fd}<> <(:)
-  seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=()
+  seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=()
+  wake_n=() wake_ids=() wake_since=() wake_last=() wake_any=0
   comms_record=""
   if [[ -f $mail ]]; then
     while IFS= read -r entry; do
@@ -2395,6 +2506,7 @@ cmd_carry() {
       seat_answers+=("$(jq -r '.answers' <<< "$entry")")
       seat_reach+=("$(jq -c '.reach' <<< "$entry")")
       seat_keys+=("$(jq -c '.seat' <<< "$entry")")
+      seat_wake+=("$(jq -r '.wake // ""' <<< "$entry")")
     done < <(jq -c '.seats[]' "$mail")
     carrier_names=$(jq -c '[.seats[].name]' "$mail")
     comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail")
@@ -2406,6 +2518,7 @@ cmd_carry() {
         || die "the out of ${seat_names[i]} is not a directory on the file system of $taken, and the carrier moves by renaming alone" 2
     done
     carrier_recover
+    carrier_wake_load
   fi
   record_names=() record_boxes=() record_dirs=() record_keys=() record_kept=() record_pane=()
   chain_sink="" chain_last=0 chain_failed="" chain_refusing=0
@@ -2442,6 +2555,7 @@ cmd_carry() {
       (( carrier_stop )) && break
       carrier_serve "$i"
     done
+    (( carrier_stop )) || carrier_wake
     (( ${#record_names[@]} )) && { carrier_watch; carrier_chain; }
     (( carrier_stop )) || carrier_pause 1
   done
@@ -2885,6 +2999,13 @@ seats_report() {
     done < <(jq -c '.seats[]' "$build_dir/mail.json")
     say "mail    the store $(jq -r '.store' "$build_dir/mail.json"), shown at $(jq -r '.path' "$build_dir/mail.json"); requests waiting in the seats' out: $waiting"
     (( ${#waits[@]} )) && printf '%s\n' "${waits[@]}"
+    file=$(jq -r '.comms' "$build_dir/mail.json")/wake.json
+    if [[ -f $file ]]; then
+      jq -r --slurpfile w "$file" '.seats[] | select(.wake != null) | . as $s | ($w[0].seats[$s.box] // null) as $p
+        | select($p != null and ($p.count // 0) > 0)
+        | "wake    \($s.name) (\($s.seat | join("/"))): \($p.count) delivered and not yet pointed out, the first at \($p.since)"' "$build_dir/mail.json" 2> /dev/null
+    fi
+    file=""
   fi
   if [[ -f $build_dir/homes.json ]]; then
     while IFS= read -r entry; do

@@ -57,7 +57,7 @@
 
 ## exec, down and the run
 
-- **C17.** A pane's command is `workplace exec -- SEAT` and nothing else. `exec` checks `BUILD` first. It starts the seat's program with the view, the environment's rows and the inherited names that `up` recorded in the seat's own record, from any terminal and any directory. `--print` prints the call that `exec` makes, word for word, and an unknown seat, a changed build or a workplace that is not up is refused with exit 2. A pane holds a silent tmux client until its start replaces it with `respawn-pane -k`, which is followed by clearing its history. No key is sent to a pane but by the carrier, which types a seat's write request where the plan allows it (C60).
+- **C17.** A pane's command is `workplace exec -- SEAT` and nothing else. `exec` checks `BUILD` first. It starts the seat's program with the view, the environment's rows and the inherited names that `up` recorded in the seat's own record, from any terminal and any directory. `--print` prints the call that `exec` makes, word for word, and an unknown seat, a changed build or a workplace that is not up is refused with exit 2. A pane holds a silent tmux client until its start replaces it with `respawn-pane -k`, which is followed by clearing its history. No key is sent to a pane but by the carrier, which types a seat's write request where the plan allows it (C60) and its own pointer to delivered mail where the reader's kind has a wake (C94), both through one function.
 - **C18.** `down` undoes, newest first, what `up` recorded and nothing else. It acts only on a session that still carries the run's mark, removes `RUN` and keeps `BUILD`, and with nothing up it does nothing. It reaches the run's server by its socket's path, whatever the shell's `TMUX_TMPDIR`. When the server still holds sessions that the run did not make, it leaves them, says so, and keeps `RUN`, which holds the socket, while the server stands. It keeps `RUN` and exits 1 when an undo fails.
 - **C19.** A failed term stops `up`. Everything made in that run is torn down by its captured id, whether or not its mark was set yet, `RUN` is removed, and the failure names the term.
 - **C20.** `up` refuses while `RUN` exists.
@@ -241,8 +241,8 @@
   - `why` names the mailbox for a path at or beneath the mail path.
 - **C56.** The store stands in S, which no view holds. `build` makes it once and keeps it.
   - `S/mail` is a git repository made with no template, whose branch is `mail`. For each seat it holds a directory named by the seat's three keys joined by a space, with `in` and `sent`. A key may be `.git`, which git refuses as a path's component, and a key holds no white space, so the joined name is one seat's and is never git's.
-  - Beside it, `S/comms` holds for each seat `out` and `answers` under the same name, `taken`, where the carrier keeps what it takes, and the record. Every directory is the user's, with mode 0700, and the record has mode 0600.
-  - `BUILD/mail.json`, listed in the MANIFEST, holds the mail path, S, and each seat's mailbox and reach.
+  - Beside it, `S/comms` holds for each seat `out` and `answers` under the same name, `taken`, where the carrier keeps what it takes, the record, and `wake.json`, where it keeps the mail each reader has to be pointed out (C94). Every directory is the user's, with mode 0700, and the record and `wake.json` have mode 0600.
+  - `BUILD/mail.json`, listed in the MANIFEST, holds the mail path, S, and each seat's mailbox and reach, and, for a seat whose kind has a wake, its pattern (C93).
   - A plan that holds mail needs git 2.32 or later, `flock`, `dd`, `mv`, `tail` and `date`. `build` and `up` refuse it with exit 2 when one is missing, naming it. A plan without mail needs none of them.
 - **C57.** The carrier is one process for the workplace, `workplace carry`. `up` starts it after the agents and before the first term, under `setpriv --no-new-privs` and in no view, and records it in the ledger and in the checks.
   - Its working directory is `RUN/carrier`, which is its mark. `down` ends it only while the process's working directory is that directory, waits until it has ended, and says it is gone when it is. A carrier whose mark is gone, its run directory removed under it, ends of itself at its next pass.
@@ -267,7 +267,7 @@
 - **C63.** It reads the moved file once, into a file of its own, and works on that copy. The read follows no link, does not block, and stops one byte past the limit. What a seat changes afterwards through another name of the same file changes nothing, and a file held under a lease is refused at once rather than waited for.
 - **C64.** It runs nothing that a request names. Names are compared with the plan's exactly, as text. A head, a name, a text or a body is never read as an option, a pattern, a format or a command: the text is typed literally, paths reach git as literal paths, and no word of a request reaches a shell.
 - **C65.** The store runs no hook, and no seat can write into it. Git runs with a cleared environment, no system or user configuration and `core.hooksPath` set to `/dev/null`, so neither a hook in the repository nor the user's configuration runs. No view shows S.
-- **C66.** The record is `S/comms/record`: one line of JSON for each request, served or refused, with the time, the id, the seat that asked, the request's name, the action, the target, the outcome and a refusal's reason. A write's line also holds the length and the SHA-256 of its text. No line holds a body, a capture or a text. The mail's own record is its repository.
+- **C66.** The record is `S/comms/record`: one line of JSON for each request, served or refused, with the time, the id, the seat that asked, the request's name, the action, the target, the outcome and a refusal's reason. A write's line also holds the length and the SHA-256 of its text. Each pointer of the wake is one line of it too (C96). No line holds a body, a capture or a text. The mail's own record is its repository.
 
 ## Keys and names
 
@@ -359,6 +359,18 @@
 - **C91.** Where the plan keeps a record, each holding seat's agent logs at `-v` to `signed`, in the seat's directory of records, with its times in UTC, and the carrier chains `signed` among the kept files (C72). After an ssh signature it holds a line with the second, and nothing of the key or of the data.
 - **C92.** `status` lists each agent's granted keys by name, and exits 1 when an agent no longer offers one that the build loaded. `why` names a seat's grants, the terms that give them and their public files, and for a seat that holds no key, the grants that do not reach it.
 
+## The wake: a delivered mail pointed out to its reader
+
+- **C93.** The fold reads `wake KIND PATTERN`, once for a kind. PATTERN is a POSIX extended regular expression, matched as bash's `=~` matches it in the loop's C locale, byte by byte. With no term a kind's seats are not woken. A plan that holds the term is folded.
+  - `view.json` gives each seat of the kind `wake`, with the pattern and its origins, and `plan` prints it for each such seat.
+  - `plan` refuses, with exit 1, leaving `PLAN/` as it was and naming the origins: a term of the wrong form; a kind the plan does not make; an empty pattern, which finds every screen ready; two terms for one kind with different patterns, while equal ones count once; a pattern that bash refuses; and a wake with no mail term. `build` refuses a pattern that bash refuses in a plan written by hand.
+- **C94.** Once the carrier delivers a mail to a reader whose kind has a wake, that reader has mail to be pointed out, unless the reader is the mail's writer. A mail that a seat sends itself is delivered and is not pointed out: the count and the newest id come only from mail whose writer, as the carrier writes it in `from` (C59), is another seat. After each pass, for each such reader that had no pointer in the last minute, the carrier looks at the visible screen of the reader's pane, never at its history.
+  - The pane is ready when one of the last five lines of that screen that are not empty matches the pattern. Then the carrier types one line, and `Enter` after it, through the function that types a write (C60): `mail: N new, newest ID.md`. N is the count of mail delivered to that reader since its last pointer, in decimal, and ID is the newest one's id. Then nothing is left to be pointed out to that reader.
+  - It types nothing else of its own accord, and nothing into a pane that is not ready. The line holds no byte that a seat wrote: the count and the id are the frame's own, and a mail's subject, body and writer, and a request's name, do not enter it.
+  - At most one pointer goes to a reader in a minute.
+- **C95.** `status` lists each seat with mail to be pointed out: how many, by the same count, and the time the first was delivered. A seat's own mail puts it in no list. A seat that works, or that sits at a question of its own program, stands in that list until its pane is ready. `status` does not exit 1 for it.
+- **C96.** Each pointer is one line of the record (C66): the time, `the frame` as the one who asked, the action `wake`, the reader as its target, the ids it covers, the outcome, and the length and SHA-256 of the line typed.
+
 ## Limits, stated and not checked
 
 - A mail's body is carried byte for byte, since mail carries captures and logs, which hold control characters. The head is the frame's, and it ends at the first line of three dashes; a reader takes `from` from the head alone. A mail shown raw on a terminal can draw over its own head, so a mail is read through a program that does not obey control characters, as a seat's file tool does.
@@ -377,3 +389,8 @@
   - **Who runs `build`.** A workplace that names a key is built outside its own views. A seat of another workplace that runs the build was shown the key's file by that workplace's text. The frame does not see across workplaces.
   - **Where no record is kept,** a holding seat's agent logs nothing.
   - **What `status` compares.** `status` compares each agent's whole answer to `KEYINFO --ssh-list --ssh-fpr=sha256` with the one `up` recorded, and not its keys alone. A change in any other field of that answer exits 1 too, as if a key were gone.
+- The wake (C93 to C96):
+  - **Ready is what the pattern says of a screen.** A program that shows its input box while it works is typed into while it works. A kind's pattern is to match only what its program shows when it waits for a line.
+  - **Typed is not read.** The frame knows that a pointer was typed. It does not know that a mail was read.
+  - **A kind with no wake.** Its seats are reached as before: by a writer that may write their panes (C60), or by their own look.
+  - **The carrier's own stops.** A pointer that tmux does not take is recorded as refused, and its mail stays to be pointed out. A carrier that starts again goes on from `wake.json`. One stopped between a delivery and noting it there leaves that mail delivered and not pointed out.

@@ -30,6 +30,7 @@ term_checks() {
 }
 term_file=""
 typed_file=""
+screen_file=""
 box=""
 await_answer() {
   local i
@@ -242,6 +243,7 @@ for argument in "$@"; do
       ;;
     term=*) term_file=${argument#term=} ;;
     typed=*) typed_file=${argument#typed=} ;;
+    screen=*) screen_file=${argument#screen=} ;;
     print=*) cat -- "${argument#print=}" ;;
     wait=*)
       for (( i = 0; i < 200; i++ )); do [[ -e ${argument#wait=} ]] && break; pause 0.05; done
@@ -334,6 +336,23 @@ if [[ -n $term_file ]]; then
   say "probe $name term done"
   tput smcup
   say "full screen"
+fi
+if [[ -n $screen_file ]]; then
+  shown=""
+  while :; do
+    state=""
+    IFS= read -r state < "$screen_file" 2> /dev/null || :
+    if [[ $state != "$shown" ]]; then
+      printf '\033[H\033[2J'
+      case $state in
+        ready) printf 'probe %s waits\nwaiting> \n? for shortcuts\033[1A\033[10G' "$name" ;;
+        menu) printf '%s\n' "waiting>" "Do you want to go on?" "> 1. Yes" "  2. Yes, and do not ask again" "  3. No" "Esc to cancel" ;;
+        *) printf 'waiting>\n'; for (( i = 0; i < 100; i++ )); do printf '\n'; done; printf 'working\n' ;;
+      esac
+      shown=$state
+    fi
+    if IFS= read -r -t 0.2 line; then printf '%s\n' "$line" >> "$typed_file"; shown=""; fi
+  done
 fi
 if [[ -n $typed_file ]]; then
   trap 'printf "%s\n" "interrupted" >> "$typed_file"; exit 0' INT

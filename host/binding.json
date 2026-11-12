@@ -85,7 +85,8 @@
         "record-chain",
         "record-path",
         "ssh-key",
-        "ssh-grant"
+        "ssh-grant",
+        "wake"
       ],
       "programs": [
         "bwrap"

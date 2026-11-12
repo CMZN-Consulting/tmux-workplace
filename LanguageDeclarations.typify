@@ -1,232 +1,187 @@
 #lang typify
-declare : HouseRules
-version : 4
-file : HOUSE_RULES!.typify
-required!
-comment : #
-is : path = canonical-path
-is : executable = canonical-path
-is : days = "7"
-cell : policies = shadow
-primitive : remember : text text
-writes : remember : policies = put 1
-effect : remember = state
-term : deny-exec : executable
-rule : deny-exec <x> -> remember (concat "deny-exec:" <x>) <x>
-form : deny-exec : <executable>
-does : deny-exec <executable>
-term : deny-access : path
-rule : deny-access <x> -> remember (concat "deny-access:" <x>) <x>
-form : deny-access : <path>
-does : deny-access <path>
-term : read-only : path
-rule : read-only <x> -> remember (concat "read-only:" <x>) <x>
-form : read-only : <path>
-does : read-only <path>
-term : vault-root : path
-rule : vault-root <x> -> remember (concat "vault-root:" <x>) <x>
-form : vault-root : <path>
-does : vault-root <path>
-count : vault-root = 1
-term : pane-output-retention-days : days
-rule : pane-output-retention-days <x> -> remember (concat "pane-output-retention-days:" <x>) <x>
-form : pane-output-retention-days : <days>
-does : pane-output-retention-days <days>
-count : pane-output-retention-days = 1
-term : pane-output-audience
-rule : pane-output-audience -> remember pane-output-audience owner
-form : pane-output-audience : owner
-does : pane-output-audience
-count : pane-output-audience = 1
-term : operational-metadata-audience
-rule : operational-metadata-audience -> remember operational-metadata-audience supervisors
-form : operational-metadata-audience : supervisors
-does : operational-metadata-audience
-count : operational-metadata-audience = 1
-term : seat-key-lifetime
-rule : seat-key-lifetime -> remember seat-key-lifetime build
-form : seat-key-lifetime : build
-does : seat-key-lifetime
-count : seat-key-lifetime = 1
-term : seat-key-usage
-rule : seat-key-usage -> remember seat-key-usage signing-and-ssh-authentication
-form : seat-key-usage : signing-and-ssh-authentication
-does : seat-key-usage
-count : seat-key-usage = 1
-term : comms-identity-proof
-rule : comms-identity-proof -> remember comms-identity-proof signed-challenge
-form : comms-identity-proof : signed-challenge
-does : comms-identity-proof
-count : comms-identity-proof = 1
-term : comms-payload-encryption
-rule : comms-payload-encryption -> remember comms-payload-encryption off
-form : comms-payload-encryption : off
-does : comms-payload-encryption
-count : comms-payload-encryption = 1
-term : ssh-without-seat-proof
-rule : ssh-without-seat-proof -> remember ssh-without-seat-proof DL
-form : ssh-without-seat-proof : DL
-does : ssh-without-seat-proof
-count : ssh-without-seat-proof = 1
-term : invalid-seat-proof
-rule : invalid-seat-proof -> remember invalid-seat-proof reject
-form : invalid-seat-proof : reject
-does : invalid-seat-proof
-count : invalid-seat-proof = 1
-term : identity-attribution-record
-rule : identity-attribution-record -> remember identity-attribution-record required
-form : identity-attribution-record : required
-does : identity-attribution-record
-count : identity-attribution-record = 1
-end!
-declare : NodeType
+declare : Structure
 version : 1
-file : NODE_TYPE.typify
+file : programs/STRUCTURE.typify
 required!
-comment : #
-is : kind = "HOUSE"
-cell : profile = shadow
-primitive : select : kind
-writes : select : profile = put 1 "selected"
-effect : select = state
-term : node-type : kind
-rule : node-type <x> -> select <x>
-form : node-type : <kind>
-does : node-type <kind>
-count : node-type = 1
-end!
-
-declare : Office
-version : 1
-file : OFFICE[<office>]/OFFICE.typify
-required!
-comment : #
-is : office = /[0-9]+/
-is : label = /.+/
-is : path = canonical-path
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : display-name = /[A-Za-z0-9][A-Za-z0-9 _-]*/
+is : layout = "even-horizontal" | "even-vertical" | "main-horizontal" | "main-vertical" | "tiled"
 cell : sessions = shadow
-primitive : session : office label
+primitive : session : office-key display-name
 writes : session : sessions = put 1
-cell : directories = shadow
-primitive : locate : office path
-writes : locate : directories = put 1
-effect : locate = state
-term : named : label
-rule : named <x> -> session <office> <x>
-form : name : <label>
-does : named <label>
-count : named = 1
-term : workdir : path
-rule : workdir <x> -> locate <office> <x>
-form : workdir : <path>
-does : workdir <path>
-count : workdir = 1
-end!
-
-declare : Room
-version : 1
-file : OFFICE[<office>]/ROOM[<room>]/ROOM.typify
-required!
-comment : #
-is : office = /[0-9]+/
-is : room = /[0-9]+/
-is : label = /.+/
-is : layout = "tiled" | "even-horizontal" | "even-vertical" | "main-horizontal" | "main-vertical"
+stage : session = 10
 cell : windows = shadow
-primitive : window : office room label
+primitive : window : office-key room-key display-name
 writes : window : windows = put 2
-cell : arrangements = shadow
-primitive : arrange : office room layout
-writes : arrange : arrangements = put 2
-term : named : label
-rule : named <x> -> window <office> <room> <x>
-form : name : <label>
-does : named <label>
-count : named = 1
-term : layout : layout
-rule : layout <x> -> arrange <office> <room> <x>
-form : layout : <layout>
-does : layout <layout>
-count : layout = 1
-end!
-
-declare : Seat
-version : 2
-file : OFFICE[<office>]/ROOM[<room>]/SEAT[<seat>]/SEAT.typify
-required!
-comment : #
-is : office = /[0-9]+/
-is : room = /[0-9]+/
-is : seat = /[0-9]+/
-is : label = /.+/
-is : identity = /[A-Za-z0-9][A-Za-z0-9-]*/
-is : path = canonical-path
-is : argv = /\[.+\]/
-is : vault = relative-path except ""
-is : mode = "read-only" | "read-write"
-is : field = "agent" | "workdir"
-cell : policies = shadow
+stage : window = 20
 cell : panes = shadow
-primitive : title : office room seat label
-writes : title : panes = put 3
-cell : assignments = shadow
-primitive : assign : office room seat field text
-writes : assign : assignments = put 4
-effect : assign = state
-is : visibility = "hidden" | "searchable-only" | "read-only" | "read-write"
+primitive : pane : office-key room-key seat-key display-name
+writes : pane : panes = put 3
+stage : pane = 30
+cell : arrangements = shadow
+primitive : arrange : office-key room-key layout
+writes : arrange : arrangements = put 2
+stage : arrange = 40
+term : office : office-key display-name
+rule : office <o> <n> -> session <o> <n>
+form : office : <office-key> = <display-name>
+does : office <office-key> <display-name>
+count : office = 1..*
+count : office = 0..1 by 1
+term : room : office-key room-key display-name layout
+rule : room <o> <r> <n> <l> -> window <o> <r> <n> ; arrange <o> <r> <l>
+form : room : <office-key> / <room-key> = <display-name> : <layout>
+does : room <office-key> <room-key> <display-name> <layout>
+count : room = 1..*
+count : room = 0..1 by 2
+ensure : room : office-declared = (bound sessions <1>)
+term : seat : display-name office-key room-key seat-key
+rule : seat <n> <o> <r> <s> -> pane <o> <r> <s> <n>
+form : seat : <display-name> = <office-key> / <room-key> / <seat-key>
+does : seat <display-name> <office-key> <room-key> <seat-key>
+count : seat = 1..*
+count : seat = 0..1 by 1
+ensure : seat : room-declared = (bound windows <2> <3>)
+end!
+declare : Access
+version : 1
+file : programs/ACCESS.typify
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
 cell : view = join exposure
 join : exposure : "hidden" "searchable-only" = "searchable-only"
+join : exposure : "hidden" "scratch" = "scratch"
 join : exposure : "hidden" "read-only" = "read-only"
 join : exposure : "hidden" "read-write" = "read-write"
+join : exposure : "searchable-only" "scratch" = "scratch"
 join : exposure : "searchable-only" "read-only" = "read-only"
 join : exposure : "searchable-only" "read-write" = "read-write"
+join : exposure : "scratch" "read-only" = "read-only"
+join : exposure : "scratch" "read-write" = "read-write"
 join : exposure : "read-only" "read-write" = "read-write"
-primitive : claim : office room seat path visibility
+primitive : claim : office-key room-key seat-key canonical-path mode
 writes : claim : view = put 4
 effect : claim = state
-primitive : resolve : office room seat text path
-effect : resolve = external
-stage : resolve = 60
-primitive : keygen : office room seat identity
-effect : keygen = external
-primitive : spawn : office room seat argv
-effect : spawn = external
-stage : spawn = 70
-term : grant : vault mode
-rule : grant <p> <m> -> claim <office> <room> <seat> (context HouseRules.vault-root) searchable-only ; claim <office> <room> <seat> (join (context HouseRules.vault-root) <p>) <m> ; (each <a> in (ancestors (join (context HouseRules.vault-root) <p>)) (if (prefix (context HouseRules.vault-root) <a>) (if (exists (join <a> SHARED.md)) (claim <office> <room> <seat> (join <a> SHARED.md) <m>)))) ; (if (exists (join (join (context HouseRules.vault-root) <p>) SHARED.md)) (claim <office> <room> <seat> (join (join (context HouseRules.vault-root) <p>) SHARED.md) <m>))
-fuel : grant = 64
-ensure : grant : grant-recorded = (bound view <office> <room> <seat> (join (context HouseRules.vault-root) <1>))
-count : grant = 0..1 by 1
-note : grant = desired-view-claims-not-native-masking
-term : command : argv
-rule : command <x> -> (each <p> in (inherited HouseRules.read-only) (claim <office> <room> <seat> <p> read-only)) ; (each <p> in (inherited HouseRules.deny-access) (claim <office> <room> <seat> <p> hidden)) ; claim <office> <room> <seat> (context HouseRules.vault-root) hidden ; (each <p> in (inherited HouseRules.deny-exec) (resolve <office> <room> <seat> executable <p>)) ; spawn <office> <room> <seat> <x>
-fuel : command = 64
-note : command = argv-decoding-and-runtime-plumbing-external
-term : named : label
-rule : named <x> -> title <office> <room> <seat> <x>
-form : name : <label>
-does : named <label>
-count : named = 1
-term : agent : identity
-rule : agent <x> -> assign <office> <room> <seat> agent <x> ; keygen <office> <room> <seat> <x>
-form : agent : <identity>
-does : agent <identity>
-count : agent = 1
-term : workdir : path
-rule : workdir <x> -> assign <office> <room> <seat> workdir <x>
-form : workdir : <path>
-does : workdir <path>
+cell : panes = shadow
+term : access : office-key room-key seat-key canonical-path mode
+rule : access <o> <r> <s> <p> <m> -> claim <o> <r> <s> <p> <m>
+ensure : access : root-row-present = (bound view <1> <2> <3> /)
+ensure : access : seat-declared = (bound panes <1> <2> <3>)
+term : located : office-key room-key seat-key relative-path mode
+scope : located = root
+rule : located <o> <r> <s> <p> <m> -> access <o> <r> <s> <p> <m>
+form : root : <office-key>/<room-key>/<seat-key> = <mode>
+does : access <office-key> <room-key> <seat-key> / <mode>
+example : root : o/r/s = read-only
+form : view : <office-key>/<room-key>/<seat-key> : <relative-path> = <mode>
+does : located <office-key> <room-key> <seat-key> <relative-path> <mode>
+example : view : o/r/s : notes = read-only
+form : absolute-view : <office-key>/<room-key>/<seat-key> : <canonical-path> = <mode>
+does : access <office-key> <room-key> <seat-key> <canonical-path> <mode>
+example : absolute-view : o/r/s : /tmp = scratch
+end!
+declare : Directories
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/DIRECTORIES.typify
+required!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : relative = relative-path except ""
+is : kind = "none"
+cell : panes = shadow
+cell : directories = shadow
+primitive : record-directory : office-key room-key seat-key canonical-path
+writes : record-directory : directories = put 4 "declared"
+effect : record-directory = state
+cell : seat-kinds = shadow
+primitive : assign-kind : office-key room-key seat-key kind
+writes : assign-kind : seat-kinds = put 3
+effect : assign-kind = state
+term : directory : relative
+rule : directory <p> -> record-directory <office-key> <room-key> <seat-key> (join (context Host.workdir) <p>)
+ensure : directory : declared-seat = (bound panes <office-key> <room-key> <seat-key>)
+form : directory : <relative>
+does : directory <relative>
+count : directory = 1..*
+count : directory = 0..1 by 1
+form : agent : <kind>
+does : assign-kind <office-key> <room-key> <seat-key> <kind>
+count : assign-kind = 1
+end!
+
+declare : SeatEnvironment
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/ENVIRONMENT.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+cell : panes = shadow
+cell : environment = shadow
+primitive : set-environment : office-key room-key seat-key variable text
+writes : set-environment : environment = put 4
+effect : set-environment = state
+term : environment : variable text
+rule : environment <n> <v> -> set-environment <office-key> <room-key> <seat-key> <n> <v>
+ensure : environment : declared-seat = (bound panes <office-key> <room-key> <seat-key>)
+form : environment : <variable> = <text>
+does : environment <variable> <text>
+count : environment = 0..1 by 1
+end!
+declare : Host
+version : 1
+file : ROOT.typify
+required!
+is : workplace = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+cell : configuration = shadow
+primitive : configure : text text
+writes : configure : configuration = put 1
+effect : configure = state
+term : workdir : canonical-path
+rule : workdir <p> -> configure root <p>
+form : workdir : <canonical-path>
+does : workdir <canonical-path>
 count : workdir = 1
+primitive : server : workplace relative-path
+effect : server = external
+scope : server = root
+stage : server = 0
+form : server : <workplace> : <relative-path>
+does : server <workplace> <relative-path>
+count : server = 1
+cell : environment = shadow
+primitive : set-environment : office-key room-key seat-key variable text
+writes : set-environment : environment = put 4
+effect : set-environment = state
+form : environment : <office-key>/<room-key>/<seat-key> : <variable> = <text>
+does : set-environment <office-key> <room-key> <seat-key> <variable> <text>
+end!
+
+declare : Start
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/run/START.typify
+required!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : argv = /\[.+\]/
+cell : panes = shadow
+primitive : start : office-key room-key seat-key relative-path argv
+effect : start = external
+scope : start = root
+stage : start = 50
 form : command : <argv>
-does : command <argv>
-count : command = 1
-form : vault : <vault>
-does : grant <vault> read-write
-form : vault-read : <vault>
-does : grant <vault> read-only
-term : private : path
-rule : private <x> -> claim <office> <room> <seat> <x> read-write
-ensure : private : explicitly-denied = (bound policies (concat "deny-access:" <1>))
-form : private : <path>
-does : private <path>
+does : start <office-key> <room-key> <seat-key> (context Directories.directory) <argv>
+count : start = 1
+ensure : start : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
 end!

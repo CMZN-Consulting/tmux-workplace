@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+shopt -s nullglob dotglob
+name=$1
+shift
+printf '%s\n' "probe $name start cwd=$PWD seat=${PROBE_SEAT-}"
+for argument in "$@"; do
+  case $argument in
+    hidden=*)
+      place=${argument#hidden=}
+      listing=("$place"/*)
+      if [[ -e $place/secret ]] || (( ${#listing[@]} )); then seen=seen; else seen=unseen; fi
+      printf '%s\n' "hidden $place: $seen"
+      ;;
+    ro=*)
+      place=${argument#ro=}
+      if IFS= read -r line < "$place/page" 2> /dev/null; then got=ok; else got=refused; fi
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      printf '%s\n' "ro $place: read=$got write=$put"
+      ;;
+    rw=*)
+      place=${argument#rw=}
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      printf '%s\n' "rw $place: write=$put"
+      ;;
+    reach=*)
+      place=${argument#reach=}
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      printf '%s\n' "reach $place: write=$put"
+      ;;
+    list=*)
+      place=${argument#list=}
+      if [[ -r $place ]]; then got=ok; else got=refused; fi
+      printf '%s\n' "list $place: $got"
+      ;;
+    exec=*)
+      place=${argument#exec=}
+      if "$place" > /dev/null 2>&1; then got=ok; else got=refused; fi
+      printf '%s\n' "exec $place: $got"
+      ;;
+    *) printf '%s\n' "arg [$argument]" ;;
+  esac
+done
+printf '%s\n' "probe $name done"
+IFS= read -r _

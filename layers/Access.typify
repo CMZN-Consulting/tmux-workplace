@@ -1,0 +1,40 @@
+#lang typify
+declare : Access
+version : 1
+file : programs/ACCESS.typify
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
+cell : view = join exposure
+join : exposure : "hidden" "searchable-only" = "searchable-only"
+join : exposure : "hidden" "scratch" = "scratch"
+join : exposure : "hidden" "read-only" = "read-only"
+join : exposure : "hidden" "read-write" = "read-write"
+join : exposure : "searchable-only" "scratch" = "scratch"
+join : exposure : "searchable-only" "read-only" = "read-only"
+join : exposure : "searchable-only" "read-write" = "read-write"
+join : exposure : "scratch" "read-only" = "read-only"
+join : exposure : "scratch" "read-write" = "read-write"
+join : exposure : "read-only" "read-write" = "read-write"
+primitive : claim : office-key room-key seat-key canonical-path mode
+writes : claim : view = put 4
+effect : claim = state
+cell : panes = shadow
+term : access : office-key room-key seat-key canonical-path mode
+rule : access <o> <r> <s> <p> <m> -> claim <o> <r> <s> <p> <m>
+ensure : access : root-row-present = (bound view <1> <2> <3> /)
+ensure : access : seat-declared = (bound panes <1> <2> <3>)
+term : located : office-key room-key seat-key relative-path mode
+scope : located = root
+rule : located <o> <r> <s> <p> <m> -> access <o> <r> <s> <p> <m>
+form : root : <office-key>/<room-key>/<seat-key> = <mode>
+does : access <office-key> <room-key> <seat-key> / <mode>
+example : root : o/r/s = read-only
+form : view : <office-key>/<room-key>/<seat-key> : <relative-path> = <mode>
+does : located <office-key> <room-key> <seat-key> <relative-path> <mode>
+example : view : o/r/s : notes = read-only
+form : absolute-view : <office-key>/<room-key>/<seat-key> : <canonical-path> = <mode>
+does : access <office-key> <room-key> <seat-key> <canonical-path> <mode>
+example : absolute-view : o/r/s : /tmp = scratch
+end!

@@ -1,0 +1,9 @@
+{
+  "version": "reference-fixture-v1",
+  "root": "/tmp/workplace-reference-a4",
+  "config": "/tmp/workplace-reference-a4/config",
+  "name": "config-19dfd2d349e2",
+  "name_algorithm": "basename(config) + dash + first12hex(sha256(absolute config UTF8))",
+  "source_fixture": "SW6885020; revised to accepted six signatures, explicit roots, five states and no executable masks",
+  "kind_boundary": "Five none seats; frame5.9 kind fold is deferred."
+}

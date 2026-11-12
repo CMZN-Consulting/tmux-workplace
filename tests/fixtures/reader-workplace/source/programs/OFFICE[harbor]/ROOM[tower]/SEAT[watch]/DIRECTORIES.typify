@@ -1,0 +1,3 @@
+agent : none
+directory : harbor
+directory : harbor/charts

@@ -1,0 +1,35 @@
+{
+  "layers": [
+    "layers/Structure.typify",
+    "layers/Access.typify",
+    "layers/Agents.typify",
+    "layers/Host.typify"
+  ],
+  "assembler": "whole-bodies-manual-v1",
+  "source_map": [
+    {
+      "source": "layers/Structure.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 2,
+      "line_count": 46
+    },
+    {
+      "source": "layers/Access.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 48,
+      "line_count": 39
+    },
+    {
+      "source": "layers/Agents.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 87,
+      "line_count": 50
+    },
+    {
+      "source": "layers/Host.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 137,
+      "line_count": 51
+    }
+  ]
+}

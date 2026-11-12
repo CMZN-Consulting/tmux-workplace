@@ -1983,6 +1983,20 @@ t_ssh_key_refusals() {
     check "[C86] naming the key and its file" said "${said_for[$case]}"
     check "[C86] before it makes any key home, and leaving no BUILD" bash -c '[[ ! -e $1/BUILD && ! -e $2/keys ]]' _ "$clone" "$state"
   done
+  local missing=
+  for program in gpg-agent gpgconf gpg-connect-agent ssh-add setsid base64; do
+    command -v "$program" > /dev/null || missing+=" $program"
+  done
+  if [[ -n $missing ]]; then
+    skip "[C86] not on PATH here:$missing, so that build takes an RSA key of 2048 bits is shown where they are"
+  else
+    rm -rf -- "$keys/node-rsa" "$clone/BUILD"
+    ssh-keygen -q -t rsa -b 2048 -N '' -f "$keys/node-rsa" < /dev/null
+    rm -f -- "$keys/node-rsa.pub"
+    check "[C86] build takes an RSA key of exactly 2048 bits, the floor" exit_is 0 wp build
+    check "[C86] and keys.json gives it the kind rsa 2048" \
+      test "$(jq -r '[.seats[].grants[] | select(.name == "node-rsa") | .kind] | unique | join(", ")' "$clone/BUILD/keys.json")" = "rsa 2048"
+  fi
   rm -rf -- "$keys/node-rsa" "$clone/BUILD"
   ssh-keygen -q -t rsa -b 3072 -m PEM -N '' -f "$keys/node-rsa" < /dev/null
   local without=$scratch/path-without-ssh-add dir entry

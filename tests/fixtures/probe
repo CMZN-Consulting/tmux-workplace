@@ -29,6 +29,16 @@ term_checks() {
   if [[ -n $other ]] && { printf '%s' 'other-pane-write-mark' > "$other"; } 2> /dev/null; then say "term other pane: written"; else say "term other pane: refused"; fi
 }
 term_file=""
+typed_file=""
+box=""
+await_answer() {
+  local i
+  for (( i = 0; i < 400; i++ )); do
+    [[ -f $box/answers/$1 ]] && return 0
+    pause 0.05
+  done
+  return 1
+}
 say "probe $name start cwd=$PWD"
 for argument in "$@"; do
   case $argument in
@@ -179,6 +189,56 @@ for argument in "$@"; do
       say "key commit: $got"
       ;;
     term=*) term_file=${argument#term=} ;;
+    typed=*) typed_file=${argument#typed=} ;;
+    entries=*)
+      place=${argument#entries=}
+      listing=("$place"/*)
+      if [[ -d $place ]]; then say "entries $place: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+      else say "entries $place: none"; fi
+      ;;
+    box=*)
+      box=${argument#box=}
+      for place in out in sent answers .; do
+        if { printf '%s\n' "$name" > "$box/$place/.probe-$name"; } 2> /dev/null; then put=ok; rm -f -- "$box/$place/.probe-$name"; else put=refused; fi
+        say "box $place: write=$put"
+      done
+      listing=("$box"/*)
+      say "box entries: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+      ;;
+    post=*)
+      spec=${argument#post=}
+      if cp -- "${spec#*:}" "$box/out/.${spec%%:*}" 2> /dev/null && mv -- "$box/out/.${spec%%:*}" "$box/out/${spec%%:*}" 2> /dev/null
+      then say "post ${spec%%:*}: ok"; else say "post ${spec%%:*}: refused"; fi
+      ;;
+    link=*)
+      spec=${argument#link=}
+      if ln -s -- "${spec#*:}" "$box/out/${spec%%:*}" 2> /dev/null; then say "link ${spec%%:*}: ok"; else say "link ${spec%%:*}: refused"; fi
+      ;;
+    node=*)
+      spec=${argument#node=}
+      case ${spec#*:} in
+        dir) mkdir -- "$box/out/${spec%%:*}" && printf '%s\n' inside > "$box/out/${spec%%:*}/inside" ;;
+        fifo) mkfifo -- "$box/out/${spec%%:*}" ;;
+        socket) python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$box/out/${spec%%:*}" ;;
+      esac 2> /dev/null
+      if [[ -e $box/out/${spec%%:*} ]]; then say "node ${spec%%:*}: $(stat -c %F -- "$box/out/${spec%%:*}")"; else say "node ${spec%%:*}: refused"; fi
+      ;;
+    answer=*)
+      spec=${argument#answer=}
+      if await_answer "$spec"; then IFS= read -r line < "$box/answers/$spec"; say "answer $spec: $line"; else say "answer $spec: none"; fi
+      ;;
+    second=*)
+      spec=${argument#second=}
+      say "$(python3 "${0%/*}/racer" second "$box" "${spec%%:*}" "${spec#*:}" 2>&1)"
+      ;;
+    race=*)
+      spec=${argument#race=}
+      say "$(python3 "${0%/*}/racer" race "$box" "${spec%%:*}" "${spec#*:}" 2>&1)"
+      ;;
+    lease=*)
+      spec=${argument#lease=}
+      say "$(python3 "${0%/*}/racer" lease "$box" "${spec%%:*}" "${spec#*:}" 2>&1)"
+      ;;
     *) say "arg [$argument]" ;;
   esac
 done
@@ -188,5 +248,9 @@ if [[ -n $term_file ]]; then
   say "probe $name term done"
   tput smcup
   say "full screen"
+fi
+if [[ -n $typed_file ]]; then
+  trap 'printf "%s\n" "interrupted" >> "$typed_file"; exit 0' INT
+  while IFS= read -r line; do printf '%s\n' "$line" >> "$typed_file"; done
 fi
 IFS= read -r _

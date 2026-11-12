@@ -36,21 +36,6 @@ $b[0] as $binding
          | select($v == "" or ($v | contains("/")) or ($v | startswith("-")))
          | "\($r.path), term \($r.n): '\($v)' is not a name: empty, holding a /, or beginning with -")
       end;
-  def structure_problems:
-    ($binding.structure // {}) as $s
-    | [terms[] | .term] as $all
-    | def keyed($p; $pos): [$all[] | select(.[0] == $p) | [.[$pos[]]]];
-      (($s["exactly-one"] // [])[] | . as $p | [$all[] | select(.[0] == $p)] | length as $n
-       | select($n != 1) | "the plan holds \($n) \($p) terms; it needs exactly one"),
-      (($s["unique-keys"] // [])[] | . as [$p, $pos] | keyed($p; $pos) | group_by(.) | map(select(length > 1))[]
-       | "the plan holds \(length) \($p) terms for \(.[0] | join("/")); one is allowed"),
-      (($s.requires // [])[] | . as [$p, $pos, $q, $qpos] | keyed($q; $qpos) as $have
-       | keyed($p; $pos) | unique[] | select(. as $k | $have | index([$k]) | not)
-       | "the \($p) term for \(join("/")) has no \($q) term");
-  def unique_problems:
-    ($binding.unique // [])[] | . as $u
-    | [terms[] | .term | select(.[0] == $u[0]) | .[$u[1]]] | group_by(.) | map(select(length > 1))[]
-    | "the name \(.[0]) is given to \(length) of the \($u[0]) terms; it must be unique";
   def seat_keys: [terms[] | .term | select(.[0] == "pane") | .[1:4]];
   def table_problems:
     seat_keys as $seats
@@ -99,7 +84,8 @@ $b[0] as $binding
     [problems] as $first
     | if ($first | length) > 0 then {errors: $first}
       else
-        [term_problems, unique_problems, structure_problems, table_problems, frame_problems] as $errors
+        [term_problems, ($plan | key_problems($binding), unique_problems($binding), structure_problems($binding), mail_problems($binding; $clone)),
+         table_problems, frame_problems] as $errors
         | if ($errors | length) > 0 then {errors: $errors}
           else
             {errors: [],

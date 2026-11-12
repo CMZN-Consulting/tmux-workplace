@@ -34,7 +34,7 @@ joined($b[0]; $root) as $plan
 | ($seats | map(.[0:2]) | unique) as $rooms
 | [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach")))] as $records
 | def known($scope; $n):
     if $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
@@ -85,6 +85,23 @@ joined($b[0]; $root) as $plan
           elif $t[0] == "home-variable" and ($t[3] | inner_path | not) then "\($where): \($t[3]) is not a path inside the home: it is written relative to the home, with no empty, . or .. component"
           elif $t[0] == "home-seed" and ($t[2] | canonical | not) then "\($where): \($t[2]) is not an absolute, canonical path"
           else empty end
+      elif $t[0] == "mail" then
+        if ($t | length) != 2 then "\($where): a mail has the words mail PATH, not \($t | length)"
+        elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
+        elif $t[1] == "/" then "\($where): a mail path of / would cover each seat's whole view with its mailbox"
+        else empty end
+      elif $t[0] == "reach" then
+        if ($t | length) != 11 then "\($where): a reach has the words reach A B C SCOPE ACTION TA TB TC TSCOPE STATE, not \($t | length)"
+        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a reach"
+        elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) reach cannot name \($t[1:4] | join(" "))"
+        elif known($t[4]; $t[1:4]) | not then "\($where): the reach names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
+        elif $t[5] == "record" then "\($where): record is the action of the Logs layer, which this frame does not build yet; a reach's action is mail, grab or write"
+        elif ($t[5] | IN("mail", "grab", "write") | not) then "\($where): \($t[5]) is not mail, grab or write"
+        elif ($t[9] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[9]) is not a scope of a reach's target"
+        elif places($t[9]; $t[6:9]) | not then "\($where): a \($t[9]) target cannot name \($t[6:9] | join(" "))"
+        elif known($t[9]; $t[6:9]) | not then "\($where): the reach's target names \(scope_text($t; $t[9]; $t[6:9])), which the plan does not make"
+        elif $t[10] | IN("allowed", "banned") | not then "\($where): \($t[10]) is not allowed or banned"
+        else empty end
       else
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
@@ -103,6 +120,9 @@ joined($b[0]; $root) as $plan
       | [$records[] | select(.term[0] == "clearance")] as $cleared
       | [$records[] | select(.term[0] == "label")] as $labelled
       | [$records[] | select(.term[0] == "key")] as $keyed
+      | [$records[] | select(.term[0] == "mail")] as $mailed
+      | [$records[] | select(.term[0] == "reach")] as $reached
+      | ($mailed | map(.term[1]) | unique) as $mail_paths
       | [($said | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two statements of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
          ($cleared | group_by(.term[1:5])[] | select((map(.term[5] | tonumber) | unique | length) > 1)
@@ -126,7 +146,18 @@ joined($b[0]; $root) as $plan
             ($seeded[] | select($home_of[.term[1]] == null)
              | "\(at(.origin)): the kind \(.term[1]) has a seed and no home"),
             ($seeded[] | select($home_of[.term[1]] != null and $home_of[.term[1]][3] == "scratch")
-             | "the kind \(.term[1]) has a seed and a scratch home, and build seeds only a kept one (the seed at \(at(.origin)); the home at \(home_at(.term[1]; .[3] == "scratch")))"))] as $conflicts
+             | "the kind \(.term[1]) has a seed and a scratch home, and build seeds only a kept one (the seed at \(at(.origin)); the home at \(home_at(.term[1]; .[3] == "scratch")))")),
+         (if ($mail_paths | length) > 1
+          then "two mail terms differ: \([$mail_paths[] as $p | "\($p) from \(ats([$mailed[] | select(.term[1] == $p) | .origin]))"] | join(", "))" else empty end),
+         ($reached | group_by(.term[1:10])[] | select((map(.term[10]) | unique | length) > 1)
+          | "two reach terms of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) to \(scope_text(.[0].term; .[0].term[9]; .[0].term[6:9])) differ: \(map("\(.term[10]) from \(at(.origin))") | join(", "))"),
+         (if ($reached | length) > 0 and ($mailed | length) == 0
+          then "the plan holds reach terms and no mail term, so no seat has a mailbox to ask in (the reach at \(ats([$reached[].origin])))" else empty end),
+         ($mail_paths[] as $m
+          | ($said[] | select(at_or_beneath(.term[5]; $m))
+             | "\(at(.origin)): the statement speaks of \(.term[5]), which lies at or beneath the mail path \($m), where the frame shows each seat its mailbox (the mail at \(ats([$mailed[] | select(.term[1] == $m) | .origin])))"),
+            ($labelled[] | select(at_or_beneath(.term[1]; $m))
+             | "\(at(.origin)): the label speaks of \(.term[1]), which lies at or beneath the mail path \($m), where the frame shows each seat its mailbox (the mail at \(ats([$mailed[] | select(.term[1] == $m) | .origin])))"))] as $conflicts
       | if ($conflicts | length) > 0 then {errors: $conflicts}
         else
           entities($said) as $statements
@@ -136,7 +167,17 @@ joined($b[0]; $root) as $plan
           | entities($home_variables) as $home_vars
           | entities($seeded) as $seeds
           | entities($expected) as $expects
-          | (entities($labelled) | map({path: .term[1], value: (.term[2] | tonumber), origins}) | sort_by((.path | depth), .path)) as $labels
+          | entities($reached) as $reaches
+          | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
+          | def holds($scope; $n; $k):
+              $scope == "workplace" or ($scope == "office" and $n[0] == $k[0]) or ($scope == "room" and $n[0:2] == $k[0:2]) or ($scope == "seat" and $n == $k);
+            def decide($action; $k; $tk):
+              [$reaches[] | select(.term[5] == $action and holds(.term[4]; .term[1:4]; $k) and holds(.term[9]; .term[6:9]; $tk))] as $c
+              | if ($c | length) == 0 then {state: (if $action == "mail" then "allowed" else "banned" end), origins: []}
+                else ($c | map(.term[4] | rank) | max) as $ask | [$c[] | select((.term[4] | rank) == $ask)] as $narrow
+                  | ($narrow | map(.term[9] | rank) | max) as $tgt | [$narrow[] | select((.term[9] | rank) == $tgt)][0]
+                  | {state: .term[10], origins} end;
+            (entities($labelled) | map({path: .term[1], value: (.term[2] | tonumber), origins}) | sort_by((.path | depth), .path)) as $labels
           | [$panes[] | . as $pane | $pane[1:4] as $k | ($kinds[$k | tojson] // "none") as $kind
              | [$statements[] | select(
                  .term[4] == "workplace"
@@ -173,13 +214,21 @@ joined($b[0]; $root) as $plan
                 | map({name: .[0].term[5], scopes: (map(.term[4]) | unique | sort_by(rank)), origins: [.[].origins[]]})) as $expecting
              | ([$remaining[] | {key: .term[5], value: {key: ($k + [.term[5]]), value: [.term[6]], origins, source: "statement", term}}]
                 | from_entries) as $stated
-             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated}]
+             | (if $mail == null then null
+                else [["mail", "grab", "write"][] as $action
+                      | {key: $action, value: [$panes[] | . as $tp | decide($action; $k; $tp[1:4]) | select(.state == "allowed") | {name: $tp[4], origins}]}]
+                     | from_entries end) as $reach
+             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach}]
           as $folds
           | [$folds[] | select(.home != null) | . as $f
              | ([$f.home.variable] + [$f.home.variables[].name]) as $given
              | $f.expects[] | .name as $n | select($given | index($n))
              | "seat \($f.name) (\($f.seat | join("/"))): it expects the value \(.name), which the home of its kind \($f.home.kind) gives it (the expect at \(ats(.origins)); the home at \(ats($f.home.origins + [$f.home.variables[] | select(.name == $n) | .origins[]])))"] as $clashes
-          | [$folds[] | select(.stated | has("/") | not) | "seat \(.name) (\(.seat | join("/"))): no row for /"] as $rootless
+          | [$folds[] | select(.stated | has("/") | not)
+             | "seat \(.name) (\(.seat | join("/"))): no row for /"
+               + (if $mail != null or ($reached | length) > 0
+                  then ": it has no view, and a seat with no view could write as any seat, which the plan's \(if $mail != null then "mail" else "reach" end) terms do not allow (at \(ats(if $mail != null then $mail.origins else [$reached[].origin] end)))"
+                  else "" end)] as $rootless
           | if ($clashes | length) > 0 then {errors: $clashes}
             elif ($rootless | length) > 0 then {errors: $rootless}
             else
@@ -204,7 +253,10 @@ joined($b[0]; $root) as $plan
                      | "seat \($f.name) (\($f.seat | join("/"))): \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) lies beneath \(.key[3]) (hidden, from \(ats(.origins)))")),
                  ($f.rows[] | . as $r | select($r.value[0] != "hidden")
                   | ($labels[] | select(.value > $f.clearance.value and at_or_beneath($r.key[3]; .path))
-                     | "seat \($f.name) (\($f.seat | join("/"))): \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) lies at or beneath \(.path), labelled \(.value) (from \(ats(.origins))), above the seat's clearance \($f.clearance.value)"))]
+                     | "seat \($f.name) (\($f.seat | join("/"))): \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) lies at or beneath \(.path), labelled \(.value) (from \(ats(.origins))), above the seat's clearance \($f.clearance.value)")),
+                 (if $mail == null then empty
+                  else $f.rows[] | select(.value[0] == "hidden" and beneath($mail.path; .key[3]))
+                    | "seat \($f.name) (\($f.seat | join("/"))): its mailbox at \($mail.path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the mail at \(ats($mail.origins)))" end)]
             as $refused
             | if ($refused | length) > 0 then {errors: $refused}
               else
@@ -215,7 +267,7 @@ joined($b[0]; $root) as $plan
                     | {statement: ($r | statement_object), replaced: $under}] | sort_by(.statement.term[5]) as $replacing
                  | $f + {replacing: $replacing, distinct: ([$replacing[].replaced[].term] | unique | length)}]
                 as $done
-                | {view: {
+                | {view: ({
                     rows: [$done[].rows[] | {key, value, origins, source}],
                     seats: [$done[] | {
                       seat, kind,
@@ -223,14 +275,17 @@ joined($b[0]; $root) as $plan
                       key}
                      + (if .home == null then {} else {home} end)
                      + (if (.expects | length) == 0 then {} else {expects} end)
+                     + (if .reach == null then {} else {reach: (.reach | map_values(map(.name)))} end)
                      + {
                       rows: (.rows | length),
                       replacement_statements: .replacing,
                       exception_count: (.replacing | length),
                       distinct_replaced_statement_count: .distinct,
-                      statements_at_labelled_paths: .at}]},
+                      statements_at_labelled_paths: .at}]}
+                    + (if $mail == null then {} else {mail: $mail} end)),
                    report: {
                      names: [$done[] | {key: (.seat | tojson), value: .name}] | from_entries,
+                     reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,
                      pairs: [$labels[] as $upper | $labels[] | . as $lower
                        | select(beneath($lower.path; $upper.path) and $lower.value < $upper.value)
                        | {upper: $upper, lower: $lower,

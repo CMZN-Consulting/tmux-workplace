@@ -1,0 +1,108 @@
+import ctypes, fcntl, os, signal, struct, sys, time
+
+mode, box, name, spec = sys.argv[1:5]
+out, answers = os.path.join(box, "out"), os.path.join(box, "answers")
+libc = ctypes.CDLL(None, use_errno=True)
+IN_ACCESS, IN_OPEN, IN_ISDIR = 0x1, 0x20, 0x40000000
+fd = libc.inotify_init1(os.O_NONBLOCK)
+opened = 0
+
+
+def watch(path, by_name):
+    if fd < 0 or libc.inotify_add_watch(fd, path.encode(), IN_ACCESS | IN_OPEN) < 0:
+        print(f"{mode} {name}: no inotify")
+        sys.exit(0)
+    globals()["by_name"] = by_name
+
+
+def drain():
+    global opened
+    while True:
+        try:
+            data = os.read(fd, 65536)
+        except BlockingIOError:
+            return
+        i = 0
+        while i < len(data):
+            _, mask, _, size = struct.unpack_from("iIII", data, i)
+            entry = data[i + 16:i + 16 + size].rstrip(b"\0").decode(errors="replace")
+            if mask & IN_OPEN and not mask & IN_ISDIR and (entry == name if by_name else size == 0):
+                opened += 1
+            i += 16 + size
+
+
+def answered(seconds):
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if os.path.exists(os.path.join(answers, name)):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+place = os.path.join(out, name)
+if mode == "race":
+    target, content_file, seconds = spec.split(":")
+    content = open(content_file, "rb").read()
+    watch(out, True)
+    link, prep = os.path.join(out, ".link"), os.path.join(out, ".prep")
+    swaps = 0
+    end = time.monotonic() + float(seconds)
+    as_link = False
+    while time.monotonic() < end:
+        try:
+            if as_link:
+                if os.path.lexists(link):
+                    os.unlink(link)
+                os.symlink(target, link)
+                os.rename(link, place)
+            else:
+                with open(prep, "wb") as f:
+                    f.write(content)
+                os.rename(prep, place)
+            swaps += 1
+        except OSError:
+            pass
+        as_link = not as_link
+        drain()
+    for left in (place, link, prep):
+        try:
+            os.unlink(left)
+        except OSError:
+            pass
+    time.sleep(0.2)
+    drain()
+    print(f"race {name}: swaps={swaps} opened={opened}")
+elif mode == "second":
+    draft, second = os.path.join(out, "." + name), os.path.join(out, "." + name + ".second")
+    with open(spec, "rb") as src, open(draft, "wb") as f:
+        f.write(src.read())
+    os.link(draft, second)
+    watch(second, False)
+    os.rename(draft, place)
+    got = answered(20)
+    time.sleep(0.2)
+    drain()
+    seen = opened
+    try:
+        with open(second, "ab") as f:
+            f.write(b"changed through a second name\n")
+        written = "ok"
+    except OSError:
+        written = "gone"
+    print(f"second {name}: answered={'yes' if got else 'no'} opened={seen} written={written}")
+elif mode == "lease":
+    draft = os.path.join(out, "." + name)
+    with open(spec, "rb") as src, open(draft, "wb") as f:
+        f.write(src.read())
+    signal.signal(signal.SIGIO, signal.SIG_IGN)
+    held = os.open(draft, os.O_RDONLY)
+    try:
+        fcntl.fcntl(held, fcntl.F_SETLEASE, fcntl.F_WRLCK)
+        lease = "held"
+    except OSError as e:
+        lease = f"refused {e.errno}"
+    os.rename(draft, place)
+    got = answered(20)
+    print(f"lease {name}: lease={lease} answered={'yes' if got else 'no'}")
+    os.close(held)

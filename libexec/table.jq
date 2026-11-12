@@ -76,6 +76,88 @@ def clone_problems($binding; $clone):
      | .term[$d.path] as $p | select($p | inside)
      | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies in the clone \($clone), which the frame masks in every view");
 
+def key_fault:
+  if type != "string" then "it is not text"
+  elif . == "" then "it is empty"
+  elif . == "-" then "it is -, which the terms write for a key that a scope does not use"
+  elif . == "." or . == ".." then "it is \(.)"
+  elif startswith("-") then "it begins with -"
+  elif contains("/") then "it holds a /"
+  elif (explode | any(. < 32 or (. >= 127 and . < 160))) then "it holds a control character"
+  elif (explode | any(. == 32 or . == 160 or . == 5760 or (. >= 8192 and . <= 8202) or . == 8232 or . == 8233 or . == 8239 or . == 8287 or . == 12288 or . == 65279))
+  then "it holds white space"
+  else null end;
+
+def plan_terms:
+  [(.programs // [])[] | select(type == "object") | (.path // "a program") as $file
+   | (.plan // []) | to_entries[] | {file: $file, n: (.key + 1), term: (.value | if type == "object" and has("term") then .term else . end)}
+   | select((.term | type) == "array" and (.term[0] | type) == "string")];
+
+def term_at: "\(.file), term \(.n)";
+
+def key_problems($binding):
+  ($binding.keys // {}) as $places
+  | def at($o): "\($o.path // "the plan"):\($o.line // "?")";
+    (plan_terms[] | . as $r | ($places[$r.term[0]] // [])[] | select(. < ($r.term | length)) | $r.term[.] as $v
+     | ($v | key_fault) as $fault | select($fault != null)
+     | "\($r | term_at) (\($r.term[0])): the key \($v | tojson) is refused: \($fault)"),
+    (if (.state | type) == "object" then
+       ((.state["seat-kinds"] // [])[] | select(type == "object") | . as $row | ($row.value[0]? // null) as $v
+        | select($v != null and $v != "none") | ($v | key_fault) as $fault | select($fault != null)
+        | "\(at($row.origin // {})) (state seat-kinds): the kind \($v | tojson) is refused: \($fault)"),
+       ((.state.kinds // [])[] | select(type == "object") | . as $row | ($row.key[0]? // null) as $v
+        | select($v != null and $v != "none") | ($v | key_fault) as $fault | select($fault != null)
+        | "\(at($row.origin // {})) (state kinds): the kind \($v | tojson) is refused: \($fault)")
+     else empty end);
+
+def unique_problems($binding):
+  plan_terms as $terms
+  | ($binding.unique // [])[] | . as [$word, $pos]
+  | [$terms[] | select(.term[0] == $word and (.term | length) > $pos)] | group_by(.term[$pos])[] | select(length > 1)
+  | "the name \(.[0].term[$pos]) is given to \(length) of the \($word) terms; it must be unique (\(map(term_at) | join("; ")))";
+
+def structure_problems($binding):
+  ($binding.structure // {}) as $s
+  | plan_terms as $all
+  | def keyed($p; $pos): [$all[] | select(.term[0] == $p) | . + {k: [.term[$pos[]]]}];
+    (($s["exactly-one"] // [])[] | . as $p | [$all[] | select(.term[0] == $p)] as $have
+     | select(($have | length) != 1)
+     | "the plan holds \($have | length) \($p) terms; it needs exactly one\(if ($have | length) > 1 then " (\($have | map(term_at) | join("; ")))" else "" end)"),
+    (($s["unique-keys"] // [])[] | . as [$p, $pos] | keyed($p; $pos) | group_by(.k) | map(select(length > 1))[]
+     | "the plan holds \(length) \($p) terms for \(.[0].k | join("/")); one is allowed (\(map(term_at) | join("; ")))"),
+    (($s.requires // [])[] | . as [$p, $pos, $q, $qpos] | [keyed($q; $qpos)[].k] as $have
+     | keyed($p; $pos) | group_by(.k)[] | select(.[0].k as $k | $have | index([$k]) | not)
+     | "the \($p) term for \(.[0].k | join("/")) has no \($q) term (\(map(term_at) | join("; ")))");
+
+def mail_paths: [(.programs // [])[] | select(type == "object") | (.recorded // [])[] | select(type == "object" and (.term | type) == "array" and .term[0] == "mail" and (.term | length) == 2) | .term[1] | strings] | unique;
+
+def mail_problems($binding; $clone):
+  . as $plan
+  | mail_paths as $mails
+  | if ($mails | length) == 0 then empty
+    else
+      def under($p; $q): $q == "/" or $p == $q or ($p | startswith($q + "/"));
+      def at($o; $file): "\($o.path // $file):\($o.line // "?")";
+      ($binding.directories // {}) as $d
+      | ($mails[] | select(under(.; $clone))
+         | "the mail path \(.) lies at or beneath the clone \($clone), which the frame masks in every view"),
+        ($mails[] | select(. == "/") | "the mail path / would cover each seat's whole view with its mailbox"),
+        ($mails[] | select(. != "/") as $m
+         | ($plan | plan_terms[] | . as $r | ($binding.primitives[$r.term[0]].seat // null) as $seat | select($seat != null)
+            | (($seat.directory.path? // empty) | select(. < ($r.term | length)) | $r.term[.] | select(type == "string" and under(.; $m))
+               | "\($r | term_at) (\($r.term[0])): the seat's directory \(.) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox"),
+              (($seat.argv // empty) | select(. < ($r.term | length)) | ($r.term[.] | try fromjson catch null)
+               | select(type == "array") | .[0] | select(type == "string" and startswith("/") and under(.; $m))
+               | "\($r | term_at) (\($r.term[0])): the seat's program \(.) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox")),
+           (($plan.programs // [])[] | select(type == "object") | (.path // "a program") as $file | (.recorded // [])[]
+            | select(type == "object" and (.term | type) == "array" and .term[0] == $d.recorded and (.term | length) > $d.path)
+            | .term[$d.path] as $p | select(($p | type) == "string" and under($p; $m))
+            | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox")),
+        ($plan | plan_terms[] | select(.term[0] == "pane" and (.term | length) > 4) | . as $r | .term[4] | strings
+         | select(contains(",") or test("^\\s|\\s$"))
+         | "\($r | term_at) (pane): the name \(tojson) cannot be named in a mail's head, which separates its readers by commas: a seat's name holds no comma and neither begins nor ends with white space when the plan holds mail")
+    end;
+
 def seat_names($plan):
   [($plan | if type == "object" then .programs[]? else empty end) | select(type == "object") | (.plan // [])[]
    | (if type == "object" and has("term") then .term else . end)
@@ -103,9 +185,6 @@ def given_problems($binding; $plan; $view):
          then [{name: $seat.home.variable, by: "has a home", what: "the home", origins: $seat.home.origins}]
               + [$seat.home.variables[] | {name, by: "has a home", what: "the home variable", origins}]
          else [] end);
-    ($seats[] | select(.home != null) | . as $s
-     | ([.home.kind] + .seat | unique[]) | select(. == "" or . == "." or . == ".." or contains("/"))
-     | "seat \(who($s.seat)): its home is named by its kind and its keys, \($s.home.kind)/\($s.seat | join("/")), and \(tojson) cannot be one directory of that name"),
     ($binding.tables[] | select(has("name")) | . as $spec
      | table_rows($plan; $view; $spec)[] | . as $row
      | ($seats[] | select(.seat == $row.key[0:3])) as $seat

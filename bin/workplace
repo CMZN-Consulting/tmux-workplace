@@ -14,8 +14,12 @@ TMUX_FLOOR=3.5a
 JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-v4
+GIT_FLOOR=2.32
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-v5
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
+MAIL_PROGRAMS=(git flock dd mv tail date)
+MAIL_LIMIT=256000
+TEXT_LIMIT=4096
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "workplace: $*" >&2; }
@@ -105,7 +109,7 @@ json_list() {
 
 plan_report() {
   local plan=$1 binding=$2 checker=$3 folded_view=${4:-/dev/null} errors
-  report=$(jq -c -L "${checker%/*}" --arg root "$root" --slurpfile b "$binding" --slurpfile folded "$folded_view" -f "$checker" "$plan" 2>&1) \
+  report=$(jq -c -L "${checker%/*}" --arg root "$root" --arg clone "$clone" --slurpfile b "$binding" --slurpfile folded "$folded_view" -f "$checker" "$plan" 2>&1) \
     || die "the plan is not JSON that jq can read: $report"
   [[ -n $report ]] || die "the plan $plan is empty"
   mapfile -t errors < <(jq -r '.errors[]' <<< "$report")
@@ -334,6 +338,19 @@ refuse_rows() {
   return 1
 }
 
+refuse_terms() {
+  local found
+  local -a faults
+  found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --slurpfile b "$tool/host/binding.json" '
+    include "table";
+    joined($b[0]; $root) | key_problems($b[0]), unique_problems($b[0]), mail_problems($b[0]; $clone)' "$1") \
+    || { warn "cannot read $1 for its keys, its names and its mail path"; return 1; }
+  [[ -z $found ]] && return 0
+  mapfile -t faults <<< "$found"
+  printf 'workplace: %s\n' "${faults[@]}" >&2
+  return 1
+}
+
 refuse_paths() {
   local -a faults
   mapfile -t faults < <(jq -r -L "$tool/libexec" --slurpfile b "$tool/host/binding.json" 'include "table"; path_problems($b[0])' "$1")
@@ -380,12 +397,19 @@ print_fold_report() {
     def ats($os): [$os[] | at(.)] | join(", ");
     def said($s): "\($s.term[4]) \([$s.term[1:4][] | select(. != "-")] | join("/") | if . == "" then "" else . + " " end)\($s.term[5]) \($s.term[6]) (\(ats($s.origins)))";
     .report.names as $names
-    | (.view.seats[]
+    | (.report.reach // {}) as $reach
+    | (if .view.mail == null then empty else "mail: \(.view.mail.path), where each seat is shown its own mailbox (\(ats(.view.mail.origins)))" end),
+      (.view.seats[]
        | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); clearance \(.clearance.value)"
          + (if .clearance.scope == null then ", by default" else ", the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)
          + (if .home == null then "" else "; home \(.home.state), by \(.home.variable)" end)
          + (if .expects == null then "" else "; expects \([.expects[].name] | join(", "))" end)
          + "; \(.rows) rows",
+         (if $reach[.seat | tojson] == null then empty
+          else $reach[.seat | tojson] as $r
+            | ["mail", "grab", "write"][] as $a
+            | "  \($a): \(if ($r[$a] | length) == 0 then "no seat" else [$r[$a][] | .name + (if (.origins | length) > 0 then " (\(ats(.origins)))" else "" end)] | join(", ") end)"
+          end),
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
@@ -461,6 +485,7 @@ cmd_plan() {
     || die "the plan was made on facts ($facts); a plan whose facts member is not none is refused for now, since 5.15 leaves open which facts build compares"
   refuse_paths "$work/plan.json" || die "the plan refuses a path; PLAN/ is as it was"
   refuse_clone "$work/plan.json" || die "the plan places a seat in the clone; PLAN/ is as it was"
+  refuse_terms "$work/plan.json" || die "the plan refuses a key, a name or its mail path; PLAN/ is as it was"
   local -a outputs=(plan.json)
   folded=""
   if folds "$work/plan.json" "$tool/host/binding.json"; then
@@ -704,12 +729,13 @@ make_homes() {
   [[ -d $homes && ! -L $homes && $(stat -c %a -- "$homes") == 700 ]] \
     || die "$homes is not a directory of mode 700, where build keeps the seats' homes" 2
   if [[ -e $record || -L $record ]]; then
-    [[ -f $record && ! -L $record ]] && owners=$(jq -c 'if type == "object" and all(.[]; type == "object" and (.seat | type) == "string" and (.state | IN("made", "seeding"))) then . else error("") end' "$record" 2> /dev/null) \
+    [[ -f $record && ! -L $record ]] && owners=$(jq -c 'if type == "object" and all(.[]; type == "object" and (.seat | type) == "string" and (.state | IN("made", "seeding"))
+      and ((.words // []) | type == "array" and all(.[]; type == "string"))) then . else error("") end' "$record" 2> /dev/null) \
       || die "$record is not the frame's record of the seats' homes" 2
   fi
   local directories
   directories=$(seat_directories "$plan_dir/plan.json") || die "cannot read the seats' directories" 2
-  local entries='[]' holder name place path state variable seed kind owner made pairs who out status hname dir
+  local entries='[]' holder name place path state variable seed kind owner made pairs who out status hname dir seeded_with
   local -a seat words environment inherit
   mapfile -t inherit < <(jq -r '.inherit[]' "$tool/host/binding.json")
   local setpriv_program env_program
@@ -727,6 +753,11 @@ make_homes() {
     seed=$(jq -r '.home.seed.path // ""' <<< "$holder")
     pairs=$(jq -c --arg p "$path" '[[.home.variable, $p]] + [.home.variables[] | [.name, (if .path == "." then $p else $p + "/" + .path end)]]' <<< "$holder")
     made=false
+    words=()
+    if [[ -n $seed ]]; then
+      words=("$path")
+      mapfile -t -O 1 words < <(jq -r --arg k "$(jq -c '.seat' <<< "$holder")" --arg home "$path" '.[$k] // [] | .[] | select(. != $home)' <<< "$directories")
+    fi
     if [[ $state == kept ]]; then
       owner=$(jq -r --arg h "$hname" '.[$h].seat // ""' <<< "$owners")
       if [[ -e $path || -L $path ]]; then
@@ -741,6 +772,10 @@ make_homes() {
         else
           [[ -d $path && ! -L $path && $(stat -c %a -- "$path") == 700 && $(stat -c %u -- "$path") == "$EUID" ]] \
             || die "build refuses: the home $path of $who is not a directory of this user's with mode 700"
+          seeded_with=$(jq -c --arg h "$hname" '.[$h].words // empty' <<< "$owners")
+          if [[ -n $seed && -n $seeded_with && $seeded_with != "$(json_list "${words[@]}")" ]]; then
+            say "home: $who would now be seeded with $(json_list "${words[@]:1}" | jq -r 'if length == 0 then "no directory" else join(" ") end'), and its home $path was seeded with $(jq -r '.[1:] | if length == 0 then "no directory" else join(" ") end' <<< "$seeded_with"); build does not seed it again"
+          fi
         fi
       fi
       if [[ ! -e $path ]]; then
@@ -750,11 +785,10 @@ make_homes() {
         home_parents "$homes" "$hname" make || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where build keeps the homes of the kind $kind"
         mkdir -m 0700 -- "$path" || die "cannot make the home $path" 2
         made=true
-        owners=$(jq -c --arg h "$hname" --arg s "$place" --arg st "$([[ -n $seed ]] && printf seeding || printf made)" '.[$h] = {seat: $s, state: $st}' <<< "$owners")
+        owners=$(jq -c --arg h "$hname" --arg s "$place" --arg st "$([[ -n $seed ]] && printf seeding || printf made)" --argjson w "$(json_list "${words[@]}")" \
+          '.[$h] = {seat: $s, state: $st} + (if ($w | length) > 0 then {words: $w} else {} end)' <<< "$owners")
         record_homes "$owners" "$record" || die "cannot write $record" 2
         if [[ -n $seed ]]; then
-          words=("$path")
-          mapfile -t -O 1 words < <(jq -r --arg k "$(jq -c '.seat' <<< "$holder")" --arg home "$path" '.[$k] // [] | .[] | select(. != $home)' <<< "$directories")
           environment=()
           for out in "${inherit[@]}"; do [[ -n ${!out+x} ]] && environment+=("$out=${!out}"); done
           mapfile -t -O "${#environment[@]}" environment < <(jq -r '.[] | "\(.[0])=\(.[1])"' <<< "$pairs")
@@ -784,6 +818,69 @@ make_homes() {
   rm -f -- "$build_dir/seed.out"
   jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir/homes.json" \
     || die "cannot write $build_dir/homes.json" 2
+}
+
+make_dirs() { home_parents "$1" "$2/x" make; }
+
+need_mail_programs() {
+  local program found version
+  for program in "${MAIL_PROGRAMS[@]}"; do
+    command -v "$program" > /dev/null || { warn "a plan that holds mail needs $program, and $program is not on PATH"; return 2; }
+  done
+  found=$(version_of git --version) || { warn "cannot read git's version"; return 2; }
+  at_least "$found" "$GIT_FLOOR" || { warn "git $found found; a plan that holds mail needs $GIT_FLOOR or later"; return 2; }
+}
+
+store_env() {
+  local store=$1
+  shift
+  env -i PATH="$PATH" LC_ALL=C HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_LITERAL_PATHSPECS=1 "$@"
+}
+
+make_mail() {
+  local workplace=$1 path state_dir store comms entries='[]' seat name box rel status
+  path=$(jq -r '.view.mail.path // empty' <<< "$folded")
+  [[ -n $path ]] || return 0
+  need_mail_programs || exit $?
+  [[ -d $path ]] || die "build refuses: the mail path $path is not a directory on the machine, and the frame shows each seat its mailbox there"
+  state_dir=$(state_root) || die "build needs the workplaces' state directory for the mail, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
+  if [[ $path == "$state_dir" || $path == "$state_dir"/* || $state_dir == "$path"/* ]]; then
+    die "build refuses: the mail path $path and the workplaces' state directory $state_dir lie one in the other; a mailbox there would cover the seats' homes and keys, or stand where the frame keeps its state"
+  fi
+  state_dir=$state_dir/$workplace
+  [[ -d $state_dir && ! -L $state_dir ]] || die "the state directory $state_dir is missing" 2
+  store=$state_dir/mail comms=$state_dir/comms
+  if [[ ! -e $store && ! -L $store ]]; then
+    mkdir -m 0700 -- "$store" || die "cannot make $store" 2
+    store_env "$store" git init -q --template= -b mail -- "$store" > "$build_dir/git.out" 2>&1
+    status=$?
+    if (( status != 0 )); then
+      rm -rf -- "$store"
+      die "cannot make the mail's repository $store: $(tail -n 1 "$build_dir/git.out")" 2
+    fi
+    rm -f -- "$build_dir/git.out"
+    say "mail: the store $store is made"
+  fi
+  [[ -d $store && ! -L $store && -d $store/.git && ! -L $store/.git && $(stat -c %a -- "$store") == 700 && $(stat -c %u -- "$store") == "$EUID" ]] \
+    || die "build refuses: $store is not the mail's repository, a directory of this user's with mode 700 that holds .git"
+  make_dirs "$state_dir" comms/taken || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
+  if [[ ! -e $comms/record && ! -L $comms/record ]]; then
+    : > "$comms/record" && chmod 0600 -- "$comms/record" || die "cannot make $comms/record" 2
+  fi
+  [[ -f $comms/record && ! -L $comms/record ]] || die "build refuses: $comms/record is not the carrier's record, a file"
+  while IFS= read -r seat; do
+    name=$(jq -r '.name' <<< "$seat")
+    box=$(jq -r '.seat | join(" ")' <<< "$seat")
+    for rel in "mail/$box/in" "mail/$box/sent" "comms/$box/out" "comms/$box/answers"; do
+      make_dirs "$state_dir" "$rel" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the mailbox of $name stands"
+    done
+    entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg store "$store" --arg comms "$comms" \
+      '. + [$s + {box: $box, in: "\($store)/\($box)/in", sent: "\($store)/\($box)/sent", out: "\($comms)/\($box)/out", answers: "\($comms)/\($box)/answers"}]' <<< "$entries")
+  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach}' <<< "$folded")
+  jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
+    '{workplace: $w, state: $s, path: $p, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
+    || die "cannot write $build_dir/mail.json" 2
+  say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path"
 }
 
 manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
@@ -946,7 +1043,8 @@ cmd_build() {
       | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson], home: .value.home}]' <<< "$folded") || die "cannot read the seats that have a home" 2
   fi
   make_homes "$holders" "$(jq -r '.name // "default"' <<< "$report")"
-  for name in keys.json homes.json; do
+  [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
+  for name in keys.json homes.json mail.json; do
     if [[ -f $build_dir/$name ]]; then
       copy_sums+=("$(cd -- "$build_dir" && sha256sum -- "$name")") || die "cannot hash $build_dir/$name"
     fi
@@ -1399,6 +1497,62 @@ set_homes() {
   done < <(jq -c '.seats[]' "$homes")
 }
 
+set_mail() {
+  local mail=$build_dir/mail.json made_in state_dir entry dir
+  [[ -f $mail ]] || return 0
+  made_in=$(jq -r '.state' "$mail")
+  state_dir=$(workplace_state "$(jq -r '.workplace' "$mail")") || state_dir=""
+  if [[ $made_in != "$state_dir" ]]; then
+    warn "the mail was made in $made_in, and this shell's state directory is ${state_dir:-unknown}; build again from this shell"
+    return 1
+  fi
+  need_mail_programs || return 1
+  dir=$(jq -r '.path' "$mail")
+  [[ -d $dir ]] || { warn "the mail path $dir is not a directory on the machine; the frame shows each seat its mailbox there"; return 1; }
+  while IFS= read -r entry; do
+    for dir in in sent out answers; do
+      dir=$(jq -r --arg d "$dir" '.[$d]' <<< "$entry")
+      [[ -d $dir && ! -L $dir ]] || { warn "the mailbox $dir of $(jq -r '.name' <<< "$entry") is missing; build again"; return 1; }
+    done
+    state=$(jq -c --argjson e "$entry" --arg p "$(jq -r '.path' "$mail")" '
+      .slots[(["mail-path"] | tojson)] = $p
+      | reduce ("out", "in", "sent", "answers") as $d (.; .slots[(["mail-" + $d] + $e.seat | tojson)] = $e[$d])' <<< "$state")
+  done < <(jq -c '.seats[]' "$mail")
+}
+
+start_carrier() {
+  [[ -f $build_dir/mail.json ]] || return 0
+  local setpriv_program stat_program pid ident i fd now
+  setpriv_program=$(command -v setpriv) && stat_program=$(command -v stat) || { warn "up needs setpriv and stat for the carrier"; return 1; }
+  mkdir -- "$run_dir/carrier" && ident=$(stat -c %d:%i -- "$run_dir/carrier") || { warn "cannot make $run_dir/carrier"; return 1; }
+  ( cd / && exec "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry < /dev/null > "$run_dir/carrier.log" 2>&1 ) &
+  pid=$!
+  exec {fd}<> <(:)
+  for (( i = 0; i < 100; i++ )); do
+    [[ -e $run_dir/carrier/ready ]] && break
+    now=$(stat -L -c %d:%i -- "/proc/$pid/cwd" 2> /dev/null) || break
+    read -r -t 0.1 -u "$fd" _
+  done
+  exec {fd}<&-
+  now=$(stat -L -c %d:%i -- "/proc/$pid/cwd" 2> /dev/null) || now=""
+  if [[ ! -e $run_dir/carrier/ready || $now != "$ident" ]]; then
+    kill -TERM "$pid" 2> /dev/null
+    warn "the carrier did not start: $(tail -n 1 "$run_dir/carrier.log" 2> /dev/null)"
+    return 1
+  fi
+  jq -c -n --arg what "the carrier, pid $pid" --arg is "$ident" \
+    --argjson when "$(json_list "$stat_program" -L -c %d:%i -- "/proc/$pid/cwd")" \
+    --argjson call "$(json_list "$BASH" "$build_dir/bin/workplace" carrier-end "$pid" "$ident")" \
+    '{what: $what, when: $when, is: $is, call: $call}' >> "$run_dir/ledger"
+  jq -c -n --arg what "the carrier, pid $pid" --arg is "$ident" \
+    --arg note "requests wait in the seats' out, and none is lost, until the workplace is brought down and up again" \
+    --argjson call "$(json_list "$stat_program" -L -c %d:%i -- "/proc/$pid/cwd")" \
+    '{what: $what, is: $is, note: $note, call: $call}' >> "$run_dir/checks"
+  where=up
+  meets no-new-privs "$pid" || return 1
+  say "up: the carrier, pid $pid"
+}
+
 cmd_up() {
   (( $# == 0 )) || die "up takes no arguments" 2
   need_jq
@@ -1432,10 +1586,10 @@ cmd_up() {
     rm -rf -- "$run_dir"
     die "up refuses before its first term, and starts nothing"
   fi
-  if ! set_homes || ! start_agents; then
+  if ! set_homes || ! start_agents || ! set_mail || ! start_carrier; then
     teardown failed
     rm -rf -- "$run_dir"
-    die "up stopped before its first term; every agent it started is ended"
+    die "up stopped before its first term; every agent and carrier it started is ended"
   fi
   local -a records
   local ordered
@@ -1540,6 +1694,333 @@ cmd_exec() {
   exec "${argv[@]}"
 }
 
+carrier_pause() { read -r -t "$1" -u "$pause_fd" _ || :; }
+
+carrier_git() {
+  local -a dates=()
+  [[ -n ${carrier_at-} ]] && dates=(GIT_AUTHOR_DATE="$carrier_at" GIT_COMMITTER_DATE="$carrier_at")
+  store_env "$store" GIT_DIR="$store/.git" GIT_WORK_TREE="$store" GIT_AUTHOR_NAME=workplace GIT_AUTHOR_EMAIL=carrier@workplace \
+    GIT_COMMITTER_NAME=workplace GIT_COMMITTER_EMAIL=carrier@workplace "${dates[@]}" \
+    git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false -c gc.auto=0 -c maintenance.auto=false "$@" 9>&-
+}
+
+carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -L "$carrier_server" -u "$@" 9>&-; }
+
+carrier_next_id() {
+  local n=0
+  [[ -f $comms/next ]] && { IFS= read -r n < "$comms/next" || :; }
+  [[ $n =~ ^[0-9]+$ ]] || n=0
+  n=$(( 10#$n + 1 ))
+  printf '%s\n' "$n" > "$comms/next.new" && mv -f -- "$comms/next.new" "$comms/next" || return 1
+  printf -v carrier_id '%s-%06d' "$(date -u +%Y%m%dT%H%M%SZ)" "$n"
+}
+
+carrier_answer() {
+  local answers=$1 name=$2 file=$taken/$carrier_id.answer
+  shift 2
+  printf '%s\n' "$@" > "$file" && mv -fT -- "$file" "$answers/$name"
+}
+
+carrier_record() {
+  local seat=$1 name=$2 action=$3 targets=$4 outcome=$5 reason=$6 written=${7-}
+  jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg id "$carrier_id" --arg seat "$seat" --arg request "$name" \
+    --arg action "$action" --argjson target "$targets" --arg outcome "$outcome" --arg reason "$reason" --arg written "$written" '
+    {at: $at, id: $id, seat: $seat, request: $request, action: $action, target: $target, outcome: $outcome}
+    + (if $reason == "" then {} else {reason: $reason} end)
+    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)' >> "$comms/record"
+}
+
+carrier_refuse() {
+  local i=$1 name=$2 action=$3 targets=$4 reason=$5
+  carrier_answer "${seat_answers[i]}" "$name" "refused $reason"
+  carrier_record "${seat_names[i]}" "$name" "$action" "$targets" refused "$reason"
+}
+
+carrier_verdict() {
+  jq -R -s -c --arg kind "$1" --arg asker "$2" --argjson names "$carrier_names" --argjson reach "$3" -f /dev/stdin "$4" <<'JQ'
+  def bad($strict): explode | any(. < 32 or (. >= 127 and . < 160) or . == 65533
+    or ($strict and (. == 1564 or . == 8206 or . == 8207 or . == 8232 or . == 8233 or (. >= 8234 and . <= 8238) or (. >= 8294 and . <= 8297))));
+  def plan_name: . as $n | $names | index([$n]) != null;
+  def refuse($why; $targets): {ok: false, reason: $why, targets: $targets};
+  . as $all
+  | ($all | split("\n")) as $lines
+  | ({"mail": ["to", "subject", "cc", "re", "reply", "from", "id", "at"], "grab": ["seat", "lines"], "write": ["seat", "key"]}[$kind]) as $known
+  | ($lines | index("---")) as $dash
+  | (if $kind == "grab" then (if ($all | endswith("\n")) then $lines[:-1] else $lines end)
+     elif $dash == null then $lines else $lines[:$dash] end) as $head
+  | [$head | to_entries[] | {n: (.key + 1), line: .value, m: ((.value | capture("^(?<word>[a-z]+):( (?<value>.*))?$")) // null)}] as $parsed
+  | ([$parsed[] | select(.m != null) | {key: .m.word, value: (.m.value // "")}] | from_entries) as $v
+  | (if $kind == "mail" then
+       [["to", "cc"][] as $w | ($v[$w] // "") | select(. != "") | split(",")[] | sub("^ +"; "") | sub(" +$"; "") | select(plan_name)] | unique
+     else [($v.seat // "") | select(plan_name)] end) as $targets
+  | if ($head | length) > 20 then refuse("its head is of more than 20 lines"; $targets)
+    elif $kind != "grab" and $dash == null then refuse("its head is not followed by a line of three dashes"; $targets)
+    elif any($parsed[]; .m == null or (.m.word as $w | $known | index([$w]) | not)) then
+      refuse("line \([$parsed[] | select(.m == null or (.m.word as $w | $known | index([$w]) | not))][0].n) of its head is not one that the head of a \($kind) may hold"; $targets)
+    elif any($parsed[]; .line | bad(true)) then
+      refuse("line \([$parsed[] | select(.line | bad(true))][0].n) of its head holds a control character, a character that moves or breaks a line, or bytes that are not UTF-8"; $targets)
+    elif ([$parsed[].m.word] | length) != ([$parsed[].m.word] | unique | length) then
+      refuse("its head holds two \([$parsed[].m.word] | group_by(.) | map(select(length > 1))[0][0]) lines"; $targets)
+    elif $kind == "mail" then
+      if ($v.to // "") == "" then refuse("its head names no reader in to"; $targets)
+      elif ($v.subject // "") == "" then refuse("its head has no subject"; $targets)
+      else
+        [["to", "cc"][] as $w | ($v[$w] // "") | select(. != "") | split(",") | to_entries[]
+         | {line: $w, n: (.key + 1), name: (.value | sub("^ +"; "") | sub(" +$"; ""))}] as $named
+        | ([$named[] | select(.name == "")][0]) as $empty
+        | ([$named[] | select(.name != "" and (.name | plan_name | not))][0]) as $unknown
+        | ([$named[] | select(.name | plan_name) | .name] | reduce .[] as $r ([]; if index([$r]) then . else . + [$r] end)) as $readers
+        | ([$readers[] | select(. as $r | $reach.mail | index([$r]) | not)][0]) as $barred
+        | if $empty != null then refuse("its \($empty.line) line holds an empty name"; $targets)
+          elif $unknown != null then refuse("name \($unknown.n) of its \($unknown.line) line is not a seat the plan makes, by its exact name, so the mail goes to none"; $targets)
+          elif $barred != null then refuse("the plan does not let \($asker) mail \($barred), so the mail goes to none"; $targets)
+          else {ok: true, targets: $readers, readers: $readers,
+                keep: [$parsed[] | select(.m.word | IN("from", "id", "at") | not) | .line],
+                offset: (([$head[] | utf8bytelength + 1] | add // 0) + 3 + (if $dash < ($lines | length) - 1 then 1 else 0 end))} end
+      end
+    else
+      ($v.seat // "") as $seat
+      | if $seat == "" then refuse("its head names no seat"; $targets)
+        elif ($seat | plan_name | not) then refuse("its seat is not a seat the plan makes, by its exact name"; $targets)
+        elif $kind == "grab" then
+          ($v.lines // "200") as $count
+          | if ($count | test("^[1-9][0-9]{0,3}$") | not) or ($count | tonumber) > 5000 then refuse("its count of lines is not a whole number from 1 to 5,000"; $targets)
+            elif ($reach.grab | index([$seat]) | not) then refuse("the plan does not let \($asker) grab \($seat)"; $targets)
+            else {ok: true, targets: $targets, target: $seat, lines: ($count | tonumber)} end
+        else
+          ($v.key // "Enter") as $key
+          | ($lines[($dash + 1):]) as $rest
+          | (if ($rest | length) == 0 then "" elif ($rest | length) == 1 then $rest[0] elif ($rest | length) == 2 and $rest[1] == "" then $rest[0] else null end) as $text
+          | if (["Enter", "Escape", "C-c", "Tab", "none"] | index([$key]) | not) then refuse("its key is not one of Enter, Escape, C-c, Tab and none"; $targets)
+            elif $text == null then refuse("its text is not one line"; $targets)
+            elif ($text | utf8bytelength) > 4096 then refuse("its text is more than 4,096 bytes"; $targets)
+            elif $text | bad(false) then refuse("its text holds a control character or bytes that are not UTF-8"; $targets)
+            elif ($reach.write | index([$seat]) | not) then refuse("the plan does not let \($asker) write to \($seat)"; $targets)
+            else {ok: true, targets: $targets, target: $seat, key: $key, text: $text} end
+        end
+    end
+JQ
+}
+
+carrier_seat_of() {
+  local name=$1 j
+  for j in "${!seat_names[@]}"; do
+    [[ ${seat_names[j]} == "$name" ]] && { printf '%s\n' "$j"; return 0; }
+  done
+  return 1
+}
+
+carrier_journal() {
+  jq -n -c --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" \
+    '{id: $id, box: $box, request: $request, action: $action, seat: $seat}' > "$comms/serving.new" && mv -f -- "$comms/serving.new" "$comms/serving"
+}
+
+carrier_serve() {
+  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied
+  local -a entries readers keep paths args
+  entries=("${seat_out[i]}"/[!.]*)
+  (( ${#entries[@]} )) || return 0
+  entry=${entries[0]}
+  name=${entry##*/}
+  carrier_next_id || { warn "cannot count the carrier's requests in $comms/next"; return 1; }
+  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || return 0
+  action=unknown
+  [[ $name =~ ^[A-Za-z0-9._-]+\.(md|grab|write)$ ]] && action=${BASH_REMATCH[1]/md/mail}
+  carrier_journal "${seat_boxes[i]}" "$name" "$action" "${seat_names[i]}" || { warn "cannot write $comms/serving"; return 1; }
+  carrier_at=""
+  kind=$(stat -c %F -- "$taken/$carrier_id" 2> /dev/null) || kind=unknown
+  if [[ $kind != "regular file" && $kind != "regular empty file" ]]; then
+    rm -rf -- "$taken/$carrier_id" 2> /dev/null
+    carrier_refuse "$i" "$name" "$action" '[]' "it is a $kind, and the carrier takes a regular file alone; it is removed"
+  elif [[ $action == unknown ]]; then
+    rm -f -- "$taken/$carrier_id"
+    carrier_refuse "$i" "$name" "$action" '[]' "its name is not letters, digits, dot, dash and underscore ending in .md, .grab or .write; it is removed"
+  else
+    copy=$taken/$carrier_id.copy
+    if ! dd if="$taken/$carrier_id" of="$copy" bs=$(( MAIL_LIMIT + 1 )) count=1 iflag=fullblock,nofollow,nonblock status=none 2> /dev/null; then
+      rm -f -- "$taken/$carrier_id" "$copy"
+      carrier_refuse "$i" "$name" "$action" '[]' "it could not be read at once; it is removed"
+    else
+      rm -f -- "$taken/$carrier_id"
+      size=$(stat -c %s -- "$copy")
+      if (( size > MAIL_LIMIT )); then
+        carrier_refuse "$i" "$name" "$action" '[]' "it is more than 256 kB, 256,000 bytes"
+      elif ! verdict=$(carrier_verdict "$action" "${seat_names[i]}" "${seat_reach[i]}" "$copy"); then
+        carrier_refuse "$i" "$name" "$action" '[]' "the carrier could not read it"
+      else
+        targets=$(jq -c '.targets' <<< "$verdict")
+        if [[ $(jq -r '.ok' <<< "$verdict") != true ]]; then
+          carrier_refuse "$i" "$name" "$action" "$targets" "$(jq -r '.reason' <<< "$verdict")"
+        elif [[ $action == mail ]]; then
+          mapfile -d '' -t readers < <(jq --raw-output0 '.readers[]' <<< "$verdict")
+          mapfile -d '' -t keep < <(jq --raw-output0 '.keep[]' <<< "$verdict")
+          carrier_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          file=$taken/$carrier_id.mail
+          paths=()
+          for p in "${readers[@]}"; do
+            j=$(carrier_seat_of "$p") && paths+=("${seat_boxes[j]}/in/$carrier_id.md")
+          done
+          paths+=("${seat_boxes[i]}/sent/$carrier_id.md")
+          copied=1
+          { printf '%s\n' "id: $carrier_id" "at: $carrier_at" "from: ${seat_names[i]}" "${keep[@]}" ---
+            tail -c "+$(( $(jq -r '.offset' <<< "$verdict") + 1 ))" -- "$copy"; } > "$file" || copied=0
+          for p in "${paths[@]}"; do
+            (( copied )) && { cp -- "$file" "$store/$p" || copied=0; }
+          done
+          if (( copied )) && carrier_git add -- "${paths[@]}" > /dev/null 2>&1 \
+            && carrier_git commit -q -m "deliver $carrier_id" > /dev/null 2>&1; then
+            carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
+            carrier_record "${seat_names[i]}" "$name" mail "$targets" ok ""
+          else
+            carrier_git reset -q > /dev/null 2>&1
+            for p in "${paths[@]}"; do rm -f -- "$store/$p"; done
+            carrier_refuse "$i" "$name" mail "$targets" "the store did not take it, and it went to none"
+          fi
+          rm -f -- "$file"
+        else
+          j=$(carrier_seat_of "$(jq -r '.target' <<< "$verdict")")
+          pane=${seat_pane[j]-}
+          if [[ -z $pane ]]; then
+            carrier_refuse "$i" "$name" "$action" "$targets" "the pane of ${seat_names[j]} is not one that this run made"
+          elif [[ $action == grab ]]; then
+            if ! out=$(carrier_tmux display-message -p -t "$pane" '#{@workplace}' \; capture-pane -p -t "$pane" -S "-$(jq -r '.lines' <<< "$verdict")" 2> /dev/null); then
+              carrier_refuse "$i" "$name" grab "$targets" "the pane of ${seat_names[j]} does not answer"
+            elif mark=${out%%$'\n'*} && [[ $mark != "$carrier_run" ]]; then
+              carrier_refuse "$i" "$name" grab "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone"
+            else
+              [[ $out == *$'\n'* ]] && out=${out#*$'\n'} || out=""
+              carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id" "$out"
+              carrier_record "${seat_names[i]}" "$name" grab "$targets" ok ""
+            fi
+          else
+            text=$(jq -r '.text' <<< "$verdict")
+            key=$(jq -r '.key' <<< "$verdict")
+            sum=$(printf '%s' "$text" | sha256sum)
+            written="${#text} ${sum%% *}"
+            args=()
+            if [[ -n $text ]]; then
+              [[ $text == *';' ]] && text=${text%;}'\;'
+              args+=(send-keys -t "$pane" -l -- "$text")
+            fi
+            if [[ $key != none ]]; then
+              (( ${#args[@]} )) && args+=(';')
+              args+=(send-keys -t "$pane" "$key")
+            fi
+            if ! mark=$(carrier_tmux display-message -p -t "$pane" '#{@workplace}' 2> /dev/null); then
+              carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not answer"
+            elif [[ $mark != "$carrier_run" ]]; then
+              carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone"
+            elif (( ${#args[@]} )) && ! carrier_tmux "${args[@]}" > /dev/null 2>&1; then
+              carrier_answer "${seat_answers[i]}" "$name" "refused tmux did not take the line"
+              carrier_record "${seat_names[i]}" "$name" write "$targets" refused "tmux did not take the line" "$written"
+            else
+              carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
+              carrier_record "${seat_names[i]}" "$name" write "$targets" ok "" "$written"
+            fi
+          fi
+        fi
+      fi
+      rm -f -- "$copy"
+    fi
+  fi
+  rm -f -- "$comms/serving"
+}
+
+carrier_recover() {
+  local journal box request action seat answers subject reason
+  rm -rf -- "$taken"/* 2> /dev/null
+  [[ -f $comms/serving ]] || return 0
+  journal=$(jq -c '.' "$comms/serving" 2> /dev/null) || { rm -f -- "$comms/serving"; return 0; }
+  carrier_id=$(jq -r '.id' <<< "$journal") box=$(jq -r '.box' <<< "$journal") request=$(jq -r '.request' <<< "$journal")
+  action=$(jq -r '.action' <<< "$journal") seat=$(jq -r '.seat' <<< "$journal")
+  answers=$comms/$box/answers
+  if [[ $action == mail ]] && subject=$(carrier_git log -1 --format=%s 2> /dev/null) && [[ $subject == "deliver $carrier_id" ]]; then
+    [[ -d $answers ]] && carrier_answer "$answers" "$request" "ok $carrier_id"
+    carrier_record "$seat" "$request" mail '[]' ok "the carrier stopped after it delivered this, and answers it as it starts again"
+  else
+    if [[ $action == mail ]]; then
+      carrier_git reset -q > /dev/null 2>&1
+      carrier_git clean -f -q > /dev/null 2>&1
+      reason="the carrier stopped while it served this, and it went to none; leave it in out again"
+    else
+      reason="the carrier stopped while it served this, and whether it acted is not known"
+    fi
+    [[ -d $answers ]] && carrier_answer "$answers" "$request" "refused $reason"
+    carrier_record "$seat" "$request" "$action" '[]' refused "$reason"
+  fi
+  rm -f -- "$comms/serving"
+}
+
+cmd_carry() {
+  (( $# == 0 )) || die "carry takes no arguments; up starts it" 2
+  need_jq
+  locate
+  umask 077
+  verify_build || die "the carrier serves only a verified build" 2
+  local mail=$build_dir/mail.json entry i dev
+  [[ -f $mail ]] || die "the build holds no mail, and the carrier has nothing to serve" 2
+  [[ -d $run_dir/carrier ]] || die "the carrier is started by up, which makes $run_dir/carrier" 2
+  cd -- "$run_dir/carrier" || die "cannot enter $run_dir/carrier" 2
+  comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail")
+  taken=$comms/taken
+  exec 9>> "$comms/lock" || die "cannot open $comms/lock" 2
+  flock -n 9 || die "another carrier serves the store $store; this one ends" 2
+  carrier_stop=0
+  trap 'carrier_stop=1' TERM INT
+  trap '' HUP
+  exec {pause_fd}<> <(:)
+  seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=()
+  while IFS= read -r entry; do
+    seat_names+=("$(jq -r '.name' <<< "$entry")")
+    seat_boxes+=("$(jq -r '.box' <<< "$entry")")
+    seat_out+=("$(jq -r '.out' <<< "$entry")")
+    seat_answers+=("$(jq -r '.answers' <<< "$entry")")
+    seat_reach+=("$(jq -c '.reach' <<< "$entry")")
+    seat_keys+=("$(jq -c '.seat' <<< "$entry")")
+  done < <(jq -c '.seats[]' "$mail")
+  carrier_names=$(jq -c '[.seats[].name]' "$mail")
+  dev=$(stat -c %d -- "$taken") || die "cannot read $taken" 2
+  for i in "${!seat_out[@]}"; do
+    [[ -d ${seat_out[i]} && ! -L ${seat_out[i]} && $(stat -c %d -- "${seat_out[i]}") == "$dev" ]] \
+      || die "the out of ${seat_names[i]} is not a directory on the file system of $taken, and the carrier moves by renaming alone" 2
+  done
+  carrier_recover
+  : > "$run_dir/carrier/ready"
+  while (( ! carrier_stop )) && [[ ! -f $run_dir/state.json ]]; do carrier_pause 0.2; done
+  (( carrier_stop )) && exit 0
+  carrier_setpriv=$(jq -r '.slots[(["program", "setpriv"] | tojson)] // ""' "$run_dir/state.json")
+  carrier_tmux_program=$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' "$run_dir/state.json")
+  carrier_server=$(jq -r '.slots[(["server"] | tojson)] // ""' "$run_dir/state.json")
+  carrier_run=$(jq -r '.slots[(["run"] | tojson)] // ""' "$run_dir/state.json")
+  for i in "${!seat_keys[@]}"; do
+    seat_pane[i]=$(jq -r --argjson k "${seat_keys[i]}" '.slots[(["pane"] + $k | tojson)] // ""' "$run_dir/state.json")
+  done
+  while (( ! carrier_stop )); do
+    for i in "${!seat_names[@]}"; do
+      (( carrier_stop )) && break
+      carrier_serve "$i"
+    done
+    (( carrier_stop )) || carrier_pause 1
+  done
+  exit 0
+}
+
+cmd_carrier_end() {
+  (( $# == 2 )) && [[ $1 =~ ^[0-9]+$ ]] || die "carrier-end takes the carrier's process id and its mark" 2
+  local pid=$1 ident=$2 now i fd
+  now=$(stat -L -c %d:%i -- "/proc/$pid/cwd" 2> /dev/null) || return 0
+  [[ $now == "$ident" ]] || return 0
+  kill -TERM "$pid" 2> /dev/null || return 0
+  exec {fd}<> <(:)
+  for (( i = 0; i < 100; i++ )); do
+    now=$(stat -L -c %d:%i -- "/proc/$pid/cwd" 2> /dev/null) || return 0
+    [[ $now == "$ident" ]] || return 0
+    read -r -t 0.1 -u "$fd" _
+  done
+  warn "the carrier, process $pid, did not end within 10 seconds"
+  return 1
+}
+
 cmd_why() {
   (( $# == 2 )) || die "why takes a seat's name and an absolute path" 2
   local seat=$1 path=$2
@@ -1602,8 +2083,9 @@ cmd_why() {
           | ([($folded[0].seats // [])[] | select(.seat == $k)][0]) as $folded_seat
           | (if $folded_seat.home? == null or $stateroot == "" then null
              else "\($stateroot)/\($workplace)/homes/\($folded_seat.home.kind)/\($k | join("/"))" end) as $home_path
+          | ($folded[0].mail.path? // null) as $mailpath
           | def within($p; $q): $q != null and $q != "" and ($p == $q or beneath($p; $q));
-            (within($path; $clone) or within($path; $rungnupg)
+            (within($path; $clone) or within($path; $rungnupg) or within($path; $mailpath)
              or (within($path; $stateroot) and (within($path; $home_path) | not)
                  and ((within($path; $keyview) and $key.state? == "held") | not))) as $masked
           | [$rows[] | select(beneath(.key[3]; $path))] as $below
@@ -1624,6 +2106,9 @@ cmd_why() {
                   else "missing from \($values)" end)),
             (if $path == $clone or beneath($path; $clone) then
                "masked by the frame after the rows: \($clone), the clone the workplace is built from, with its PLAN and BUILD, is shown to no seat, whatever its rows say"
+             else empty end),
+            (if within($path; $mailpath) then
+               "the seat's mailbox: shown by the frame after the rows (Comms) at \($mailpath), whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat's own, and no other seat's"
              else empty end),
             (if $home_path != null and ($path == $home_path or beneath($path; $home_path)) then
                if $folded_seat.home.state == "kept"
@@ -1763,6 +2248,20 @@ cmd_doctor() {
     if found=$(command -v "$program"); then say "ok      $program $found"
     else say "absent  $program: needed only by a plan in which a seat holds a key"; fi
   done
+  if found=$(command -v git); then
+    if version=$(version_of "$found" --version); then
+      if at_least "$version" "$GIT_FLOOR"; then say "ok      git $version $found"
+      else say "old     git $version; a plan that holds mail needs $GIT_FLOOR or later"; fi
+    else
+      say "unknown git: its version cannot be read"
+    fi
+  else
+    say "absent  git: needed only by a plan that holds mail"
+  fi
+  for program in flock dd mv tail date; do
+    if found=$(command -v "$program"); then say "ok      $program $found"
+    else say "absent  $program: needed only by a plan that holds mail"; fi
+  done
   local state_dir
   if state_dir=$(state_root); then
     say "ok      the workplaces' state directory $state_dir: a workplace whose seats hold keys may have a name of at most $(( 84 - ${#state_dir} - 1 )) bytes"
@@ -1847,8 +2346,15 @@ cmd_down() {
 }
 
 seats_report() {
-  local bad=0 entry path file="" state_dir workplace key names line i name
-  local -a problems fields parts
+  local bad=0 entry path file="" state_dir workplace key names line i name waiting=0
+  local -a problems fields parts inside
+  if [[ -f $build_dir/mail.json ]]; then
+    while IFS= read -r path; do
+      inside=("$path"/[!.]*)
+      waiting=$(( waiting + ${#inside[@]} ))
+    done < <(jq -r '.seats[].out' "$build_dir/mail.json")
+    say "mail    the store $(jq -r '.store' "$build_dir/mail.json"), shown at $(jq -r '.path' "$build_dir/mail.json"); requests waiting in the seats' out: $waiting"
+  fi
   if [[ -f $build_dir/homes.json ]]; then
     while IFS= read -r entry; do
       path=$(jq -r '.path' <<< "$entry")
@@ -1959,6 +2465,11 @@ case $command in
     exit $?
     ;;
   why) cmd_why "$@" ;;
+  carry) cmd_carry "$@" ;;
+  carrier-end)
+    cmd_carrier_end "$@"
+    exit $?
+    ;;
   help | --help | -h) usage ;;
   *)
     usage >&2

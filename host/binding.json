@@ -77,7 +77,9 @@
         "home",
         "home-variable",
         "home-seed",
-        "expect"
+        "expect",
+        "mail",
+        "reach"
       ],
       "programs": [
         "bwrap"
@@ -551,6 +553,136 @@
               }
             ]
           }
+        },
+        {
+          "if-slot": [
+            "mail-out",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--perms",
+            "0755",
+            "--tmpfs",
+            {
+              "slot": [
+                "mail-path"
+              ]
+            },
+            "--bind",
+            {
+              "slot": [
+                "mail-out",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "mail-path"
+                  ]
+                },
+                "/out"
+              ]
+            },
+            "--ro-bind",
+            {
+              "slot": [
+                "mail-in",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "mail-path"
+                  ]
+                },
+                "/in"
+              ]
+            },
+            "--ro-bind",
+            {
+              "slot": [
+                "mail-sent",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "mail-path"
+                  ]
+                },
+                "/sent"
+              ]
+            },
+            "--ro-bind",
+            {
+              "slot": [
+                "mail-answers",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "mail-path"
+                  ]
+                },
+                "/answers"
+              ]
+            },
+            "--remount-ro",
+            {
+              "slot": [
+                "mail-path"
+              ]
+            }
+          ]
         }
       ]
     },
@@ -575,6 +707,9 @@
       ],
       "home-seed": [
         2
+      ],
+      "mail": [
+        1
       ]
     },
     "cells": {
@@ -1496,5 +1631,28 @@
   "kept-names": [
     "GNUPGHOME",
     "SSH_AUTH_SOCK"
-  ]
+  ],
+  "keys": {
+    "session": [
+      1
+    ],
+    "window": [
+      1,
+      2
+    ],
+    "arrange": [
+      1,
+      2
+    ],
+    "pane": [
+      1,
+      2,
+      3
+    ],
+    "start": [
+      1,
+      2,
+      3
+    ]
+  }
 }

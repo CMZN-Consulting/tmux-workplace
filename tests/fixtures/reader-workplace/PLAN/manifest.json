@@ -94,6 +94,10 @@
   ],
   "outputs": [
     {
+      "path": "plan.json",
+      "sha256": "fa8d54f683c2e4a80c24e3f7120f76fb42b51d720d7c5cb53c05f4a66d463cee"
+    },
+    {
       "path": "facts.json",
       "sha256": "fb76bf2f20771904efe0e75509b7a40c1039646d5c7f2a41f04816929af62a34"
     }

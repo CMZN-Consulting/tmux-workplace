@@ -327,7 +327,7 @@ refuse_clone() {
 }
 
 chain_masks() {
-  printf '%s\n' /var/log/journal /run/log/journal /run/systemd/journal "/run/user/$EUID/systemd"
+  printf '%s\n' /var/log/journal /run/log/journal /run/systemd/journal "/run/user/$EUID/systemd" "/run/user/$EUID/bus"
 }
 
 refuse_rows() {
@@ -1590,6 +1590,7 @@ set_records() {
       slot=${place%% *} key=${place#* }
       [[ -d $key ]] && state=$(jq -c --arg s "$slot" --arg p "$key" '.slots[([$s] | tojson)] = $p' <<< "$state")
     done
+    [[ -S /run/user/$EUID/bus ]] && state=$(jq -c --arg p "/run/user/$EUID/bus" '.slots[(["mask-bus"] | tojson)] = $p' <<< "$state")
   fi
   if [[ $chain == journal ]]; then
     need_programs_for "a plan whose chain goes to the journal" "${JOURNAL_PROGRAMS[@]}" || return 1
@@ -2494,7 +2495,7 @@ cmd_why() {
              | "masked by the frame after the rows: \(.), where the user's tmux servers keep their sockets, is shown to no seat; the workplace's own server listens in the clone's run directory, which no view holds"),
             (if ($folded[0].records.chain? // null) == null then empty
              else $chainmasks[] | select(. as $d | within($path; $d))
-               | "masked by the frame after the rows (Logs): \(.), the journal's or the user manager's, is shown to no seat of a workplace that keeps a chain" end),
+               | "masked by the frame after the rows (Logs): \(.), the journal's, the user manager's or the session bus, is shown to no seat of a workplace that keeps a chain" end),
             (if within($path; $mailpath) then
                "the seat's mailbox: shown by the frame after the rows (Comms) at \($mailpath), whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat's own, and no other seat's"
              else empty end),

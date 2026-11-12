@@ -284,6 +284,20 @@
         },
         {
           "if-slot": [
+            "mask-bus"
+          ],
+          "args": [
+            "--ro-bind",
+            "/dev/null",
+            {
+              "slot": [
+                "mask-bus"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
             "runtime-gnupg"
           ],
           "args": [

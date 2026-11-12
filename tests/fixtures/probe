@@ -208,6 +208,11 @@ for argument in "$@"; do
       if tmux -S "$place" list-sessions > /dev/null 2>&1; then got=answered; else got=refused; fi
       say "socket $place: $got"
       ;;
+    bus=*)
+      place=${argument#bus=}
+      if timeout 10 busctl --address="unix:path=$place" call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Properties Get ss org.freedesktop.systemd1.Manager Version > /dev/null 2>&1; then got=answered; else got=refused; fi
+      say "bus $place: $got"
+      ;;
     entries=*)
       place=${argument#entries=}
       listing=("$place"/*)

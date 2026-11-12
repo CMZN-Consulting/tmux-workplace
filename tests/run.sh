@@ -3038,7 +3038,7 @@ t_records_in_panes() {
   check "up with records" records_up '| def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
     add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "print=" + $root + "/tools/hostile",
       "wait=" + $root + "/records/Harbor Pilot/'"$day"'.pane", "entries=" + $root + "/records", "entries=" + $root + "/records/Harbor Pilot", "tamper=" + $root + "/records/Harbor Pilot/'"$day"'.pane",
-      "list=" + $root + "/records/Harbor Pilot/../Harbor Watch", "hidden='"$s"'/records"])
+      "list=" + $root + "/records/Harbor Pilot/../Harbor Watch", "hidden='"$s"'/records", "bus=/run/user/'"$EUID"'/bus"])
     | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; $root + "/harbor/berth"; "read-write"; 3)]'
   check "keeper ran" eventually_long grep -qx "probe keeper done" "$root/harbor/berth/keeper"
   check "pilot ran" wait_for_probe "Harbor Pilot" pilot
@@ -3074,6 +3074,14 @@ t_records_in_panes() {
   check "[C73] keeper's view masks the journal's places, the closed masks after its rows" \
     bash -c 'for m in "${@:2}"; do [[ -d $m ]] || continue; [[ $(jq -r --arg d "$m" ". as \$a | [range(0; length) | select(\$a[.] == \"--tmpfs\" and \$a[. + 1] == \$d) | \$a[. - 1]] | join(\",\")" <<< "$1") == 0000 ]] || exit 1; done' _ \
     "$(seat_command 'Harbor Keeper')" /var/log/journal /run/log/journal /run/systemd/journal "/run/user/$EUID/systemd"
+  local bus=/run/user/$EUID/bus
+  if [[ -S $bus ]] && command -v busctl > /dev/null \
+    && timeout 10 busctl --address="unix:path=$bus" call org.freedesktop.systemd1 /org/freedesktop/systemd1 org.freedesktop.DBus.Properties Get ss org.freedesktop.systemd1.Manager Version > /dev/null 2>&1; then
+    check "[C73] outside every view the user manager answers over the session bus, and in keeper's view the same call is refused" \
+      grep -qxF "bus $bus: refused" "$report"
+  else
+    skip "[C73] no user manager answers over the session bus here, so its mask is tried where one does"
+  fi
   local carrier
   carrier=$(carrier_pid)
   kill -STOP "$carrier"

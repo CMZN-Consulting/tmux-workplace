@@ -15,7 +15,7 @@
     },
     {
       "path": "layers/Structure.typify",
-      "sha256": "bcfa3b72cb5f7d4bb8bf28c0053a5777ff4a2e08656c13468ffb18c60a1a452b"
+      "sha256": "2935bebfbb90b522f2fbb491ae93a67119c4020c3870cac5234b0326c6cb5724"
     },
     {
       "path": "layers/Access.typify",
@@ -125,7 +125,7 @@
   "generated": [
     {
       "path": "LanguageDeclarations.typify",
-      "sha256": "58ab601279953682fd37fdce807249a19737be68be660897fdb68058b1ef7c29"
+      "sha256": "d7850f2c3ac1367dad1f3ae2adb1a8a0fa5cbb275a24704acdc74c6ed3b03cce"
     },
     {
       "path": "tree/ROOT.typify",

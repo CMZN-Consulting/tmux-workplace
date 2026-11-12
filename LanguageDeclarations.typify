@@ -6,7 +6,7 @@ required!
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
-is : display-name = /[A-Za-z0-9][A-Za-z0-9 _-]*/
+is : display-name = /[A-Za-z0-9][A-Za-z0-9 _()-]*/
 is : layout = "even-horizontal" | "even-vertical" | "main-horizontal" | "main-vertical" | "tiled"
 cell : sessions = shadow
 primitive : session : office-key display-name

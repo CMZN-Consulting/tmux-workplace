@@ -257,6 +257,13 @@ for argument in "$@"; do
       if { : > "${place%/*}/made-by-$name"; } 2> /dev/null; then c=done; else c=refused; fi
       say "tamper $place: append=$a truncate=$t rename=$m remove=$r make=$c"
       ;;
+    make=*)
+      place=${argument#make=}
+      if { printf '%s\n' "$name" > "$place/made-file-$name"; } 2> /dev/null; then f=done; else f=refused; fi
+      if mkdir -- "$place/made-dir-$name" 2> /dev/null; then d=done; else d=refused; fi
+      if ln -s -- / "$place/made-link-$name" 2> /dev/null; then l=done; else l=refused; fi
+      say "make $place: file=$f directory=$d link=$l"
+      ;;
     socket=*)
       place=${argument#socket=}
       if tmux -S "$place" list-sessions > /dev/null 2>&1; then got=answered; else got=refused; fi

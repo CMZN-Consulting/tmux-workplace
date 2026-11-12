@@ -237,12 +237,13 @@
     - a seat with no row for `/` in a plan that holds either term, since a seat with no view could write as any seat.
 - **C55.** After the rows, the binding's fixed part shows each seat its own mailbox at the mail path: a file system there, holding `out` read-write and `in`, `sent` and `answers` read-only, and read-only itself. No seat is shown another seat's.
   - `plan` refuses, with exit 1, naming the origins: a statement or a label at the mail path or beneath it; a mail path that is `/`, lies at or beneath the clone, or lies beneath a hidden row of a seat's table, which the seat could not pass; and a seat whose directory or program lies at or beneath it.
-  - `build` refuses a mail path that is not a directory on the machine, and one that lies in the workplaces' state directory R or holds it.
+  - `build` refuses a mail path that is not a directory on the machine, and one that lies in the workplaces' state directory R or holds it. `up` refuses one that is no longer a directory.
+  - Each of these refusals names the origins of the `mail` term beside those of what conflicts with it.
   - `why` names the mailbox for a path at or beneath the mail path.
 - **C56.** The store stands in S, which no view holds. `build` makes it once and keeps it.
   - `S/mail` is a git repository made with no template, whose branch is `mail`. For each seat it holds a directory named by the seat's three keys joined by a space, with `in` and `sent`. A key may be `.git`, which git refuses as a path's component, and a key holds no white space, so the joined name is one seat's and is never git's.
   - Beside it, `S/comms` holds for each seat `out` and `answers` under the same name, `taken`, where the carrier keeps what it takes, the record, and `wake.json`, where it keeps the mail each reader has to be pointed out (C94). Every directory is the user's, with mode 0700, and the record and `wake.json` have mode 0600.
-  - `BUILD/mail.json`, listed in the MANIFEST, holds the mail path, S, and each seat's mailbox and reach, and, for a seat whose kind has a wake, its pattern (C93).
+  - `BUILD/mail.json`, listed in the MANIFEST, holds the mail path with the origins of its term, S, and each seat's mailbox and reach, and, for a seat whose kind has a wake, its pattern (C93).
   - A plan that holds mail needs git 2.32 or later, `flock`, `dd`, `mv`, `tail` and `date`. `build` and `up` refuse it with exit 2 when one is missing, naming it. A plan without mail needs none of them.
 - **C57.** The carrier is one process for the workplace, `workplace carry`. `up` starts it after the agents and before the first term, under `setpriv --no-new-privs` and in no view, and records it in the ledger and in the checks.
   - Its working directory is `RUN/carrier`, which is its mark. `down` ends it only while the process's working directory is that directory, waits until it has ended, and says it is gone when it is. A carrier whose mark is gone, its run directory removed under it, ends of itself at its next pass.
@@ -291,13 +292,13 @@
     - `record … programs kept`, since the record of programs is built after the cutover;
     - two `record` terms of one scope and one WHAT with different states, and two `record-limit`, `record-chain` or `record-path` terms that differ;
     - `reach … record` with no `record-path`;
-    - for the record path, everything it refuses for the mail path (C55), and a record path at, above or beneath the mail path;
+    - for the record path, everything it refuses for the mail path (C55), each naming the origins of the `record-path` term where C55's names those of the `mail` term, and a record path at, above or beneath the mail path;
     - a kept record of a seat with no view, since such a seat could reach its own record.
   - `plan` prints the records, whether each seat's pane is kept, and whose records it may read.
 - **C70.** `build` makes `S/records`, and in it one directory for each seat, named by its keys joined by a space, each the user's with mode 0700.
   - A seat's directory holds one file for each day by UTC, `DAY.pane`, and `unstored` and `gaps`, which only grow. `S/records` holds the carrier's `chain.state` and the file sink's `chain`.
-  - `BUILD/records.json`, listed in the MANIFEST, holds the path, the limit, the sink, the carrier's unit, and each seat's directory, its pane's state and whose records it reads.
-  - `build` refuses a record path that is not a directory on the machine, or that lies in the state directory R or holds it.
+  - `BUILD/records.json`, listed in the MANIFEST, holds the path with the origins of its term, the limit, the sink, the carrier's unit, and each seat's directory, its pane's state and whose records it reads.
+  - `build` refuses a record path that is not a directory on the machine, or that lies in the state directory R or holds it, and `up` one that is no longer a directory. Each names the origins of the `record-path` term.
   - A plan that keeps a record needs `dd`, `date`, `tail` and `head`. One whose chain goes to the journal needs `systemd-run`, `systemctl` and `journalctl`.
 - **C71.** `up` sets each kept pane's pipe after the pane terms and before the first start, so nothing the pane's program writes is missed. The pipe is `pipe-pane -O` into a keeper of the frame's, `workplace keep DIR LIMIT`.
   - The keeper runs outside every view, as a child of the server and under its no-new-privileges, and it ends with its pane. The pipe outlives the start's `respawn-pane`.
@@ -322,7 +323,7 @@
   - `record verify NAME [DAY]` reads the seat's day file, today's by UTC by default, against its chain, taken from the plan's sink. From the journal, it takes only the entries whose `_SYSTEMD_USER_UNIT` is the carrier's unit.
   - It names the first place where file and chain differ, or says that they agree and up to which byte.
   - It exits 1 where they differ, and 2 for a seat it does not know, a day not written YYYY-MM-DD, or a workplace with no chain.
-- **C76.** After the rows, the fixed part shows a seat, at the record path, a file system holding one read-only directory for each seat whose record it may read, under that seat's name. That file system is itself read-only. A seat that may read none is shown nothing there. `why` names it.
+- **C76.** In a plan that holds a record path, the fixed part puts the frame's read-only file system at the record path in every seat's view, after the rows, whatever the machine holds there and whatever a row says above it. It holds one read-only directory for each seat whose record the seat may read, under that seat's name, and for a seat that may read none it is empty. `why` names it, and says for a seat that may read none that it is empty.
 - **C77.** No seat writes, cuts short, renames or removes a record, its own or another's, or makes a file beside one. A record stands in S, which no view holds, and the record path shows it read-only.
 - **C78.** A seat that may read one seat's record reaches no third seat's through it, by a link, by `..` or by a name built for it. The record path holds only the directories the seat may read, each bound alone, and S is masked.
 - **C79.** A pane's bytes are stored as they came: NUL bytes, bytes that are not UTF-8, formats, commands and escapes. None is read as a pattern, a format or a command by the keeper, the carrier or `record verify`: the keeper copies bytes, and the chain and `record verify` hash them.

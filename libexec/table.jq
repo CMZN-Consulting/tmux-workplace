@@ -155,21 +155,25 @@ def shown_path_problems($binding; $clone; $word; $what; $where):
     else
       def under($p; $q): $q == "/" or $p == $q or ($p | startswith($q + "/"));
       def at($o; $file): "\($o.path // $file):\($o.line // "?")";
+      def term_of($p):
+        "(the \($word) at \([($plan.programs // [])[] | select(type == "object") | (.path // "a program") as $file | (.recorded // [])[]
+                               | select(type == "object" and (.term | type) == "array" and .term[0] == $word and (.term | length) == 2 and .term[1] == $p)
+                               | at(.origin // {}; $file)] | join(", ")))";
       ($binding.directories // {}) as $d
       | ($paths[] | select(under(.; $clone))
-         | "the \($what) \(.) lies at or beneath the clone \($clone), which the frame masks in every view"),
-        ($paths[] | select(. == "/") | "the \($what) / would cover each seat's whole view"),
+         | "the \($what) \(.) lies at or beneath the clone \($clone), which the frame masks in every view \(term_of(.))"),
+        ($paths[] | select(. == "/") | "the \($what) / would cover each seat's whole view \(term_of(.))"),
         ($paths[] | select(. != "/") as $m
          | ($plan | plan_terms[] | . as $r | ($binding.primitives[$r.term[0]].seat // null) as $seat | select($seat != null)
             | (($seat.directory.path? // empty) | select(. < ($r.term | length)) | $r.term[.] | select(type == "string" and under(.; $m))
-               | "\($r | term_at) (\($r.term[0])): the seat's directory \(.) lies at or beneath the \($what) \($m), \($where)"),
+               | "\($r | term_at) (\($r.term[0])): the seat's directory \(.) lies at or beneath the \($what) \($m), \($where) \(term_of($m))"),
               (($seat.argv // empty) | select(. < ($r.term | length)) | ($r.term[.] | try fromjson catch null)
                | select(type == "array") | .[0] | select(type == "string" and startswith("/") and under(.; $m))
-               | "\($r | term_at) (\($r.term[0])): the seat's program \(.) lies at or beneath the \($what) \($m), \($where)")),
+               | "\($r | term_at) (\($r.term[0])): the seat's program \(.) lies at or beneath the \($what) \($m), \($where) \(term_of($m))")),
            (($plan.programs // [])[] | select(type == "object") | (.path // "a program") as $file | (.recorded // [])[]
             | select(type == "object" and (.term | type) == "array" and .term[0] == $d.recorded and (.term | length) > $d.path)
             | .term[$d.path] as $p | select(($p | type) == "string" and under($p; $m))
-            | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies at or beneath the \($what) \($m), \($where)"))
+            | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies at or beneath the \($what) \($m), \($where) \(term_of($m))"))
     end;
 
 def mail_problems($binding; $clone):

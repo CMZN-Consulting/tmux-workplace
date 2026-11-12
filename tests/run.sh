@@ -2812,16 +2812,16 @@ t_comms_fold() {
     "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "-", "-", "-", "workplace", "maybe"]; 9)]|programs/COMMS.typify:9: maybe is not allowed or banned'
     "$comms_terms"' | .programs[-1].recorded += [m(["mail", "elsewhere"]; 9)]|two mail terms differ: '"$root"'/elsewhere from programs/COMMS.typify:9, '"$root"'/mailbox from programs/COMMS.typify:1'
     "$comms_terms"' | .programs[-1].recorded += [m(["mail", "a", "b"]; 9)]|programs/COMMS.typify:9: a mail has the words mail PATH, not 3'
-    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "/"|the mail path / would cover each seat'"'"'s whole view'
+    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "/"|the mail path / would cover each seat'"'"'s whole view (the mail at programs/COMMS.typify:1)'
     'def m($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/COMMS.typify"}}; .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "-", "-", "-", "workplace", "allowed"]; 2)]|the plan holds reach terms and no mail term, so no seat has a mailbox to ask in (the reach at programs/COMMS.typify:2)'
     "$comms_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; $root + "/mailbox/inner"; "read-only"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/mailbox/inner, which lies at or beneath the mail path '"$root"'/mailbox, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | .programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/mailbox"; "hidden"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/mailbox, which lies at or beneath the mail path'
-    "$comms_terms"' | .programs[-1].recorded += [lb($root + "/mailbox"; "1"; 23)]|programs/policy.typify:23: the label speaks of '"$root"'/mailbox, which lies at or beneath the mail path '"$root"'/mailbox'
+    "$comms_terms"' | .programs[-1].recorded += [lb($root + "/mailbox"; "1"; 23)]|programs/policy.typify:23: the label speaks of '"$root"'/mailbox, which lies at or beneath the mail path '"$root"'/mailbox, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "harbor/ledger/box"|seat Harbor Keeper (harbor/dock/keeper): its mailbox at '"$root"'/harbor/ledger/box lies beneath '"$root"'/harbor/ledger (hidden, from programs/policy.typify:2), and the seat could not reach it (the mail at programs/COMMS.typify:1)'
-    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "config/mail"|the mail path '"$clone"'/mail lies at or beneath the clone '"$clone"', which the frame masks in every view'
-    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "orchard"|orchard/barn/grower/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/orchard lies at or beneath the mail path '"$root"'/orchard, where the frame shows each seat its mailbox'
-    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "tools"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s program '"$root"'/tools/probe lies at or beneath the mail path '"$root"'/tools'
-    "$comms_terms"' | .programs[-1].recorded += [{term: ["record-directory", "harbor", "dock", "pilot", "mailbox/work"], origin: at(24)}]|programs/policy.typify:24 (record-directory): the seat'"'"'s directory '"$root"'/mailbox/work lies at or beneath the mail path '"$root"'/mailbox'
+    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "config/mail"|the mail path '"$clone"'/mail lies at or beneath the clone '"$clone"', which the frame masks in every view (the mail at programs/COMMS.typify:1)'
+    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "orchard"|orchard/barn/grower/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/orchard lies at or beneath the mail path '"$root"'/orchard, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
+    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "tools"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s program '"$root"'/tools/probe lies at or beneath the mail path '"$root"'/tools, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
+    "$comms_terms"' | .programs[-1].recorded += [{term: ["record-directory", "harbor", "dock", "pilot", "mailbox/work"], origin: at(24)}]|programs/policy.typify:24 (record-directory): the seat'"'"'s directory '"$root"'/mailbox/work lies at or beneath the mail path '"$root"'/mailbox, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | .programs[-1].recorded |= map(select(.term[0] != "statement" or .term[4] != "workplace")) | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; "/"; "read-only"; 25), st("orchard"; "-"; "-"; "office"; "/"; "read-only"; 26)]|seat Harbor Watch (harbor/tower/watch): no row for /: it has no view, and a seat with no view could write as any seat, which the plan'"'"'s mail terms do not allow (at programs/COMMS.typify:1)'
   )
   local entry
@@ -2955,10 +2955,17 @@ t_comms_store() {
   check "plan" exit_is 0 wplan
   rmdir -- "$root/mailbox"
   check "[C55] build refuses a mail path that is not a directory on the machine, with exit 1" exit_is 1 wp build
-  check "[C55] naming it" said "build refuses: the mail path $root/mailbox is not a directory on the machine, and the frame shows each seat its mailbox there"
+  check "[C55] naming it and the mail term's origin" said "build refuses: the mail path $root/mailbox is not a directory on the machine, and the frame shows each seat its mailbox there (the mail at programs/COMMS.typify:1)"
   mkdir -p -- "$root/mailbox/state"
   check "[C55] build refuses a mail path that holds the workplaces' state directory" exit_is 1 env XDG_STATE_HOME="$root/mailbox/state" "$BASH" "$loop" build
-  check "[C55] naming both" said "the mail path $root/mailbox and the workplaces' state directory $root/mailbox/state/workplace lie one in the other"
+  check "[C55] naming both and the mail term's origin" said "build refuses: the mail path $root/mailbox and the workplaces' state directory $root/mailbox/state/workplace lie one in the other; a mailbox there would cover the seats' homes and keys, or stand where the frame keeps its state (the mail at programs/COMMS.typify:1)"
+  rm -rf -- "$root/mailbox/state"
+  check "build" exit_is 0 wp build
+  check "[C56] BUILD/mail.json holds the origins of the mail term" test "$(jq -c '.origins' "$clone/BUILD/mail.json")" = '[{"kind":"program","line":1,"path":"programs/COMMS.typify"}]'
+  rmdir -- "$root/mailbox"
+  check "[C55] up refuses a mail path that is no longer a directory on the machine, with exit 1" exit_is 1 wp up
+  check "[C55] naming it and the mail term's origin" said "the mail path $root/mailbox is not a directory on the machine; the frame shows each seat its mailbox there (the mail at programs/COMMS.typify:1)"
+  check "[C55] and starts nothing" test ! -e "$clone/BUILD/RUN"
 }
 
 t_comms_carrier() {
@@ -3537,8 +3544,12 @@ t_records_fold() {
     "$records_terms"' | .programs[-1].recorded += [r(["mail", "records/mail"]; 9)]|the record path '"$root"'/records and the mail path '"$root"'/records/mail lie one in the other (the record-path at programs/LOGS.typify:2; the mail at programs/LOGS.typify:9)'
     "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; $root + "/records/inner"; "read-only"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/records/inner, which lies at or beneath the record path '"$root"'/records, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
     "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "harbor/ledger/rec"|seat Harbor Keeper (harbor/dock/keeper): its record path '"$root"'/harbor/ledger/rec lies beneath '"$root"'/harbor/ledger (hidden, from programs/policy.typify:2), and the seat could not reach it (the record-path at programs/LOGS.typify:2)'
-    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "config/rec"|the record path '"$clone"'/rec lies at or beneath the clone '"$clone"', which the frame masks in every view'
-    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "harbor"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/harbor lies at or beneath the record path '"$root"'/harbor, where the frame shows a seat the records it may read'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "config/rec"|the record path '"$clone"'/rec lies at or beneath the clone '"$clone"', which the frame masks in every view (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "harbor"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/harbor lies at or beneath the record path '"$root"'/harbor, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "/"|the record path / would cover each seat'"'"'s whole view (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "tools"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s program '"$root"'/tools/probe lies at or beneath the record path '"$root"'/tools, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | .programs[-1].recorded += [{term: ["record-directory", "harbor", "dock", "pilot", "records/work"], origin: at(24)}]|programs/policy.typify:24 (record-directory): the seat'"'"'s directory '"$root"'/records/work lies at or beneath the record path '"$root"'/records, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | .programs[-1].recorded += [lb($root + "/records"; "1"; 23)]|programs/policy.typify:23: the label speaks of '"$root"'/records, which lies at or beneath the record path '"$root"'/records, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
     "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "statement" or .term[4] != "workplace")) | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; "/"; "read-only"; 25), st("orchard"; "-"; "-"; "office"; "/"; "read-only"; 26)]|seat Harbor Watch (harbor/tower/watch): no row for /: it has no view, and a seat with no view could reach its own record, which the plan keeps (the record at programs/LOGS.typify:1)'
     "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/systemd/journal"; "read-only"; 22)]|seat Harbor Keeper (harbor/dock/keeper): /run/systemd/journal (read-only, from programs/policy.typify:22) lies at or beneath /run/systemd/journal, which the frame hides in every view of a workplace that keeps a chain, as a hidden row would'
   )
@@ -3550,6 +3561,21 @@ t_records_fold() {
   check "[C69] and after every refusal PLAN/ is as it was" test "$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)" = "$planned"
   statements_plan "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "record-chain")) | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/systemd/journal"; "read-only"; 22)]'
   check "[C73] a workplace that keeps no chain masks no journal, so a row there is taken" exit_is 0 wplan
+  statements_plan "$records_terms"
+  check "plan" exit_is 0 wplan
+  rmdir -- "$root/records"
+  check "[C70] build refuses a record path that is not a directory on the machine, with exit 1" exit_is 1 wp build
+  check "[C70] naming it and the record-path term's origin" said "build refuses: the record path $root/records is not a directory on the machine, and the frame shows a seat the records it may read there (the record-path at programs/LOGS.typify:2)"
+  mkdir -p -- "$root/records/state"
+  check "[C70] build refuses a record path that holds the workplaces' state directory" exit_is 1 env XDG_STATE_HOME="$root/records/state" "$BASH" "$loop" build
+  check "[C70] naming both and the record-path term's origin" said "build refuses: the record path $root/records and the workplaces' state directory $root/records/state/workplace lie one in the other; it would cover the seats' homes and keys, or stand where the frame keeps its state (the record-path at programs/LOGS.typify:2)"
+  rm -rf -- "$root/records/state"
+  check "build" exit_is 0 wp build
+  check "[C70] BUILD/records.json holds the origins of the record-path term" test "$(jq -c '.origins' "$clone/BUILD/records.json")" = '[{"kind":"program","line":2,"path":"programs/LOGS.typify"}]'
+  rmdir -- "$root/records"
+  check "[C70] up refuses a record path that is no longer a directory on the machine, with exit 1" exit_is 1 wp up
+  check "[C70] naming it and the record-path term's origin" said "the record path $root/records is not a directory on the machine; the frame shows a seat the records it may read there (the record-path at programs/LOGS.typify:2)"
+  check "[C70] and starts nothing" test ! -e "$clone/BUILD/RUN"
 }
 
 records_up() {
@@ -3565,13 +3591,27 @@ t_records_in_panes() {
   day=$(date -u +%F)
   hostile=$root/tools/hostile
   { printf 'BEGIN-HOSTILE'; printf '\0\xff\xfe'; printf '%s' "#{pane_id}#(touch $root/pwned1)\$(touch $root/pwned2)%n%s%x" "\`touch $root/pwned3\`"; printf '\033[31m'; printf 'END-HOSTILE'; } > "$hostile"
+  mkdir -p -- "$root/records/Harbor Pilot"
+  printf '%s\n' forged > "$root/records/Harbor Pilot/$day.pane"
+  printf '%s\n' planted > "$root/records/planted"
   check "up with records" records_up '| def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
     add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "print=" + $root + "/tools/hostile",
       "wait=" + $root + "/records/Harbor Pilot/'"$day"'.pane", "entries=" + $root + "/records", "entries=" + $root + "/records/Harbor Pilot", "tamper=" + $root + "/records/Harbor Pilot/'"$day"'.pane",
       "list=" + $root + "/records/Harbor Pilot/../Harbor Watch", "hidden='"$s"'/records", "bus=/run/user/'"$EUID"'/bus"])
-    | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; $root + "/harbor/berth"; "read-write"; 3)]'
+    | add("harbor/dock/pilot/seat.typify"; ["report=" + $root + "/harbor/berth/pilot", "entries=" + $root + "/records", "make=" + $root + "/records"])
+    | add("harbor/tower/watch/seat.typify"; ["entries=" + $root + "/records"])
+    | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; $root + "/harbor/berth"; "read-write"; 3), st("harbor"; "dock"; "pilot"; "seat"; $root; "read-write"; 9)]'
   check "keeper ran" eventually_long grep -qx "probe keeper done" "$root/harbor/berth/keeper"
   check "pilot ran" wait_for_probe "Harbor Pilot" pilot
+  check "watch ran" wait_for_probe "Harbor Watch" watch
+  local pilot_report=$root/harbor/berth/pilot
+  check "[C76] a seat that may read no record, with a read-write row above the record path, makes no file, directory or link there" \
+    grep -qxF "make $root/records: file=refused directory=refused link=refused" "$pilot_report"
+  check "[C76] and the machine's directory at the record path holds nothing it made" \
+    test "$(cd "$root/records" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | tr '\n' ',')" = "Harbor Pilot,Harbor Pilot/$day.pane,planted,"
+  check "[C76] a file, and a directory under a seat's name, that stand in the machine's directory at the record path are shown to no seat: not to one that may read no record under a read-write row" \
+    grep -qxF "entries $root/records: " "$pilot_report"
+  check "[C76] nor to one that may read no record under a read-only row" screen_has "Harbor Watch" "entries $root/records: "
   check "[C70] build made S/records, and in it a directory for each seat, named by its keys joined by a space, all 0700" \
     test "$(cd "$s/records" && find . -maxdepth 1 -type d -printf '%P %m\n' | LC_ALL=C sort | tr '\n' ',')" = " 700,harbor dock keeper 700,harbor dock pilot 700,harbor tower watch 700,orchard barn grower 700,orchard barn picker 700,"
   check "[C70] and BUILD/records.json, listed in the MANIFEST, with each seat's directory, pane and reading" \
@@ -3600,7 +3640,10 @@ t_records_in_panes() {
   check "[C74] and records the gap with its time" eventually_long bash -c 'grep -qE "^[0-9-]+T[0-9:]+Z the pipe of the pane was gone, and the carrier set it again$" "$1/gaps"' _ "$(record_of keeper)"
   wp why "Harbor Keeper" "$root/records/Harbor Pilot" > "$scratch/out" 2>&1
   check "[C76] why names the records a seat is shown" \
-    said "the seat's records: shown by the frame after the rows (Logs) at $root/records, read-only: one directory for each seat whose record it may read, under that seat's name: Harbor Pilot"
+    said "the seat's records: shown by the frame after the rows (Logs) at $root/records, whatever is there on the machine: a read-only file system, holding one read-only directory for each seat whose record it may read, under that seat's name: Harbor Pilot"
+  wp why "Harbor Pilot" "$root/records" > "$scratch/out" 2>&1
+  check "[C76] and says, for a seat that may read no record, that an empty read-only file system stands at the record path, whatever the machine holds there" \
+    said "the seat's records: shown by the frame after the rows (Logs) at $root/records, whatever is there on the machine: a read-only file system, empty, since the seat may read no record"
   check "[C73] keeper's view masks the journal's places, the closed masks after its rows" \
     bash -c 'for m in "${@:2}"; do [[ -d $m ]] || continue; [[ $(jq -r --arg d "$m" ". as \$a | [range(0; length) | select(\$a[.] == \"--tmpfs\" and \$a[. + 1] == \$d) | \$a[. - 1]] | join(\",\")" <<< "$1") == 0000 ]] || exit 1; done' _ \
     "$(seat_command 'Harbor Keeper')" /var/log/journal /run/log/journal /run/systemd/journal

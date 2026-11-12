@@ -940,15 +940,19 @@ store_env() {
   env -i PATH="$PATH" LC_ALL=C HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_LITERAL_PATHSPECS=1 "$@"
 }
 
+origins_at() { jq -r '[.[]? | "\(.path // "?"):\(.line // "?")"] | join(", ")'; }
+
 make_mail() {
-  local workplace=$1 path state_dir store comms entries='[]' seat name box rel status
+  local workplace=$1 path state_dir store comms entries='[]' seat name box rel status origins at
   path=$(jq -r '.view.mail.path // empty' <<< "$folded")
   [[ -n $path ]] || return 0
   need_mail_programs || exit $?
-  [[ -d $path ]] || die "build refuses: the mail path $path is not a directory on the machine, and the frame shows each seat its mailbox there"
+  origins=$(jq -c '.view.mail.origins // []' <<< "$folded")
+  at=$(origins_at <<< "$origins")
+  [[ -d $path ]] || die "build refuses: the mail path $path is not a directory on the machine, and the frame shows each seat its mailbox there (the mail at $at)"
   state_dir=$(state_root) || die "build needs the workplaces' state directory for the mail, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
   if [[ $path == "$state_dir" || $path == "$state_dir"/* || $state_dir == "$path"/* ]]; then
-    die "build refuses: the mail path $path and the workplaces' state directory $state_dir lie one in the other; a mailbox there would cover the seats' homes and keys, or stand where the frame keeps its state"
+    die "build refuses: the mail path $path and the workplaces' state directory $state_dir lie one in the other; a mailbox there would cover the seats' homes and keys, or stand where the frame keeps its state (the mail at $at)"
   fi
   state_dir=$state_dir/$workplace
   [[ -d $state_dir && ! -L $state_dir ]] || die "the state directory $state_dir is missing" 2
@@ -980,8 +984,8 @@ make_mail() {
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg store "$store" --arg comms "$comms" \
       '. + [$s + {box: $box, in: "\($store)/\($box)/in", sent: "\($store)/\($box)/sent", out: "\($comms)/\($box)/out", answers: "\($comms)/\($box)/answers"}]' <<< "$entries")
   done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)' <<< "$folded")
-  jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
-    '{workplace: $w, state: $s, path: $p, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
+  jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
+    '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
     || die "cannot write $build_dir/mail.json" 2
   say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path"
 }
@@ -997,17 +1001,19 @@ need_programs_for() {
 carrier_unit() { printf 'workplace-carrier-%s.service\n' "$1"; }
 
 make_records() {
-  local workplace=$1 path state_dir dir entries='[]' seat box rel chain
+  local workplace=$1 path state_dir dir entries='[]' seat box rel chain origins at
   [[ $(jq -r '.view.records // empty | type' <<< "$folded") == object ]] || return 0
   path=$(jq -r '.view.records.path // empty' <<< "$folded")
+  origins=$(jq -c '.report.record_path_origins // []' <<< "$folded")
+  at=$(origins_at <<< "$origins")
   chain=$(jq -r '.view.records.chain // empty' <<< "$folded")
   need_programs_for "a plan that keeps a record" "${LOG_PROGRAMS[@]}" || exit 2
   [[ $chain == journal ]] && { need_programs_for "a plan whose chain goes to the journal" "${JOURNAL_PROGRAMS[@]}" || exit 2; }
   state_dir=$(state_root) || die "build needs the workplaces' state directory for the records, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
   if [[ -n $path ]]; then
-    [[ -d $path ]] || die "build refuses: the record path $path is not a directory on the machine, and the frame shows a seat the records it may read there"
+    [[ -d $path ]] || die "build refuses: the record path $path is not a directory on the machine, and the frame shows a seat the records it may read there (the record-path at $at)"
     if [[ $path == "$state_dir" || $path == "$state_dir"/* || $state_dir == "$path"/* ]]; then
-      die "build refuses: the record path $path and the workplaces' state directory $state_dir lie one in the other; it would cover the seats' homes and keys, or stand where the frame keeps its state"
+      die "build refuses: the record path $path and the workplaces' state directory $state_dir lie one in the other; it would cover the seats' homes and keys, or stand where the frame keeps its state (the record-path at $at)"
     fi
   fi
   state_dir=$state_dir/$workplace
@@ -1021,9 +1027,9 @@ make_records() {
     make_dirs "$state_dir" "records/$box" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the record of $(jq -r '.name' <<< "$seat") stands"
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg dir "$dir" '. + [$s + {box: $box, dir: "\($dir)/\($box)"}]' <<< "$entries")
   done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], pane: .record.pane, reads: (.reach.record // [])}' <<< "$folded")
-  jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --arg c "$chain" --arg u "$(carrier_unit "$workplace")" \
+  jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --argjson o "$origins" --arg c "$chain" --arg u "$(carrier_unit "$workplace")" \
     --argjson limit "$(jq '.view.records.limit' <<< "$folded")" --argjson seats "$entries" \
-    '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), limit: $limit,
+    '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), origins: $o, limit: $limit,
       chain: (if $c == "" then null else $c end), unit: $u, seats: $seats}' > "$build_dir/records.json" \
     || die "cannot write $build_dir/records.json" 2
   say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
@@ -1675,7 +1681,7 @@ set_mail() {
   fi
   need_mail_programs || return 1
   dir=$(jq -r '.path' "$mail")
-  [[ -d $dir ]] || { warn "the mail path $dir is not a directory on the machine; the frame shows each seat its mailbox there"; return 1; }
+  [[ -d $dir ]] || { warn "the mail path $dir is not a directory on the machine; the frame shows each seat its mailbox there (the mail at $(jq -c '.origins // []' "$mail" | origins_at))"; return 1; }
   while IFS= read -r entry; do
     for dir in in sent out answers; do
       dir=$(jq -r --arg d "$dir" '.[$d]' <<< "$entry")
@@ -1700,13 +1706,13 @@ set_records() {
   path=$(jq -r '.path // empty' "$records")
   chain=$(jq -r '.chain // empty' "$records")
   if [[ -n $path ]]; then
-    [[ -d $path ]] || { warn "the record path $path is not a directory on the machine"; return 1; }
+    [[ -d $path ]] || { warn "the record path $path is not a directory on the machine; the frame shows a seat the records it may read there (the record-path at $(jq -c '.origins // []' "$records" | origins_at))"; return 1; }
     state=$(jq -c --arg p "$path" '.slots[(["record-path"] | tojson)] = $p' <<< "$state")
   fi
   while IFS= read -r entry; do
     [[ -d $(jq -r '.dir' <<< "$entry") ]] || { warn "the record of $(jq -r '.name' <<< "$entry") is missing; build again"; return 1; }
     binds=$(jq -c --slurpfile r "$records" --arg p "$path" '[.reads[] as $n | $r[0].seats[] | select(.name == $n) | [.dir, "\($p)/\($n)"]]' <<< "$entry")
-    [[ $binds == '[]' ]] && continue
+    [[ -n $path ]] || continue
     state=$(jq -c --argjson k "$(jq -c '.seat' <<< "$entry")" --arg b "$binds" '.slots[(["record-binds"] + $k | tojson)] = $b' <<< "$state")
   done < <(jq -c '.seats[]' "$records")
   if [[ -n $chain ]]; then
@@ -2743,7 +2749,7 @@ cmd_why() {
                + (if ($runrows | length) == 0 then "" else "; the seat's own rows beneath it stand: \([$runrows[] | "\(.key[3]) \(.value[0])"] | join(", "))" end)
              else empty end),
             (if within($path; $recordpath) then
-               "the seat's records: shown by the frame after the rows (Logs) at \($recordpath), read-only: one directory for each seat whose record it may read, under that seat's name: \(($folded_seat.reach.record? // []) | if length == 0 then "none" else join(", ") end)"
+               "the seat's records: shown by the frame after the rows (Logs) at \($recordpath), whatever is there on the machine: a read-only file system, \(($folded_seat.reach.record? // []) | if length == 0 then "empty, since the seat may read no record" else "holding one read-only directory for each seat whose record it may read, under that seat's name: \(join(", "))" end)"
              else empty end),
             ($tmuxdirs[] | select(. as $d | within($path; $d))
              | "masked by the frame after the rows: \(.), where the user's tmux servers keep their sockets, is shown to no seat; the workplace's own server listens in the clone's run directory, which no view holds"),

@@ -406,6 +406,7 @@ joined($b[0]; $root) as $plan
                    report: {
                      names: [$done[] | {key: (.seat | tojson), value: .name}] | from_entries,
                      wakes: [$wakes[] | {kind: .term[1], pattern: .term[2], origins}],
+                     record_path_origins: [$rpaths[].origin],
                      reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,
                      pairs: [$labels[] as $upper | $labels[] | . as $lower
                        | select(beneath($lower.path; $upper.path) and $lower.value < $upper.value)

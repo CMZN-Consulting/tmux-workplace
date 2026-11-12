@@ -1,13 +1,12 @@
 {
   "root": "/tmp/workplace-reference-s3",
   "name": "config-bed25a0bf038",
-  "reader": "4bb7584a88a4e59bd1295f56f771a3f434e5d7ea",
-  "reader_version": "1.0",
+  "reader": "1.0",
   "derivations": {
-    "assembly": "whole-bodies-manual-v1",
-    "reference-fixture": "reference-fixture-v3-clone",
+    "assembly": "whole-bodies-v1",
+    "root-program": "root-two-lines-v1",
     "workplace-name": "sha256-path-prefix12-v1",
-    "root-program": "root-two-lines-v1"
+    "fold": "frame-5.17-5.18-5.24-v2"
   },
   "inputs": [
     {
@@ -163,6 +162,10 @@
     {
       "path": "plan.json",
       "sha256": "c2e88ff3380d0fddd34610196a7be36a726e05331d9fe3f692e38d4ce4717a9c"
+    },
+    {
+      "path": "view.json",
+      "sha256": "cd4e82c602a8d428a3eff52879c809f342ee50442f7f498f460a0c39e718b466"
     }
   ]
 }

@@ -69,6 +69,11 @@
   "tables": {
     "view": {
       "cell": "view",
+      "fold": [
+        "statement",
+        "clearance",
+        "label"
+      ],
       "programs": [
         "bwrap"
       ],

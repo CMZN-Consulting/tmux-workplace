@@ -1,6 +1,7 @@
+include "table";
 $b[0] as $binding
 | . as $plan
-| def source_rows($cell): ($plan | if type == "object" and (.state | type) == "object" then (.state[$cell] // []) else [] end);
+| def source_rows($spec): table_rows($plan; $folded[0]; $spec);
   def term: if type == "object" and .unchecked == true then .term else . end;
   def strings_list: type == "array" and ([.[] | type] | unique) == ["string"];
   def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
@@ -53,7 +54,7 @@ $b[0] as $binding
   def seat_keys: [terms[] | .term | select(.[0] == "pane") | .[1:4]];
   def table_problems:
     seat_keys as $seats
-    | $binding.tables | to_entries[] | .key as $name | .value as $spec | source_rows($spec.cell) as $rows
+    | $binding.tables | to_entries[] | .key as $name | .value as $spec | source_rows($spec) as $rows
     | if ($rows | type) != "array" then "the plan's state cell \($spec.cell) is not a list"
       else
         ($rows | to_entries[] | .key as $i | .value as $row
@@ -80,6 +81,8 @@ $b[0] as $binding
          else empty end)
       end;
   def problems:
+    (if any($binding.tables[]; folded($plan; .)) and $folded[0] == null
+     then "the plan holds statements, clearances or labels, and no folded view was given with it" else empty end),
     (if (.status | type) != "string" or (.status | IN("ok", "unchecked") | not)
      then "the plan's status is \(.status // "absent"), not ok or unchecked" else empty end),
     (if [.. | strings | explode[] | select(. < 32 or . == 127)] | length > 0
@@ -98,14 +101,14 @@ $b[0] as $binding
         | if ($errors | length) > 0 then {errors: $errors}
           else
             {errors: [],
-             programs: ([$binding.tables[] | select((source_rows(.cell) | length) > 0) | .programs // [] | .[]] | unique),
+             programs: ([$binding.tables[] | select((source_rows(.) | length) > 0) | .programs // [] | .[]] | unique),
              terms: (terms | length),
              name: ([terms[] | .term | select(.[0] == $binding.name.term) | .[$binding.name.arg]] | first // null),
-             tables: ($binding.tables | with_entries(.value = source_rows(.value.cell))),
+             tables: ($binding.tables | with_entries(.value = source_rows(.value))),
              must_exist: [$binding.tables[] | select(has("must-exist")) | . as $spec
-                          | source_rows($spec.cell)[] | select(.value[0] as $v | $spec["must-exist"] | index($v)) | .key[3]] | unique,
+                          | source_rows($spec)[] | select(.value[0] as $v | $spec["must-exist"] | index($v)) | .key[3]] | unique,
              must_be_directory: [$binding.tables[] | select(has("directory-states")) | . as $spec
-                          | source_rows($spec.cell)[] | select(.key[3] != $spec.root)
+                          | source_rows($spec)[] | select(.key[3] != $spec.root)
                           | select(.value[0] as $v | $spec["directory-states"] | index($v)) | .key[3]] | unique,
              requires: [terms[] | .term as $t | ($binding.primitives[$t[0]].require // [])[]
                         | select(.[0] != "name") | select(.[1] | has("path")) | [.[0], $t[.[1].path]]] | unique}

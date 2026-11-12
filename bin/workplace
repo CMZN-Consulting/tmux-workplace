@@ -10,7 +10,7 @@ if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 2) ))
   exit 2
 fi
 
-TMUX_FLOOR=3.0
+TMUX_FLOOR=3.5a
 JQ_FLOOR=1.7
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 
@@ -101,8 +101,8 @@ json_list() {
 }
 
 plan_report() {
-  local plan=$1 binding=$2 checker=$3 errors
-  report=$(jq -c --slurpfile b "$binding" -f "$checker" "$plan" 2>&1) \
+  local plan=$1 binding=$2 checker=$3 folded_view=${4:-/dev/null} errors
+  report=$(jq -c -L "${checker%/*}" --slurpfile b "$binding" --slurpfile folded "$folded_view" -f "$checker" "$plan" 2>&1) \
     || die "the plan is not JSON that jq can read: $report"
   [[ -n $report ]] || die "the plan $plan is empty"
   mapfile -t errors < <(jq -r '.errors[]' <<< "$report")
@@ -116,7 +116,7 @@ plan_report() {
 
 sha_of() {
   local sum
-  sum=$(sha256sum -- "$1" 2> /dev/null) || return 1
+  sum=$(sha256sum < "$1" 2> /dev/null) || return 1
   printf '%s\n' "${sum%%  *}"
 }
 
@@ -201,7 +201,281 @@ check_name() {
   return 1
 }
 
-manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq)
+work_dir() {
+  local dir
+  dir=${TMPDIR:-/tmp}/workplace-$1-$$-$SRANDOM
+  mkdir -m 0700 -- "$dir" || die "cannot make $dir" 2
+  printf '%s\n' "$dir"
+}
+
+assemble() {
+  local into=$1 file=$clone/workplace.json problems line
+  [[ -f $file && ! -L $file ]] || die "$file is missing; the clone of a workplace holds workplace.json" 2
+  problems=$(jq -r '
+    def path_word: type == "string" and (test("[[:cntrl:]]") | not) and (startswith("/") | not)
+      and (split("/") | all(. != "" and . != "." and . != ".."));
+    if type != "object" then "workplace.json is not an object"
+    else
+      (keys[] | select(IN("layers", "socket") | not) | "workplace.json holds \(.), which the loop does not read"),
+      (if (.layers | type) != "array" or (.layers | length) == 0 then "workplace.json names no layers"
+       else
+         (.layers[] | select(path_word | not) | "workplace.json names a layer that is not a relative path: \(tojson)"),
+         ([.layers[] | strings | sub("^.*/"; "") | sub("\\.typify$"; "")] | group_by(.)[] | select(length > 1)
+          | "the layer name \(.[0]) is listed \(length) times in workplace.json")
+       end),
+      (if has("socket") and .socket != "default" then "workplace.json says socket \(.socket | tojson), and only \"default\" is known" else empty end)
+    end' "$file" 2>&1) || die "workplace.json is not JSON that jq can read: $problems" 2
+  if [[ -n $problems ]]; then
+    while IFS= read -r line; do warn "$line"; done <<< "$problems"
+    exit 2
+  fi
+  local -a layers lines
+  mapfile -t layers < <(jq -r '.layers[]' "$file")
+  assembled_name=default
+  if [[ $(jq -r '.socket // ""' "$file") != default ]]; then
+    assembled_name=$(derive_name sha256-path-prefix12-v1) || die "cannot derive the workplace's name" 2
+  fi
+  local declarations=$into/LanguageDeclarations.typify layer path content size at=1 i language
+  local -A declared=()
+  printf '%s\n' '#lang typify' > "$declarations" || die "cannot write $declarations" 2
+  assembled_map='[]'
+  for layer in "${layers[@]}"; do
+    path=$clone/$layer
+    [[ -f $path && ! -L $path ]] || die "the layer $layer is not a file in $clone" 2
+    content=""
+    IFS= read -r -d '' content < "$path" || :
+    size=$(stat -c %s -- "$path") || die "cannot read $path" 2
+    (( ${#content} == size )) || die "the layer $layer holds a NUL byte" 2
+    [[ $content != $'\xef\xbb\xbf'* ]] || die "the layer $layer begins with a byte-order mark, and the assembler does not convert it" 2
+    [[ $content != *$'\r'* ]] || die "the layer $layer has CR line ends, and the assembler does not convert them" 2
+    [[ $content == *$'\n' ]] || die "the layer $layer does not end with a newline" 2
+    mapfile -t lines <<< "${content%$'\n'}"
+    [[ ${lines[0]} == '#lang typify' ]] || die "the layer $layer does not begin with the header #lang typify" 2
+    for (( i = 1; i < ${#lines[@]}; i++ )); do
+      [[ ${lines[i]} =~ ^declare[[:space:]]*:[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]] || continue
+      language=${BASH_REMATCH[1]}
+      [[ -z ${declared[$language]+x} ]] \
+        || die "the language $language is declared twice: at ${declared[$language]} and at $layer:$(( i + 1 ))" 2
+      declared[$language]=$layer:$(( i + 1 ))
+    done
+    if (( ${#lines[@]} > 1 )); then
+      printf '%s\n' "${lines[@]:1}" >> "$declarations" || die "cannot write $declarations" 2
+    fi
+    assembled_map=$(jq -c --arg s "$layer" --argjson a "$(( at + 1 ))" --argjson n "$(( ${#lines[@]} - 1 ))" \
+      '. + [{source: $s, source_start_line: 2, assembled_start_line: $a, line_count: $n}]' <<< "$assembled_map")
+    at=$(( at + ${#lines[@]} - 1 ))
+  done
+  [[ -d $clone/programs && ! -L $clone/programs ]] || die "$clone/programs is missing; the clone holds its programs there" 2
+  [[ -f $clone/tmux.conf && ! -L $clone/tmux.conf ]] || die "$clone/tmux.conf is missing" 2
+  local -a programs=()
+  for path in "$clone"/programs/**; do
+    [[ -L $path ]] && die "${path#"$clone"/} is a symbolic link; the assembler copies files only" 2
+    [[ -d $path ]] && continue
+    [[ -f $path ]] || die "${path#"$clone"/} is not a file" 2
+    content=""
+    IFS= read -r -d '' content < "$path" || :
+    [[ $content != $'\xef\xbb\xbf'* ]] || die "the program ${path#"$clone"/} begins with a byte-order mark, and the assembler does not convert it" 2
+    [[ $content != *$'\r'* ]] || die "the program ${path#"$clone"/} has CR line ends, and the assembler does not convert them" 2
+    programs+=("${path#"$clone"/}")
+  done
+  (( ${#programs[@]} )) || die "$clone/programs holds no program" 2
+  local conf
+  if [[ $clone == "$root" ]]; then conf=tmux.conf
+  elif [[ $root == / ]]; then conf=${clone#/}/tmux.conf
+  else conf=${clone#"$root"/}/tmux.conf; fi
+  [[ $root$assembled_name$conf != *[[:cntrl:]]* ]] || die "the root, the name or the configuration's path holds a control character" 2
+  mkdir -- "$into/tree" && cp -R -- "$clone/programs" "$into/tree/programs" || die "cannot copy the programs into $into/tree" 2
+  printf '%s\n' "workdir : $root" "server : $assembled_name : $conf" > "$into/tree/ROOT.typify" || die "cannot write the root program" 2
+  local -a inputs
+  mapfile -d '' -t inputs < <(printf '%s\0' "${programs[@]}" | jq -R -s --raw-output0 'split("\u0000")[:-1] | sort[]')
+  inputs=(workplace.json "${layers[@]}" "${inputs[@]}" tmux.conf)
+  assembled_inputs=$(for path in "${inputs[@]}"; do
+      printf '%s\0%s\0' "$path" "$(sha_of "$clone/$path")" || exit 1
+    done | jq -R -s -c 'split("\u0000")[:-1] | [range(0; length; 2) as $i | {path: .[$i], sha256: .[$i + 1]}]') \
+    || die "cannot hash the inputs" 2
+  assembled_generated=$(jq -n -c --arg d "$(sha_of "$declarations")" --arg r "$(sha_of "$into/tree/ROOT.typify")" \
+    '[{path: "LanguageDeclarations.typify", sha256: $d}, {path: "tree/ROOT.typify", sha256: $r}]')
+}
+
+folds() {
+  jq -e -L "$tool/libexec" --slurpfile b "$2" 'include "table"; . as $plan | any($b[0].tables[]; folded($plan; .))' "$1" > /dev/null 2>&1
+}
+
+fold_plan() {
+  folded=$(jq -c -L "$tool/libexec" -f "$tool/libexec/fold.jq" "$1" 2>&1) || die "the fold cannot read $1: $folded" 2
+  local -a errors
+  mapfile -t errors < <(jq -r '.errors[]?' <<< "$folded")
+  if (( ${#errors[@]} )); then
+    printf '%s\n' "${errors[@]/#/workplace: the fold refuses: }" >&2
+    return 1
+  fi
+}
+
+show_diagnostics() {
+  local output=$1 declarations=$2 tree=$3
+  jq -r --arg d "$declarations" --arg t "$tree/" --argjson map "$assembled_map" '
+    def place($f; $l):
+      if $f == $d then
+        if $l == null then "the assembled declarations"
+        elif $l == 1 then "the header of the assembled declarations, which the assembler writes"
+        else ([$map[] | select($l >= .assembled_start_line and $l < .assembled_start_line + .line_count)][0]) as $m
+          | if $m == null then "the assembled declarations, line \($l)"
+            else "\($m.source):\($l - $m.assembled_start_line + $m.source_start_line)" end
+        end
+      elif ($f | type) == "string" and ($f | startswith($t)) then
+        ($f | ltrimstr($t)) as $r
+        | if $r == "ROOT.typify" then "the generated root program, line \($l // "?")" else "\($r):\($l // "?")" end
+      else "\($f // "the reader"):\($l // "?")" end;
+    (.diagnostics // [])[]
+    | "\(place(.file; .range.start.line?)): \(.severity) \(.code): \(.message)"
+      + (if .file == $d and .range.start.line? != null then " (the reader: LanguageDeclarations.typify:\(.range.start.line))" else "" end)
+  ' <<< "$output" 2> /dev/null
+}
+
+print_fold_report() {
+  jq -r '
+    def at($o): "\($o.path // "?"):\($o.line // "?")";
+    def ats($os): [$os[] | at(.)] | join(", ");
+    def said($s): "\($s.term[4]) \([$s.term[1:4][] | select(. != "-")] | join("/") | if . == "" then "" else . + " " end)\($s.term[5]) \($s.term[6]) (\(ats($s.origins)))";
+    .report.names as $names
+    | (.view.seats[]
+       | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); clearance \(.clearance.value)"
+         + (if .clearance.scope == null then ", by default" else ", the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)
+         + "; \(.rows) rows",
+         (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
+         (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
+         "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
+      (.report.pairs[] | "label \(.lower.path) (\(.lower.value)) lies beneath \(.upper.path) (\(.upper.value)), and opens nothing to the seats between: \(if (.between | length) == 0 then "none" else .between | join(", ") end)")
+  ' <<< "$folded"
+}
+
+held_by_nobody() {
+  local view=$1 path child verdict
+  local -a queue
+  mapfile -t queue < <(jq -r '[.rows[] | select(.value[0] == "searchable-only") | .key[3]] | unique[]' "$view")
+  local -a found=()
+  while (( ${#queue[@]} )); do
+    path=${queue[0]}
+    queue=("${queue[@]:1}")
+    for child in "$path"/*/; do
+      child=${child%/}
+      [[ $child == //* ]] && child=${child#/}
+      [[ -L $child ]] && continue
+      verdict=$(jq -r --arg d "$child" '
+        def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
+        [.rows | group_by(.key[0:3])[]
+         | if any(.[]; .key[3] == $d or beneath(.key[3]; $d)) then "named"
+           else ([.[] | select(beneath($d; .key[3]))] | max_by(.key[3] | length)) as $above
+             | if $above == null or ($above.value[0] | IN("hidden", "searchable-only", "scratch") | not) then "seen" else "unseen" end
+           end] as $all
+        | if any($all[]; . == "seen") then "seen"
+          elif all($all[]; . == "unseen") then "nobody"
+          else "through" end' "$view")
+      case $verdict in
+        nobody) found+=("$child") ;;
+        through) queue+=("$child") ;;
+      esac
+    done
+  done
+  (( ${#found[@]} )) || return 0
+  say "held by nobody, a report and no part of the plan:"
+  printf '  %s\n' "${found[@]}"
+}
+
+cmd_plan() {
+  local name
+  (( $# == 0 )) || die "plan takes no arguments; it reads the clone at WORKPLACE_CONFIG" 2
+  need_jq
+  locate
+  local reader version
+  reader=$(command -v typify) || die "plan needs the reader, the program typify on PATH, and it is not there" 2
+  work=$(work_dir plan)
+  trap 'rm -rf -- "$work"' EXIT
+  trap 'exit 130' INT TERM
+  assemble "$work"
+  version=$("$reader" --version 2> /dev/null) || die "the reader $reader does not answer --version" 2
+  version=${version%%$'\n'*}
+  [[ -n ${version//[[:space:]]/} ]] || die "the reader $reader states no version, and plan stops here" 2
+  local output status declarations=$work/LanguageDeclarations.typify
+  output=$("$reader" check "$declarations" --json 2> "$work/check.err")
+  status=$?
+  if (( status != 0 )); then
+    warn "the reader refuses the declarations:"
+    show_diagnostics "$output" "$declarations" "$work/tree" >&2 || sed 's/^/  /' "$work/check.err" >&2
+    exit $(( status == 1 ? 1 : 2 ))
+  fi
+  "$reader" plan "$declarations" "$work/tree" --json > "$work/plan.json" 2> "$work/plan.err"
+  status=$?
+  if (( status != 0 )); then
+    warn "the reader refuses the programs:"
+    show_diagnostics "$(< "$work/plan.json")" "$declarations" "$work/tree" >&2 || sed 's/^/  /' "$work/plan.err" >&2
+    exit $(( status == 1 ? 1 : 2 ))
+  fi
+  local facts
+  facts=$(jq -r '.facts // "absent" | tostring' "$work/plan.json") || die "the reader's plan is not JSON that jq can read" 2
+  [[ $facts == none ]] \
+    || die "the plan was made on facts ($facts); a plan whose facts member is not none is refused for now, since 5.15 leaves open which facts build compares"
+  local -a outputs=(plan.json)
+  folded=""
+  if folds "$work/plan.json" "$tool/host/binding.json"; then
+    fold_plan "$work/plan.json" || exit 1
+    jq '.view' <<< "$folded" > "$work/view.json" || die "cannot write the view"
+    outputs+=(view.json)
+  fi
+  local out_json
+  out_json=$(for name in "${outputs[@]}"; do printf '%s\0%s\0' "$name" "$(sha_of "$work/$name")"; done \
+    | jq -R -s -c 'split("\u0000")[:-1] | [range(0; length; 2) as $i | {path: .[$i], sha256: .[$i + 1]}]')
+  jq -n --arg root "$root" --arg name "$assembled_name" --arg reader "$version" \
+    --argjson inputs "$assembled_inputs" --argjson generated "$assembled_generated" \
+    --argjson map "$assembled_map" --argjson outputs "$out_json" '
+    {root: $root, name: $name, reader: $reader,
+     derivations: {assembly: "whole-bodies-v1", "root-program": "root-two-lines-v1",
+                   "workplace-name": "sha256-path-prefix12-v1", fold: "frame-5.17-5.18-v1"},
+     inputs: $inputs, generated: $generated, source_map: $map, outputs: $outputs}' > "$work/manifest.json" \
+    || die "cannot write the manifest"
+  trap '' INT TERM
+  rm -rf -- "$plan_dir" && mkdir -- "$plan_dir" || die "cannot replace $plan_dir; run plan again" 2
+  for name in "${outputs[@]}" manifest.json; do
+    cp -- "$work/$name" "$plan_dir/$name" || die "cannot write $plan_dir/$name; PLAN/ is incomplete, run plan again" 2
+  done
+  trap 'exit 130' INT TERM
+  say "planned $plan_dir: the reader $version; $(jq -r '[.programs[].plan | length] | add' "$plan_dir/plan.json") terms"
+  for name in "${outputs[@]}" manifest.json; do
+    say "  $name $(sha_of "$plan_dir/$name")"
+  done
+  if [[ -n $folded ]]; then
+    print_fold_report
+    held_by_nobody "$plan_dir/view.json"
+  fi
+  return 0
+}
+
+reassemble_and_compare() {
+  local manifest=$1 differences line
+  work=$(work_dir build)
+  trap 'rm -rf -- "$work"' EXIT
+  trap 'exit 130' INT TERM
+  assemble "$work"
+  differences=$(jq -r --arg name "$assembled_name" --argjson inputs "$assembled_inputs" --argjson generated "$assembled_generated" '
+    def by: map({key: .path, value: .sha256}) | from_entries;
+    (if .name != $name then "the manifest names the workplace \(.name), and the clone assembles it as \($name)" else empty end),
+    ((($inputs | map(.path)) - (.inputs | map(.path)))[] | "the clone holds the input \(.), which the manifest does not list"),
+    (((.inputs | map(.path)) - ($inputs | map(.path)))[] | "the manifest lists the input \(.), which the assembly does not read"),
+    (((.generated // []) | by) as $then | ($generated | by) as $now
+     | (($now | keys[]) as $p
+        | if ($then | has($p) | not) then "the manifest does not list the generated \($p)"
+          elif $then[$p] != $now[$p] then "the generated \($p) is not the one the plan was made from"
+          else empty end),
+       ($then | keys[] | select(. as $p | $now | has($p) | not) | "the manifest lists a generated \(.), which the assembler does not make"))
+  ' "$manifest") || die "cannot compare the assembly with the manifest"
+  rm -rf -- "$work"
+  trap - EXIT INT TERM
+  [[ -z $differences ]] && return 0
+  while IFS= read -r line; do warn "$line"; done <<< "$differences"
+  return 1
+}
+
+manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
 
 cmd_build() {
   (( $# == 0 )) || die "build takes no arguments; it reads PLAN/ in the configuration's clone" 2
@@ -235,9 +509,10 @@ cmd_build() {
     elif [[ $got != "$want" ]]; then warn "the input $path has changed since the plan was made"; bad=1; fi
   done
   local covered
-  covered=$(jq -r --arg facts "$([[ -f $plan_dir/facts.json ]] && printf '%s' yes)" '
+  covered=$(jq -r --arg facts "$([[ -f $plan_dir/facts.json ]] && printf '%s' yes)" \
+    --arg view "$([[ -f $plan_dir/view.json ]] && printf '%s' yes)" '
     [.outputs[].path] as $listed
-    | (["plan.json"] + (if $facts == "yes" then ["facts.json"] else [] end))[]
+    | (["plan.json"] + (if $facts == "yes" then ["facts.json"] else [] end) + (if $view == "yes" then ["view.json"] else [] end))[]
     | select(. as $f | $listed | index($f) | not)' "$manifest")
   [[ -z $covered ]] || die "PLAN/manifest.json does not list $(printf '%s ' $covered)among its outputs"
   mapfile -t entries < <(jq -r '.outputs[] | "\(.sha256)\t\(.path)"' "$manifest")
@@ -248,7 +523,34 @@ cmd_build() {
     elif [[ $got != "$want" ]]; then warn "the plan's file $path has changed since the plan was made"; bad=1; fi
   done
   (( bad == 0 )) || die "build refuses: the plan no longer matches its sources"
-  plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq"
+  if [[ -e $clone/workplace.json ]] || jq -e '.generated != null' "$manifest" > /dev/null 2>&1; then
+    reassemble_and_compare "$manifest" || die "build refuses: the clone no longer assembles to what the plan was made from"
+  fi
+  local view_file=/dev/null
+  if folds "$plan_dir/plan.json" "$tool/host/binding.json"; then
+    [[ -f $plan_dir/view.json ]] || die "the plan holds statements, and PLAN/view.json, its folded view, is missing" 2
+    fold_plan "$plan_dir/plan.json" || die "build refuses: the fold refuses PLAN/plan.json"
+    local refolded=$build_dir.view-$$
+    jq '.view' <<< "$folded" > "$refolded" || die "cannot write $refolded" 2
+    local -a differing
+    mapfile -t differing < <(jq -r --slurpfile now "$refolded" '
+      if . == $now[0] then empty
+      else
+        ([.seats[]?.seat] + [$now[0].seats[].seat] | unique[]) as $k
+        | select(([.rows[]? | select(.key[0:3] == $k)] != [$now[0].rows[] | select(.key[0:3] == $k)])
+                 or ([.seats[]? | select(.seat == $k)] != [$now[0].seats[] | select(.seat == $k)]))
+        | $k | join("/")
+      end, (if . == $now[0] then "same" else "differs" end)' "$plan_dir/view.json" 2> /dev/null)
+    rm -f -- "$refolded"
+    (( ${#differing[@]} )) || die "PLAN/view.json is not JSON that jq can read"
+    [[ ${differing[-1]} == same ]] || {
+      unset 'differing[-1]'
+      local IFS=,
+      die "PLAN/view.json is not the fold of PLAN/plan.json; it differs for ${differing[*]:-its form}"
+    }
+    view_file=$plan_dir/view.json
+  fi
+  plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq" "$view_file"
   check_name "$manifest" || die "build refuses: the plan's workplace name is not the one its clone gives"
   if [[ $facts_member == none ]]; then
     :
@@ -277,11 +579,15 @@ cmd_build() {
   done
   (( bad == 0 )) || die "build refuses: a path the plan names is missing or of the wrong kind"
   local -a sources=("$plan_dir/plan.json" "$plan_dir/manifest.json" "$tool/host/binding.json"
-    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq")
+    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq")
   local -a listed=("${manifest_files[@]}")
   if [[ -f $plan_dir/facts.json ]]; then
     sources+=("$plan_dir/facts.json")
     listed+=(plan-facts.json)
+  fi
+  if [[ -f $plan_dir/view.json ]]; then
+    sources+=("$plan_dir/view.json")
+    listed+=(plan-view.json)
   fi
   mkdir -- "$build_dir" || die "cannot make $build_dir"
   trap 'rm -rf -- "$build_dir"' EXIT
@@ -290,10 +596,11 @@ cmd_build() {
     mkdir -- "$build_dir/libexec" "$build_dir/bin" &&
       cp -- "$plan_dir/plan.json" "$build_dir/plan.json" &&
       { [[ ! -f $plan_dir/facts.json ]] || cp -- "$plan_dir/facts.json" "$build_dir/plan-facts.json"; } &&
+      { [[ ! -f $plan_dir/view.json ]] || cp -- "$plan_dir/view.json" "$build_dir/plan-view.json"; } &&
       cp -- "$plan_dir/manifest.json" "$build_dir/plan-manifest.json" &&
       cp -- "$tool/host/binding.json" "$build_dir/binding.json" &&
       cp -- "$tool/bin/workplace" "$build_dir/bin/workplace" &&
-      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$build_dir/libexec/"
+      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$build_dir/libexec/"
   }; then
     rm -rf -- "$build_dir"
     die "build failed; $build_dir was removed"
@@ -529,7 +836,9 @@ cmd_up() {
   need_tmux
   locate
   verify_build || die "up starts only a verified build, and never builds"
-  plan_report "$build_dir/plan.json" "$build_dir/binding.json" "$build_dir/libexec/check.jq"
+  local view_file=/dev/null
+  [[ -f $build_dir/plan-view.json ]] && view_file=$build_dir/plan-view.json
+  plan_report "$build_dir/plan.json" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
   mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
   local run
@@ -625,29 +934,46 @@ cmd_why() {
   [[ $path == /* ]] || die "why takes an absolute path, not $path" 2
   need_jq
   locate
-  local plan=$plan_dir/plan.json binding=$tool/host/binding.json
-  [[ -f $build_dir/plan.json ]] && { plan=$build_dir/plan.json; binding=$build_dir/binding.json; }
+  local plan=$plan_dir/plan.json binding=$tool/host/binding.json view=$plan_dir/view.json lib=$tool/libexec
+  if [[ -f $build_dir/plan.json ]]; then
+    plan=$build_dir/plan.json binding=$build_dir/binding.json view=$build_dir/plan-view.json lib=$build_dir/libexec
+  fi
   [[ -f $plan ]] || die "no plan in $plan_dir" 2
-  jq -r --arg seat "$seat" --arg path "$path" --slurpfile b "$binding" -f /dev/stdin "$plan" <<'JQ'
-    $b[0].tables.view as $spec
+  [[ -f $view ]] || view=/dev/null
+  jq -r -L "$lib" --arg seat "$seat" --arg path "$path" --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
+    include "table";
+    . as $plan
+    | $b[0].tables.view as $spec
     | def term: if type == "object" and .unchecked == true then .term else . end;
       def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
+      def at($o): "\($o.path // "?"):\($o.line // "?")";
+      def said($s): "\($s.term[4]) \([$s.term[1:4][] | select(. != "-")] | join("/") | if . == "" then "" else . + " " end)\($s.term[5]) \($s.term[6]), from \([$s.origins[] | at(.)] | join(", "))";
       [.programs[].plan[] | term | select(.[0] == "pane" and .[4] == $seat) | .[1:4]] as $keys
       | if ($keys | length) != 1 then "no seat is named \($seat) in this plan"
+        elif folded($plan; $spec) and $folded[0] == null then
+          "the plan holds statements, clearances or labels, and its folded view is missing"
         else
           $keys[0] as $k
-          | [(.state[$spec.cell] // [])[] | select(.key[0:3] == $k)] as $rows
+          | [table_rows($plan; $folded[0]; $spec)[] | select(.key[0:3] == $k)] as $rows
           | ([$rows[] | select(.key[3] == $path or beneath($path; .key[3]))] | sort_by(.key[3] | length) | last) as $row
-          | [.programs[] | .path as $file | (.recorded // [])[]
-             | select(.term[0] == $spec.claims.term)
-             | select([.term[$spec.claims.key[]]] == ($k + [$row.key[3] // ""]))
-             | "  \(.term[$spec.claims.value])  from \(.origin.path // $file):\(.origin.line // "?")"] as $claims
           | "seat \($seat) (\($k | join("/"))), path \($path)",
             (if ($rows | length) == 0 then "no view: the seat sees the machine as its user does"
              elif $row == null then "no row covers the path"
              elif $row.key[3] == $path then "row: \($path) \($row.value[0])"
              else "no row at the path; its nearest ancestor's row is \($row.key[3]) \($row.value[0])" end),
-            (if $row != null then "claims behind \($row.key[3]): \($claims | length)", $claims[] else empty end)
+            (if $row == null then empty
+             elif ($row | has("source")) then
+               "made by a \($row.source), from \([$row.origins[] | at(.)] | join(", "))",
+               ([$folded[0].seats[] | select(.seat == $k) | .replacement_statements[] | select(.statement.term[5] == $row.key[3])] as $replacing
+                | if ($replacing | length) == 0 then empty
+                  else "it replaced \($replacing[0].replaced | length):", ($replacing[0].replaced[] | "  \(said(.))") end)
+             else
+               [$plan.programs[] | .path as $file | (.recorded // [])[]
+                | select(.term[0] == $spec.claims.term)
+                | select([.term[$spec.claims.key[]]] == ($k + [$row.key[3]]))
+                | "  \(.term[$spec.claims.value])  from \(.origin.path // $file):\(.origin.line // "?")"] as $claims
+               | "claims behind \($row.key[3]): \($claims | length)", $claims[]
+             end)
         end
 JQ
 }
@@ -793,7 +1119,7 @@ cmd_status() {
 }
 
 usage() {
-  say "usage: workplace build | up | exec [--print] SEAT | down | status | why SEAT PATH | doctor"
+  say "usage: workplace plan | build | up | exec [--print] SEAT | down | status | why SEAT PATH | doctor"
   say "reads WORKPLACE_ROOT and WORKPLACE_CONFIG"
 }
 
@@ -801,6 +1127,7 @@ usage() {
 command=$1
 shift
 case $command in
+  plan) cmd_plan "$@" ;;
   build) cmd_build "$@" ;;
   up) cmd_up "$@" ;;
   exec) cmd_exec "$@" ;;

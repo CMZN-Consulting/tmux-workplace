@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+stub=${STUB_DIR:?}
+case ${1-} in
+  --version)
+    [[ -f $stub/version ]] && cat -- "$stub/version"
+    exit 0
+    ;;
+  check)
+    cp -- "$2" "$stub/declarations"
+    if [[ -f $stub/check.json ]]; then
+      jq -c --arg d "$2" 'walk(if . == "@DECLARATIONS@" then $d else . end)' "$stub/check.json"
+      exit 1
+    fi
+    printf '%s\n' '{"diagnostics":[],"ok":true,"terms":[]}'
+    ;;
+  plan)
+    cp -- "$3/ROOT.typify" "$stub/root-program"
+    (cd -- "$3" && find . -print | LC_ALL=C sort) > "$stub/tree"
+    if [[ -f $stub/plan-diagnostics.json ]]; then
+      jq -c --arg t "$3" 'walk(if type == "string" then sub("^@TREE@"; $t) else . end)' "$stub/plan-diagnostics.json"
+      exit 1
+    fi
+    cat -- "$stub/plan.json"
+    ;;
+  *) exit 2 ;;
+esac

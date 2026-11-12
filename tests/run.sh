@@ -299,14 +299,14 @@ t_inputs_and_refusals() {
 t_program_floors() {
   local bin=$scratch/old
   mkdir -p -- "$bin"
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "tmux 2.9"' > "$bin/tmux"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "tmux 3.5"' > "$bin/tmux"
   printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "jq-1.6"' > "$bin/jq"
   chmod +x -- "$bin/tmux" "$bin/jq"
   make_plan
   check "build" exit_is 0 wp build
   mv -- "$bin/jq" "$bin/jq.off"
-  check "[C6] an older tmux is refused with exit 2" exit_is 2 env PATH="$bin:$PATH" "$BASH" "$loop" up
-  check "[C6] the refusal names both versions" said "tmux 2.9 found; 3.0 or later is needed"
+  check "[C6] tmux 3.5, older than the floor 3.5a by its letter, is refused with exit 2" exit_is 2 env PATH="$bin:$PATH" "$BASH" "$loop" up
+  check "[C6] the refusal names both versions" said "tmux 3.5 found; 3.5a or later is needed"
   mv -- "$bin/jq.off" "$bin/jq"
   check "[C6] an older jq is refused with exit 2" exit_is 2 env PATH="$bin:$PATH" "$BASH" "$loop" status
   check "[C6] the refusal names both versions" said "jq 1.6 found; 1.7 or later is needed"
@@ -875,11 +875,20 @@ tidy_reference() {
   local path
   while IFS= read -r path; do
     [[ ${path##*/} == probe-* && -f $path && ! -L $path ]] && rm -f -- "$path"
-  done < <(comm -13 <(printf '%s\n' "$reference_paths") <(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort))
+  done < <(comm -13 <(printf '%s\n' "$reference_paths") <(find "$reference_root" -path "$reference_root/config/BUILD" -prune -o -print | sort))
+}
+leave_reference() {
+  [[ -n ${reference_root-} && -n ${reference_paths-} ]] || return 0
+  tidy_reference
+  rm -rf -- "$reference_root/config/BUILD"
+  if [[ -n ${reference_plan-} && -d $reference_plan ]]; then
+    rm -rf -- "$reference_root/config/PLAN" && cp -a -- "$reference_plan" "$reference_root/config/PLAN"
+  fi
 }
 
 t_the_reference_plan_as_printed() {
-  local reference=/tmp/workplace-reference-a4 pinned=fa8d54f683c2e4a80c24e3f7120f76fb42b51d720d7c5cb53c05f4a66d463cee sum
+  local pinned=fa8d54f683c2e4a80c24e3f7120f76fb42b51d720d7c5cb53c05f4a66d463cee sum reference=/tmp/workplace-reference-a4
+  reference_root=$reference
   if [[ ! -f $reference/config/PLAN/plan.json ]]; then
     skip "[C8] the reference root of the layers' commit 1127c90 is not on this machine"
     return 0
@@ -897,11 +906,10 @@ t_the_reference_plan_as_printed() {
   clone=$reference/config
   run=$clone/BUILD/RUN
   label=$(jq -r '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "server")][0][1]' "$clone/PLAN/plan.json")
-  reference_build=$reference/config/BUILD
   reference_paths=$(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort)
   local shape
   shape=$(shape_of "$reference")
-  trap 'cleanup; tidy_reference; rm -rf -- "$reference_build"' EXIT
+  trap 'leave_reference; cleanup' EXIT
   check "[C2] the reader's plan, as printed, builds" exit_is 0 wp build
   check "[C8] and comes up" exit_is 0 wp up
   check "[C9] its five seats stand, and no other pane" \
@@ -922,9 +930,385 @@ t_the_reference_plan_as_printed() {
   check "[C23] the losing claim, hidden, with its origin as written" said "hidden  from programs/ACCESS.typify:7"
   check "[C18] down" exit_is 0 wp down
   check "[C18] nothing of the workplace is left" no_server
-  tidy_reference
-  rm -rf -- "$reference_build"
+  leave_reference
   check "[C8] the reference root is left as the test found it: every entry's type, mode and size" test "$(shape_of "$reference")" = "$shape"
+}
+
+scoped_clone() {
+  export STUB_DIR=$scratch/stub
+  mkdir -p -- "$STUB_DIR/bin" "$clone/programs"
+  cp -- "$fixtures/typify-stub" "$STUB_DIR/bin/typify"
+  printf '%s\n' 0.0-stub > "$STUB_DIR/version"
+  printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify"]}' > "$clone/workplace.json"
+  printf '%s\n' 'statement : / = read-only' > "$clone/programs/policy.typify"
+}
+path_without_reader() {
+  local dir out=""
+  local -a dirs
+  IFS=: read -r -a dirs <<< "$PATH"
+  for dir in "${dirs[@]}"; do [[ -x $dir/typify ]] || out+=${out:+:}$dir; done
+  printf '%s\n' "$out"
+}
+wplan() { env PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan; }
+statements_plan() {
+  local filter=${1:-.}
+  jq --arg root "$root" '
+    def at($line): {kind: "program", line: $line, path: "programs/policy.typify"};
+    def st($a; $b; $c; $scope; $path; $state; $line): {term: ["statement", $a, $b, $c, $scope, $path, $state], origin: at($line)};
+    def cl($a; $b; $c; $scope; $n; $line): {term: ["clearance", $a, $b, $c, $scope, $n], origin: at($line)};
+    def lb($path; $n; $line): {term: ["label", $path, $n], origin: at($line)};
+    def kinds($rows): .state["seat-kinds"] = [$rows[] | {key: .[0:3], masked: false, origin: at(30), value: [.[3]]}];
+    del(.state.view)
+    | .facts = "none"
+    | .programs |= map(.recorded |= ((. // []) | map(select(.term[0] != "claim"))))
+    | .programs += [{path: "programs/policy.typify", language: "Access", status: "ok", plan: [], recorded: [
+        st("-"; "-"; "-"; "workplace"; "/"; "read-only"; 1),
+        st("harbor"; "-"; "-"; "office"; $root + "/harbor/ledger"; "hidden"; 2),
+        st("harbor"; "dock"; "-"; "room"; $root + "/harbor/berth"; "read-write"; 3),
+        st("harbor"; "dock"; "keeper"; "seat"; $root + "/harbor/vault"; "searchable-only"; 4),
+        st("harbor"; "dock"; "keeper"; "seat"; $root + "/harbor/vault/shelf"; "read-write"; 5),
+        st("harbor"; "dock"; "keeper"; "seat"; $root + "/harbor/scratch"; "scratch"; 6),
+        st("harbor"; "dock"; "keeper"; "seat"; $root + "/harbor/hold"; "hidden"; 7),
+        st("harbor"; "dock"; "keeper"; "seat"; $root + "/harbor/holdall"; "read-write"; 8)]}]
+    | '"$filter" "$scratch/plan.json" > "$STUB_DIR/plan.json"
+}
+rows_of() { jq -r --arg s "$1" '.rows[] | select(.key[2] == $s) | "\(.key[3]) \(.value[0])"' "$clone/PLAN/view.json" | tr '\n' ','; }
+seat_of() { jq -c --arg s "$1" ".seats[] | select(.seat[2] == \$s) | $2" "$clone/PLAN/view.json"; }
+
+t_plan_assembles() {
+  scoped_clone
+  printf '%s\n' '#lang typify' 'stray : outside the tree' > "$clone/STRAY.typify"
+  printf '%s\n' 'statement : /tmp = read-only' > "$clone/programs/back\\slash.typify"
+  statements_plan
+  check "[C27] plan, with the reader on the path" exit_is 0 wplan
+  check "[C29] every input's hash is 64 hex digits, a name with a backslash too" \
+    test "$(jq '[.inputs[].sha256 | test("^[0-9a-f]{64}$")] | all' "$clone/PLAN/manifest.json")" = true
+  rm -- "$clone/programs/back\\slash.typify"
+  check "plan again without it" exit_is 0 wplan
+  check "[C27] the declarations are one header and each layer's body in workplace.json's order" \
+    cmp -s "$STUB_DIR/declarations" <(printf '%s\n' '#lang typify'; tail -n +2 "$clone/layers/structure.typify"; tail -n +2 "$clone/layers/access.typify")
+  check "[C27] the root program is exactly two lines: the root and the server" \
+    cmp -s "$STUB_DIR/root-program" <(printf '%s\n' "workdir : $root" "server : $label : config/tmux.conf")
+  check "[C27] the tree holds the generated root program and a copy of programs/, and no sibling of the root" \
+    test "$(tr '\n' ' ' < "$STUB_DIR/tree")" = ". ./ROOT.typify ./programs ./programs/policy.typify "
+  check "[C28] plan.json is the reader's output as printed" cmp -s "$STUB_DIR/plan.json" "$clone/PLAN/plan.json"
+  check "[C29] PLAN/ holds plan.json, view.json and manifest.json" test "$(ls "$clone/PLAN" | tr '\n' ' ')" = "manifest.json plan.json view.json "
+  local manifest=$clone/PLAN/manifest.json
+  check "[C29] the manifest names the root, the name and the reader as it states its version" \
+    test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
+  check "[C29] and each derivation's version" \
+    test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
+  check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
+    test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
+    "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
+  local d r
+  d=$(sha256sum < "$STUB_DIR/declarations")
+  r=$(sha256sum < "$STUB_DIR/root-program")
+  check "[C29] each generated file with the hash of what the reader was given" \
+    test "$(jq -r '[.generated[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = "LanguageDeclarations.typify=${d%% *} tree/ROOT.typify=${r%% *}"
+  check "[C29] the source map gives each layer's interval" \
+    test "$(jq -c '[.source_map[] | [.source, .source_start_line, .assembled_start_line, .line_count]]' "$manifest")" = \
+    '[["layers/structure.typify",2,2,2],["layers/access.typify",2,4,2]]'
+  check "[C29] the outputs, and not the manifest itself" test "$(jq -r '[.outputs[].path] | join(" ")' "$manifest")" = "plan.json view.json"
+  check "[C29] build needs no reader" exit_is 0 wp build
+  check "[C29] and builds the folded view" test -f "$clone/BUILD/plan-view.json"
+  local built
+  built=$(sha256sum < "$clone/BUILD/MANIFEST")
+  check "[C28] plan never touches BUILD" exit_is 0 wplan
+  check "[C28] BUILD is as it was" test "$(sha256sum < "$clone/BUILD/MANIFEST")" = "$built"
+  rm -rf -- "$clone/BUILD"
+  printf '%s\n' 'statement : /tmp = read-only' > "$clone/programs/late.typify"
+  check "[C29] build refuses a program added after the plan" exit_is 1 wp build
+  check "[C29] naming it" said "the clone holds the input programs/late.typify, which the manifest does not list"
+  rm -- "$clone/programs/late.typify"
+  jq '.generated[1].sha256 = ("0" * 64)' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
+  check "[C29] build refuses a generated file that differs from the manifest's" exit_is 1 wp build
+  check "[C29] naming it" said "the generated tree/ROOT.typify is not the one the plan was made from"
+  check "plan again" exit_is 0 wplan
+  jq '.rows[0].value = ["read-write"]' "$clone/PLAN/view.json" > "$scratch/v" && cp -- "$scratch/v" "$clone/PLAN/view.json"
+  jq --arg s "$(sha256sum < "$clone/PLAN/view.json" | cut -d' ' -f1)" '(.outputs[] | select(.path == "view.json") | .sha256) = $s' "$manifest" > "$scratch/m" \
+    && cp -- "$scratch/m" "$manifest"
+  check "[C29] build refuses a view.json that is not the fold of plan.json" exit_is 1 wp build
+  check "[C29] naming the seat" said "PLAN/view.json is not the fold of PLAN/plan.json; it differs for harbor/dock/keeper"
+  check "plan again" exit_is 0 wplan
+  local moved=$root/moved
+  cp -a -- "$clone" "$moved"
+  check "[C29] build of the plan copied into another clone is refused" exit_is 1 env WORKPLACE_CONFIG="$moved" "$BASH" "$loop" build
+  check "[C29] naming both names" said "the manifest names the workplace $label, and the clone assembles it as $(name_of_clone "$moved")"
+  rm -rf -- "$moved"
+  printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify"], "socket": "default"}' > "$clone/workplace.json"
+  statements_plan '.programs[0].plan[0][1] = "default"'
+  check "[C25] plan with socket default" exit_is 0 wplan
+  check "[C25] the root program names the server default" test "$(sed -n 2p "$STUB_DIR/root-program")" = "server : default : config/tmux.conf"
+  check "[C25] and the manifest's name is default" test "$(jq -r .name "$manifest")" = default
+}
+
+t_plan_refusals() {
+  scoped_clone
+  statements_plan
+  check "plan" exit_is 0 wplan
+  local before
+  before=$(cat "$clone/PLAN/manifest.json")
+  cp -- "$clone/layers/access.typify" "$scratch/access"
+  printf '\xef\xbb\xbf' | cat - "$scratch/access" > "$clone/layers/access.typify"
+  check "[C27] a layer with a byte-order mark is refused with exit 2" exit_is 2 wplan
+  check "[C27] naming it" said "the layer layers/access.typify begins with a byte-order mark"
+  sed 's/$/\r/' "$scratch/access" > "$clone/layers/access.typify"
+  check "[C27] a layer with CR line ends is refused with exit 2" exit_is 2 wplan
+  check "[C27] naming it" said "the layer layers/access.typify has CR line ends"
+  cp -- "$scratch/access" "$clone/layers/access.typify"
+  printf 'statement : / = read-only\r\n' > "$clone/programs/crlf.typify"
+  check "[C27] a program with CR line ends is refused with exit 2" exit_is 2 wplan
+  check "[C27] naming it" said "the program programs/crlf.typify has CR line ends"
+  rm -- "$clone/programs/crlf.typify"
+  printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify", "layers/access.typify"]}' > "$clone/workplace.json"
+  check "[C27] a layer listed twice is refused with exit 2" exit_is 2 wplan
+  check "[C27] naming it" said "the layer name access is listed 2 times"
+  printf '%s\n' '#lang typify' 'declare : Access' 'end!' > "$clone/layers/again.typify"
+  printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify", "layers/again.typify"]}' > "$clone/workplace.json"
+  check "[C27] a language declared twice is refused with exit 2" exit_is 2 wplan
+  check "[C27] naming both places" said "the language Access is declared twice: at layers/access.typify:2 and at layers/again.typify:2"
+  printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify"], "owner": "x"}' > "$clone/workplace.json"
+  check "[C27] a member of workplace.json the loop does not read is refused" exit_is 2 wplan
+  printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify"]}' > "$clone/workplace.json"
+  check "[C27] the refused plans left PLAN/ as it was" test "$(cat "$clone/PLAN/manifest.json")" = "$before"
+  printf '%s' '{"diagnostics":[
+    {"code":"E_DECLARATION","severity":"error","file":"@DECLARATIONS@","range":{"start":{"line":2,"column":1},"end":{"line":2,"column":9}},"message":"first words"},
+    {"code":"E_DECLARATION","severity":"error","file":"@DECLARATIONS@","range":{"start":{"line":5,"column":1},"end":{"line":5,"column":4}},"message":"second words"}],"ok":false}' \
+    > "$STUB_DIR/check.json"
+  check "[C28] a declaration error stops plan with exit 1" exit_is 1 wplan
+  check "[C28] shown at the first layer's file and line, beside the reader's words" \
+    said "layers/structure.typify:2: error E_DECLARATION: first words (the reader: LanguageDeclarations.typify:2)"
+  check "[C28] and at the second layer's" said "layers/access.typify:3: error E_DECLARATION: second words (the reader: LanguageDeclarations.typify:5)"
+  rm -- "$STUB_DIR/check.json"
+  printf '%s' '{"diagnostics":[{"code":"E_PROGRAM","severity":"error","file":"@TREE@/ROOT.typify","range":{"start":{"line":2,"column":1},"end":{"line":2,"column":3}},"message":"root words"},
+    {"code":"E_PROGRAM","severity":"error","file":"@TREE@/programs/policy.typify","range":{"start":{"line":1,"column":1},"end":{"line":1,"column":3}},"message":"program words"}],"status":"failed"}' \
+    > "$STUB_DIR/plan-diagnostics.json"
+  check "[C28] a program's error stops plan with exit 1" exit_is 1 wplan
+  check "[C28] an error in the root program is shown as the generated program's" said "the generated root program, line 2: error E_PROGRAM: root words"
+  check "[C28] a program's at its path in the clone" said "programs/policy.typify:1: error E_PROGRAM: program words"
+  rm -- "$STUB_DIR/plan-diagnostics.json"
+  statements_plan '.facts = "sha256:" + ("0" * 64)'
+  check "[C28] a plan made on facts is refused with exit 1" exit_is 1 wplan
+  check "[C28] with the open item of 5.15 as the reason" said "a plan whose facts member is not none is refused for now, since 5.15 leaves open which facts build compares"
+  : > "$STUB_DIR/version"
+  check "[C28] a reader that states no version stops plan with exit 2" exit_is 2 wplan
+  check "[C28] saying so" said "states no version, and plan stops here"
+  check "[C28] plan without a reader on the path exits 2" exit_is 2 env PATH="$(path_without_reader)" "$BASH" "$loop" plan
+  check "[C28] naming the reader" said "plan needs the reader, the program typify on PATH"
+  check "[C28] and PLAN/ is still as it was" test "$(cat "$clone/PLAN/manifest.json")" = "$before"
+}
+
+t_the_fold() {
+  scoped_clone
+  statements_plan
+  check "plan folds the base plan" exit_is 0 wplan
+  check "[C33] the seats stand in the order of the pane terms" \
+    test "$(jq -r '[.seats[].seat[2]] | join(" ")' "$clone/PLAN/view.json")" = "keeper pilot watch grower picker"
+  check "[C30] rule 1: the workplace's statement reaches every seat" test "$(jq '[.rows[] | select(.key[3] == "/")] | length' "$clone/PLAN/view.json")" = 5
+  check "[C30] rule 1: the office's reaches its own seats only" \
+    test "$(jq -r --arg p "$root/harbor/ledger" '[.rows[] | select(.key[3] == $p) | .key[2]] | join(" ")' "$clone/PLAN/view.json")" = "keeper pilot watch"
+  check "[C30] rule 1: the room's reaches its room only" \
+    test "$(jq -r --arg p "$root/harbor/berth" '[.rows[] | select(.key[3] == $p) | .key[2]] | join(" ")' "$clone/PLAN/view.json")" = "keeper pilot"
+  check "[C30] rule 7: a seat's rows in the byte order of their paths" \
+    test "$(rows_of keeper)" = "/ read-only,$root/harbor/berth read-write,$root/harbor/hold hidden,$root/harbor/holdall read-write,$root/harbor/ledger hidden,$root/harbor/scratch scratch,$root/harbor/vault searchable-only,$root/harbor/vault/shelf read-write,"
+  check "[C30] each row carries its statement's origin" \
+    test "$(jq -c '[.rows[] | select(.key[2] == "keeper" and .key[3] == "/") | .origins][0]' "$clone/PLAN/view.json")" = '[{"kind":"program","line":1,"path":"programs/policy.typify"}]'
+
+  statements_plan '.state["seat-kinds"] = [{key: ["harbor", "dock", "keeper"], value: ["navigator"], masked: false, origin: at(30)},
+                                          {key: ["harbor", "dock", "pilot"], value: ["none"], masked: false, origin: at(31)}]
+    | .programs[-1].recorded += [st("navigator"; "-"; "-"; "kind"; $root + "/tools"; "hidden"; 9)]'
+  check "plan with a kind" exit_is 0 wplan
+  check "[C30] rule 1: a kind's statement reaches the seats of that kind" bash -c '[[ $1 == *"/tools hidden"* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 1: and no seat of none" bash -c '[[ $1 != *"/tools "* ]]' _ "$(rows_of pilot)"
+  check "[C33] the seat's kind is in its table" test "$(seat_of keeper .kind)" = '"navigator"'
+
+  local before
+  before=$(cat "$clone/PLAN/manifest.json")
+  statements_plan '.programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; $root + "/harbor/ledger"; "read-only"; 9)]'
+  check "[C31] rule 2: two statements of one scope about one path with different states refuse the plan" exit_is 1 wplan
+  check "[C28] the refused fold left PLAN/ as it was" test "$(cat "$clone/PLAN/manifest.json")" = "$before"
+  check "[C31] naming both origins" said "two statements of the office harbor about $root/harbor/ledger differ: hidden from programs/policy.typify:2, read-only from programs/policy.typify:9"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; "/"; "read-only"; 9)]
+    | .programs[0].recorded = [st("-"; "-"; "-"; "workplace"; "/"; "read-only"; 4) | .origin.path = "workplace.typify"]'
+  check "[C30] 5.18: equal statements make one row" exit_is 0 wplan
+  check "[C30] 5.18: which carries the origin of each, in the plan's order" \
+    test "$(jq -c '[.rows[] | select(.key[2] == "picker" and .key[3] == "/") | [.origins[] | "\(.path):\(.line)"]][0]' "$clone/PLAN/view.json")" = \
+    '["workplace.typify:4","programs/policy.typify:1","programs/policy.typify:9"]'
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "-"; "-"; "office"; "2"; 10)]'
+  check "[C31] rule 2: two clearances of one office with different numbers refuse the plan" exit_is 1 wplan
+  check "[C31] naming both" said "two clearances of the office harbor differ: 1 from programs/policy.typify:9, 2 from programs/policy.typify:10"
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard"; "1"; 9), lb($root + "/orchard"; "2"; 10)]'
+  check "[C31] rule 2: two labels of one path with different numbers refuse the plan" exit_is 1 wplan
+  check "[C31] naming both" said "two labels of $root/orchard differ: 1 from programs/policy.typify:9, 2 from programs/policy.typify:10"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "-"; "-"; "office"; "1"; 10)]'
+  check "[C30] equal clearances count once" exit_is 0 wplan
+  check "[C30] with both origins" test "$(seat_of watch '[.clearance.value, [.clearance.origins[].line]]')" = '[1,[9,10]]'
+
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/harbor/ledger/inner"; "read-write"; 9),
+                                              st("harbor"; "-"; "-"; "office"; $root + "/harbor/hold"; "hidden"; 10),
+                                              st("-"; "-"; "-"; "workplace"; $root + "/harbor/holdall"; "read-write"; 11)]'
+  check "plan with statements beneath a narrower one" exit_is 0 wplan
+  check "[C30] rule 3: a narrower statement replaces a wider one beneath its path" bash -c '[[ $1 != *"/harbor/ledger/inner "* ]]' _ "$(rows_of watch)"
+  check "[C30] rule 3: but not on another seat's office" bash -c '[[ $1 == *"/harbor/ledger/inner read-write"* ]]' _ "$(rows_of grower)"
+  check "[C30] rule 3: /a against /ab: hold is hidden and holdall stays open" \
+    bash -c '[[ $1 == *"/harbor/hold hidden,"* && $1 == *"/harbor/holdall read-write,"* ]]' _ "$(rows_of watch)"
+  check "[C32] the statement that replaced is printed with what it replaced" \
+    said "  workplace $root/harbor/ledger/inner read-write (programs/policy.typify:9)"
+  check "[C32] and counted" test "$(seat_of watch '[.exception_count, .distinct_replaced_statement_count]')" = '[1,1]'
+
+  statements_plan '.state["seat-kinds"] = [{key: ["harbor", "dock", "keeper"], value: ["navigator"], masked: false, origin: at(30)}]
+    | .programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/r/a/b"; "read-only"; 9),
+                                 st("navigator"; "-"; "-"; "kind"; $root + "/r/a"; "read-only"; 10),
+                                 st("harbor"; "-"; "-"; "office"; $root + "/r"; "read-only"; 11)]'
+  check "plan with 5.18's example" exit_is 0 wplan
+  check "[C32] 5.18: the office's statement remains, and both others stand under it" \
+    test "$(seat_of keeper '[.replacement_statements[] | select(.statement.term[5] | endswith("/r")) | [.replaced[].term[4]]][0]')" = '["workplace","kind"]'
+  check "[C32] 5.18: the kind's statement, itself replaced, is printed only as replaced" \
+    test "$(seat_of keeper '[.replacement_statements[] | .statement.term[4]] | index("kind")')" = null
+  check "[C32] 5.18: the counts are 1 and 2" test "$(seat_of keeper '[.exception_count, .distinct_replaced_statement_count]')" = '[1,2]'
+
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "dock"; "-"; "room"; "2"; 10),
+                                              cl("harbor"; "dock"; "keeper"; "seat"; "3"; 11)]'
+  check "plan with clearances" exit_is 0 wplan
+  check "[C30] rule 4: the seat's own clearance" test "$(seat_of keeper '[.clearance.value, .clearance.origin.line]')" = '[3,11]'
+  check "[C30] rule 4: else its room's" test "$(seat_of pilot '[.clearance.value, .clearance.origin.line]')" = '[2,10]'
+  check "[C30] rule 4: else its office's" test "$(seat_of watch '[.clearance.value, .clearance.origin.line]')" = '[1,9]'
+  check "[C30] rule 4: else 0" test "$(seat_of grower '[.clearance.value, .clearance.origin]')" = '[0,null]'
+
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "dock"; "keeper"; "seat"; "3"; 11),
+      lb($root + "/harbor/charts"; "2"; 12), lb($root + "/harbor/ledger/inner"; "1"; 13),
+      lb($root + "/orchard"; "2"; 14), lb($root + "/orchard/almanac"; "1"; 15),
+      st("harbor"; "-"; "-"; "office"; $root + "/harbor/vault/shelf"; "read-write"; 16), lb($root + "/harbor/vault"; "1"; 17)]'
+  check "plan with labels" exit_is 0 wplan
+  check "[C30] rule 5: a label above the seat's clearance makes a hidden row" bash -c '[[ $1 == *"/harbor/charts hidden"* ]]' _ "$(rows_of watch)"
+  check "[C30] rule 5: at or below it, under an open row, a read-only row" bash -c '[[ $1 == *"/harbor/charts read-only"* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5: under a hidden row, none" bash -c '[[ $1 != *"/harbor/ledger/inner "* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5: the row a label makes carries the label's origin" \
+    test "$(jq -c --arg p "$root/harbor/charts" '[.rows[] | select(.key[2] == "watch" and .key[3] == $p) | [.source, .origins[0].line]][0]' "$clone/PLAN/view.json")" = '["label",12]'
+  check "[C30] rule 5: and replaces nothing: the office's row beneath it stands" \
+    bash -c '[[ $1 == *"/harbor/vault read-only,"* && $1 == *"/harbor/vault/shelf read-write,"* ]]' _ "$(rows_of watch)"
+  check "[C30] rule 5: labels from the shallowest: a lower label beneath a higher one opens nothing to the seats between" \
+    bash -c '[[ $1 == *"/orchard hidden,"* && $1 != *"/orchard/almanac "* ]]' _ "$(rows_of watch)"
+  check "[C32] the plan stands, and plan prints the pair" \
+    said "label $root/orchard/almanac (1) lies beneath $root/orchard (2), and opens nothing to the seats between: Harbor Pilot, Harbor Watch"
+  check "[C32] a statement standing at a labelled path is printed" said "stands at a labelled path: seat harbor/dock/keeper $root/harbor/vault searchable-only"
+
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10)]'
+  check "plan with a closed root" exit_is 0 wplan
+  check "[C32] the directories beneath it that no row names are listed as held by nobody" \
+    bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && grep -qxF "  $1/orchard/cellar" "$2" && grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
+  check "[C32] and not one that a row names" bash -c '! grep -qxF "  $1/orchard/almanac" "$2"' _ "$root" "$scratch/out"
+  statements_plan '.programs[-1].recorded = [lb($root + "/orchard"; "1"; 9)]'
+  check "[C31] a plan with a label and no statement is folded, and refused for want of a row for /" exit_is 1 wplan
+  check "[C31] naming a seat" said "seat Harbor Keeper (harbor/dock/keeper): no row for /"
+  statements_plan '(.programs[-1].recorded[0].term[6]) = "searchable-only" | .programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root; "read-only"; 9)]'
+  check "plan with / searchable-only" exit_is 0 wplan
+  check "[C32] a directory beneath / that no row names is listed by its own path" \
+    bash -c 'grep -qxF "  /usr" "$1" && ! grep -qF "  //" "$1"' _ "$scratch/out"
+  statements_plan '.programs[-1].recorded |= map(select(.term[4] != "workplace")) | .programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; "/"; "read-only"; 9)]'
+  check "[C31] rule 6: a seat with no row for / refuses the plan" exit_is 1 wplan
+  check "[C31] naming the seat" said "seat Orchard Grower (orchard/barn/grower): no row for /"
+  statements_plan '.programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; $root + "/harbor/ledger/inner"; "read-write"; 9)]'
+  check "[C31] rule 6: a row opened beneath a hidden one refuses the plan" exit_is 1 wplan
+  check "[C31] naming the seat, both paths and their origins" \
+    said "seat Harbor Watch (harbor/tower/watch): $root/harbor/ledger/inner (read-write, from programs/policy.typify:9) lies beneath $root/harbor/ledger (hidden, from programs/policy.typify:2)"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-write"; 9), lb($root + "/orchard"; "1"; 10)]'
+  check "[C31] rule 6: a row open at or beneath a label above the seat's clearance refuses the plan" exit_is 1 wplan
+  check "[C31] naming the seat, the path, the label and the origins" \
+    said "seat Orchard Grower (orchard/barn/grower): $root/orchard/almanac (read-write, from programs/policy.typify:9) lies at or beneath $root/orchard, labelled 1 (from programs/policy.typify:10), above the seat's clearance 0"
+  statements_plan '.programs[-1].recorded += [lb("/"; "0"; 9)]'
+  check "[C31] 5.18: a label on / refuses the plan" exit_is 1 wplan
+  check "[C31] saying so" said "programs/policy.typify:9: a label on / refuses the plan"
+  statements_plan '.programs[-1].recorded += [{term: ["statement", "workplace", "-", "-", "-", "/", "read-only"], origin: at(9)}]'
+  check "[C31] 5.18: a statement with the scope word first is refused" exit_is 1 wplan
+  check "[C31] naming the line" said "programs/policy.typify:9: - is not a scope of a statement"
+  statements_plan '.programs[-1].recorded += [st("nowhere"; "-"; "-"; "office"; "/"; "hidden"; 9)]'
+  check "[C31] a statement naming an office the plan does not make refuses the plan" exit_is 1 wplan
+  check "[C31] naming it" said "programs/policy.typify:9: the statement names the office nowhere, which the plan does not make"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "ghost"; "seat"; "1"; 9)]'
+  check "[C31] a clearance naming a seat the plan does not make refuses the plan" exit_is 1 wplan
+  check "[C31] naming it" said "the clearance names the seat harbor/dock/ghost, which the plan does not make"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/harbor/"; "read-only"; 9), cl("harbor"; "-"; "-"; "office"; "01"; 10)]'
+  check "[C31] a path that is not canonical and a number that is not whole refuse the plan" exit_is 1 wplan
+  check "[C31] naming each" bash -c 'grep -qF -- "$1/harbor/ is not an absolute, canonical path" "$2" && grep -qF "01 is not a whole number" "$2"' _ "$root" "$scratch/out"
+}
+
+t_the_folded_view_in_the_panes() {
+  scoped_clone
+  statements_plan '.state.view = [{key: ["harbor", "dock", "keeper", ($root + "/harbor/ledger")], value: ["read-write"]}]'
+  check "plan" exit_is 0 wplan
+  check "[C33] build" exit_is 0 wp build
+  check "[C33] up" exit_is 0 wp up
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  check "[C33] the seat's view is the fold's: ledger, hidden by the office, is unseen, and the plan's view cell is not read" \
+    screen_has "Harbor Keeper" "hidden ledger: unseen"
+  check "[C33] berth, opened by the room, is written" screen_has "Harbor Keeper" "rw berth: write=ok"
+  check "[C33] vault, searchable-only by the seat, cannot be listed" screen_has "Harbor Keeper" "list vault: refused"
+  check "[C33] and its shelf is reachable" screen_has "Harbor Keeper" "reach vault/shelf: write=ok"
+  check "[C33] why names the statement behind a folded row" exit_is 0 wp why "Harbor Keeper" "$root/harbor/ledger/secret"
+  check "[C33] the row and its origin" \
+    bash -c 'grep -qxF "no row at the path; its nearest ancestor'"'"'s row is $1/harbor/ledger hidden" "$2" && grep -qxF "made by a statement, from programs/policy.typify:2" "$2"' _ "$root" "$scratch/out"
+  check "[C33] down" exit_is 0 wp down
+  rm -rf -- "$clone/BUILD"
+  rm -- "$clone/PLAN/view.json"
+  check "[C33] a plan that holds statements and has lost its view.json does not build" exit_is 1 wp build
+  check "[C33] naming the file" said "PLAN/view.json is missing"
+}
+
+t_plan_end_to_end() {
+  local pinned=c2e88ff3380d0fddd34610196a7be36a726e05331d9fe3f692e38d4ce4717a9c reference=/tmp/workplace-reference-s3
+  if ! command -v typify > /dev/null; then
+    skip "[C28] the reader typify is not on PATH here, so plan cannot run end to end"
+    return 0
+  fi
+  if [[ ! -f $reference/config/workplace.json ]]; then
+    skip "[C28] the reader-side fixture of w1-scopes is not laid out as a clone at $reference"
+    return 0
+  fi
+  if [[ -e $reference/config/BUILD ]]; then
+    skip "[C28] a BUILD already stands in $reference; this test makes and removes only its own"
+    return 0
+  fi
+  export WORKPLACE_ROOT=$reference WORKPLACE_CONFIG=$reference/config
+  clone=$reference/config
+  run=$clone/BUILD/RUN
+  reference_plan=$scratch/reference-plan
+  cp -a -- "$clone/PLAN" "$reference_plan" || { fail "cannot keep a copy of $clone/PLAN"; return 0; }
+  reference_root=$reference
+  reference_paths=$(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort)
+  local shape
+  shape=$(shape_of "$reference")
+  trap 'leave_reference; cleanup' EXIT
+  check "[C28] plan with the reader $(typify --version)" exit_is 0 wp plan
+  (( test_failed == 0 )) || return 0
+  check "[C29] PLAN/ now holds the folded view" test -f "$clone/PLAN/view.json"
+  check "[C28] writes plan.json byte for byte as the fixture's committed plan" test "$(sha256sum < "$clone/PLAN/plan.json" | cut -d' ' -f1)" = "$pinned"
+  check "[C29] and the generated files the fixture's manifest records" \
+    test "$(jq -c .generated "$clone/PLAN/manifest.json")" = "$(jq -c .generated "$reference_plan/manifest.json")"
+  check "[C29] and the same inputs" test "$(jq -c .inputs "$clone/PLAN/manifest.json")" = "$(jq -c .inputs "$reference_plan/manifest.json")"
+  label=$(jq -r .name "$clone/PLAN/manifest.json")
+  check "[C29] build, with no reader on the path" exit_is 0 env PATH="$(path_without_reader)" "$BASH" "$loop" build
+  check "[C8] up" exit_is 0 wp up
+  check "[C9] five seats and no other pane" test "$(T list-panes -a -F x | wc -l)" = 5
+  local row title seat
+  for row in "Harbor Pilot:pilot" "Harbor Keeper:keeper" "Harbor Watch:watch" "Orchard Grower:grower" "Orchard Picker:picker"; do
+    IFS=: read -r title seat <<< "$row"
+    check "[C33] $title runs its program" wait_for_probe "$title" "$seat"
+  done
+  check "[C33] keeper: ledger, hidden by its office, is unseen" screen_has "Harbor Keeper" "hidden ledger: unseen"
+  check "[C33] keeper: charts, read-only by its office over the workplace's read-write, refuses a write" \
+    screen_has "Harbor Keeper" "ro charts: read=ok write=refused"
+  check "[C33] keeper: berth, hidden by its room, cannot be written" bash -c '[[ $1 == *"rw berth: write=refused"* ]]' _ "$(screen_of 'Harbor Keeper')"
+  check "[C33] status exits 0" exit_is 0 wp status
+  check "[C33] why reads the folded view" exit_is 0 wp why "Orchard Picker" "$reference/restricted/lower/x"
+  check "[C33] a row a label made" said "made by a label"
+  check "[C18] down" exit_is 0 wp down
+  check "[C18] nothing of the workplace is left" no_server
+  leave_reference
+  check "[C28] the clone's PLAN/ is restored as the test found it" diff -r "$reference_plan" "$clone/PLAN"
+  check "[C28] and the root is left as the test found it: every entry's type, mode and size" test "$(shape_of "$reference")" = "$shape"
 }
 
 t_source_and_contract() {
@@ -987,6 +1371,11 @@ tests=(
   t_why
   t_doctor
   t_the_reference_plan_as_printed
+  t_plan_assembles
+  t_plan_refusals
+  t_the_fold
+  t_the_folded_view_in_the_panes
+  t_plan_end_to_end
   t_source_and_contract
 )
 (( $# )) && tests=("$@")

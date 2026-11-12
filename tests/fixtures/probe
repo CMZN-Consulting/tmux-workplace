@@ -235,6 +235,10 @@ for argument in "$@"; do
       spec=${argument#race=}
       say "$(python3 "${0%/*}/racer" race "$box" "${spec%%:*}" "${spec#*:}" 2>&1)"
       ;;
+    slow=*)
+      spec=${argument#slow=}
+      say "$(python3 "${0%/*}/racer" slow "$box" "${spec%%:*}" "${spec#*:}" 2>&1)"
+      ;;
     lease=*)
       spec=${argument#lease=}
       say "$(python3 "${0%/*}/racer" lease "$box" "${spec%%:*}" "${spec#*:}" 2>&1)"

@@ -110,6 +110,21 @@ def key_problems($binding):
         | "\(at($row.origin // {})) (state kinds): the kind \($v | tojson) is refused: \($fault)")
      else empty end);
 
+def name_fault:
+  if type != "string" then "it is not text"
+  elif . == "" then "it is empty"
+  elif . == "." or . == ".." then "it is \(.)"
+  elif contains("/") then "it holds a /"
+  elif contains(",") then "it holds a comma, and a mail's head separates its readers by commas"
+  elif (explode | any(. < 32 or (. >= 127 and . < 160))) then "it holds a control character"
+  elif test("^\\s|\\s$") then "it begins or ends with white space"
+  else null end;
+
+def name_problems($binding):
+  plan_terms[] | . as $r | ($binding.unique // [])[] | select(.[0] == $r.term[0] and .[1] < ($r.term | length))
+  | $r.term[.[1]] as $v | ($v | name_fault) as $fault | select($fault != null)
+  | "\($r | term_at) (\($r.term[0])): the seat's name \($v | tojson) is refused: \($fault)";
+
 def unique_problems($binding):
   plan_terms as $terms
   | ($binding.unique // [])[] | . as [$word, $pos]
@@ -152,10 +167,7 @@ def mail_problems($binding; $clone):
            (($plan.programs // [])[] | select(type == "object") | (.path // "a program") as $file | (.recorded // [])[]
             | select(type == "object" and (.term | type) == "array" and .term[0] == $d.recorded and (.term | length) > $d.path)
             | .term[$d.path] as $p | select(($p | type) == "string" and under($p; $m))
-            | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox")),
-        ($plan | plan_terms[] | select(.term[0] == "pane" and (.term | length) > 4) | . as $r | .term[4] | strings
-         | select(contains(",") or test("^\\s|\\s$"))
-         | "\($r | term_at) (pane): the name \(tojson) cannot be named in a mail's head, which separates its readers by commas: a seat's name holds no comma and neither begins nor ends with white space when the plan holds mail")
+            | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox"))
     end;
 
 def seat_names($plan):

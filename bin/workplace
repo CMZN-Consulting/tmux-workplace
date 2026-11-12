@@ -343,7 +343,7 @@ refuse_terms() {
   local -a faults
   found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --slurpfile b "$tool/host/binding.json" '
     include "table";
-    joined($b[0]; $root) | key_problems($b[0]), unique_problems($b[0]), mail_problems($b[0]; $clone)' "$1") \
+    joined($b[0]; $root) | key_problems($b[0]), name_problems($b[0]), unique_problems($b[0]), mail_problems($b[0]; $clone)' "$1") \
     || { warn "cannot read $1 for its keys, its names and its mail path"; return 1; }
   [[ -z $found ]] && return 0
   mapfile -t faults <<< "$found"
@@ -1149,7 +1149,7 @@ resolve_step() {
 }
 
 meets() {
-  local test=$1 value=$2 line
+  local test=$1 value=$2 what=${3:-the tmux server} status
   case $test in
     directory) [[ -d $value ]] || { warn "$where: $value is not a directory"; return 1; } ;;
     file) [[ -f $value ]] || { warn "$where: $value is not a file"; return 1; } ;;
@@ -1157,17 +1157,21 @@ meets() {
     no-new-privs-if-running)
       [[ $value =~ ^[0-9]+$ ]] || { warn "$where: $value is not a process id"; return 1; }
       [[ -e /proc/$value ]] || return 0
-      meets no-new-privs "$value"
+      { status=$(< "/proc/$value/status"); } 2> /dev/null || return 0
+      meets no-new-privs "$value" "$what"
       ;;
     no-new-privs)
-      [[ $value =~ ^[0-9]+$ && -r /proc/$value/status ]] || { warn "$where: cannot read the status of process $value"; return 1; }
-      while IFS= read -r line; do
-        [[ $line == NoNewPrivs:* ]] || continue
-        [[ ${line//[[:space:]]/} == NoNewPrivs:1 ]] && return 0
-        warn "$where: the tmux server (process $value) runs without no-new-privileges; it is refused"
+      [[ $value =~ ^[0-9]+$ ]] || { warn "$where: $value is not a process id"; return 1; }
+      if ! { status=$(< "/proc/$value/status"); } 2> /dev/null || [[ -z $status ]]; then
+        warn "$where: $what (process $value) has ended, and its status could not be read; it is refused"
         return 1
-      done < "/proc/$value/status"
-      warn "$where: process $value reports no NoNewPrivs line"
+      fi
+      if [[ $status =~ (^|$'\n')NoNewPrivs:[[:space:]]*([0-9]+) ]]; then
+        [[ ${BASH_REMATCH[2]} == 1 ]] && return 0
+        warn "$where: $what (process $value) runs without no-new-privileges; it is refused"
+        return 1
+      fi
+      warn "$where: $what (process $value) reports no NoNewPrivs line"
       return 1
       ;;
     *) warn "$where: the binding asks for an unknown test: $test"; return 1 ;;
@@ -1372,7 +1376,7 @@ start_agents() {
       --arg note "$name cannot sign until the workplace is brought down and up again" --argjson call "$(json_list "${ask[@]}")" \
       '{what: $what, is: $is, note: $note, call: $call}' >> "$run_dir/checks"
     where=up
-    meets no-new-privs-if-running "$pid" || return 1
+    meets no-new-privs-if-running "$pid" "$who" || return 1
     extra=$("$kill_with" --homedir "$home" --list-dirs agent-extra-socket)
     ssh=$("$kill_with" --homedir "$home" --list-dirs agent-ssh-socket)
     for socket in "$extra" "$ssh"; do
@@ -1549,7 +1553,7 @@ start_carrier() {
     --argjson call "$(json_list "$stat_program" -L -c %d:%i -- "/proc/$pid/cwd")" \
     '{what: $what, is: $is, note: $note, call: $call}' >> "$run_dir/checks"
   where=up
-  meets no-new-privs "$pid" || return 1
+  meets no-new-privs "$pid" "the carrier" || return 1
   say "up: the carrier, pid $pid"
 }
 
@@ -1816,12 +1820,19 @@ carrier_journal() {
 }
 
 carrier_serve() {
-  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied
+  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied changed now
   local -a entries readers keep paths args
   entries=("${seat_out[i]}"/[!.]*)
   (( ${#entries[@]} )) || return 0
   entry=${entries[0]}
   name=${entry##*/}
+  changed=$(stat -c %.6Z -- "$entry" 2> /dev/null) || return 0
+  now=$EPOCHREALTIME
+  [[ $changed =~ ^([0-9]+)[^0-9]([0-9]{6})$ ]] || return 0
+  changed=$(( 10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} ))
+  [[ $now =~ ^([0-9]+)[^0-9]([0-9]{6})$ ]] || return 0
+  now=$(( 10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} ))
+  (( now - changed >= 1000000 )) || return 0
   carrier_next_id || { warn "cannot count the carrier's requests in $comms/next"; return 1; }
   mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || return 0
   action=unknown
@@ -2349,11 +2360,15 @@ seats_report() {
   local bad=0 entry path file="" state_dir workplace key names line i name waiting=0
   local -a problems fields parts inside
   if [[ -f $build_dir/mail.json ]]; then
-    while IFS= read -r path; do
+    local -a waits=()
+    while IFS= read -r entry; do
+      path=$(jq -r '.out' <<< "$entry")
       inside=("$path"/[!.]*)
       waiting=$(( waiting + ${#inside[@]} ))
-    done < <(jq -r '.seats[].out' "$build_dir/mail.json")
+      (( ${#inside[@]} )) && waits+=("mail    $(jq -r '"\(.name) (\(.seat | join("/")))"' <<< "$entry"): ${#inside[@]} waiting in out")
+    done < <(jq -c '.seats[]' "$build_dir/mail.json")
     say "mail    the store $(jq -r '.store' "$build_dir/mail.json"), shown at $(jq -r '.path' "$build_dir/mail.json"); requests waiting in the seats' out: $waiting"
+    (( ${#waits[@]} )) && printf '%s\n' "${waits[@]}"
   fi
   if [[ -f $build_dir/homes.json ]]; then
     while IFS= read -r entry; do

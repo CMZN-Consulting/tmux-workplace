@@ -39,7 +39,7 @@
 - **C7.** Every value the plan or a slot gives a tmux command is encoded: a backslash before a trailing `;`, and where tmux expands formats, every run of `#` not followed by `[` doubled. The program's own options (`-L`, `-f`) are not encoded, since tmux's command parser never sees them. No text of the plan is evaluated by a shell.
 - **C8.** Terms are applied in the binding's order of primitives (`server`, `session`, `window`, `pane`, `arrange`, `start`), and in plan order within one primitive, whatever the order of the plan's programs. Each office gives a session, each room a window and a layout, each seat a pane and a start in its first directory. A pane is made by splitting its room's window, which is then re-spaced with tmux's `tiled` so that the next split has room. The room's declared layout is applied once, by `arrange`, after all its panes exist, and the room ends in that layout.
 - **C9.** tmux's first window of a session and first pane of a window are claimed by the first `window` and `pane` terms that ask for them. No term says which seat is first, and `up` refuses when a window or pane that is not a seat would stand. Every target is a captured id.
-- **C10.** Every tmux call runs under `setpriv --no-new-privs` with `TMUX` and `TMUX_PANE` removed, so the server and every seat run without privilege gain. A running server without no-new-privileges is refused.
+- **C10.** Every tmux call runs under `setpriv --no-new-privs` with `TMUX` and `TMUX_PANE` removed, so the server and every seat run without privilege gain. A running server without no-new-privileges is refused. The check names the process it checked: the tmux server, an agent or the carrier. A process that has ended by the time its status is read is a refusal of its own, which says so.
 - **C11.** `server` checks, before any session exists, that `destroy-unattached` and `exit-unattached` are off and `exit-empty` is on. With `exit-empty` off, the empty server its check started stays and nothing else is made: the loop never ends a server, and the refusal names the server's socket and the command that ends it. Every session carries the run's mark, `@workplace`.
 
 ## A seat's view
@@ -233,7 +233,7 @@
     - `reach` terms with no `mail` term;
     - a seat with no row for `/` in a plan that holds either term, since a seat with no view could write as any seat.
 - **C55.** After the rows, the binding's fixed part shows each seat its own mailbox at the mail path: a file system there, holding `out` read-write and `in`, `sent` and `answers` read-only, and read-only itself. No seat is shown another seat's.
-  - `plan` refuses, with exit 1, naming the origins: a statement or a label at the mail path or beneath it; a mail path that is `/`, lies at or beneath the clone, or lies beneath a hidden row of a seat's table, which the seat could not pass; a seat whose directory or program lies at or beneath it; and, in a plan that holds mail, a seat's name that holds a comma or begins or ends with white space, since a head separates its readers by commas.
+  - `plan` refuses, with exit 1, naming the origins: a statement or a label at the mail path or beneath it; a mail path that is `/`, lies at or beneath the clone, or lies beneath a hidden row of a seat's table, which the seat could not pass; and a seat whose directory or program lies at or beneath it.
   - `build` refuses a mail path that is not a directory on the machine, and one that lies in the workplaces' state directory R or holds it.
   - `why` names the mailbox for a path at or beneath the mail path.
 - **C56.** The store stands in S, which no view holds. `build` makes it once and keeps it.
@@ -245,8 +245,10 @@
   - Its working directory is `RUN/carrier`, which is its mark. `down` ends it only while the process's working directory is that directory, waits until it has ended, and says it is gone when it is.
   - It holds a lock on the store, so a second carrier for the same store ends with exit 2.
   - It takes no request until `up` has recorded the run. Then it makes a pass a second, serving the seats in the plan's order, one request of each per pass, and each seat's requests in the byte order of their names.
-  - `status` names it, and exits 1 when it is gone, saying that requests wait. While it is gone, requests wait in `out` and none is lost: the next carrier serves them. A request it was serving when it stopped is answered when it starts again.
-  - An entry whose name begins with a dot is the seat's draft, and the carrier does not take it. A seat writes `.NAME` and renames it to `NAME`, since a request taken while it is still being written would be cut short.
+  - `status` names it, and exits 1 when it is gone, saying that requests wait. It counts the requests that wait, in all and for each seat that has any. While it is gone, requests wait in `out` and none is lost: the next carrier serves them. A request it was serving when it stopped is answered when it starts again.
+  - A request taken while it is still being written would be delivered cut short. Two rules prevent it:
+    - An entry whose name begins with a dot is the seat's draft, and the carrier does not take it. A seat that wants certainty writes `.NAME` and renames it to `NAME`.
+    - The carrier takes an entry only once its change time is at least one second old, so a request that a seat's file tool writes under its final name rests until it is whole. Until then the carrier takes nothing of that seat, so its requests keep their order.
 - **C58.** A request is one regular file in `out`, named with letters, digits, dot, dash and underscore and ending in `.md`, `.grab` or `.write`, of at most 256 kB, which is 256,000 bytes.
   - Its head is lines `WORD: VALUE`: at most 20, each word once, of the words its kind knows, with no control character, no character that moves or breaks a line, and no bytes that are not UTF-8.
   - Every request gets an answer in `answers`, under its own name: `ok` and the request's id, or `refused` and the reason in words. A refused request does nothing.
@@ -257,7 +259,7 @@
 - **C60.** A grab, `.grab`, names `seat` and optionally `lines`, which is 200 unless stated and at most 5,000. Its answer is `ok`, the id, and what the pane showed: that many lines of history above the screen, and the screen.
   - A write, `.write`, names `seat` and optionally `key`, then has the dashes and one line of text. The carrier types the text into the pane as it stands, with `send-keys -l` and a trailing `;` escaped, and then the key: `Enter`, unless the head names `Escape`, `C-c`, `Tab` or `none`.
   - Both act only on the pane that the run captured for that seat, and only while its session carries the run's mark.
-- **C61.** The carrier moves an entry out of `out` into `taken`, which no view holds, by renaming it, before it looks at it. It never opens a name inside a seat's reach. It starts only when every `out` lies on the file system of `taken`, so that a move is never a copy.
+- **C61.** The carrier moves an entry out of `out` into `taken`, which no view holds, by renaming it, before it looks at it. Before the move it reads the entry's name and its change time, and nothing else: not its content, not its kind. It never opens a name inside a seat's reach. It starts only when every `out` lies on the file system of `taken`, so that a move is never a copy.
 - **C62.** It takes only a regular file. A link, a directory, a fifo, a socket or any other kind of entry is answered as refused and removed.
 - **C63.** It reads the moved file once, into a file of its own, and works on that copy. The read follows no link, does not block, and stops one byte past the limit. What a seat changes afterwards through another name of the same file changes nothing, and a file held under a lease is refused at once rather than waited for.
 - **C64.** It runs nothing that a request names. Names are compared with the plan's exactly, as text. A head, a name, a text or a body is never read as an option, a pattern, a format or a command: the text is typed literally, paths reach git as literal paths, and no word of a request reaches a shell.
@@ -266,4 +268,9 @@
 
 ## Keys and names
 
-- **C67.** A key of an office, a room or a seat, and a kind's name, is not empty, is not `-`, `.` or `..`, does not begin with `-`, and holds no `/`, no white space and no control character. `plan` and `build` refuse one that is, with exit 1, naming the term or the row. A name is one seat's alone: `plan` and `build` refuse two seats of one name, naming both terms.
+- **C67.** A key of an office, a room or a seat, and a kind's name, is not empty, is not `-`, `.` or `..`, does not begin with `-`, and holds no `/`, no white space and no control character. `plan` and `build` refuse one that is, with exit 1, naming the term or the row. A name is one seat's alone: `plan` and `build` refuse two seats of one name, naming both terms. A seat's name, in every plan, is not empty, is not `.` or `..`, and holds no `/`, no comma and no control character, and neither begins nor ends with white space: `plan` and `build` refuse one that is, naming the term. The Logs layer uses a name as a directory's name, and a mail's head separates its readers by commas.
+
+## Limits, stated and not checked
+
+- A mail's body is carried byte for byte, since mail carries captures and logs, which hold control characters. The head is the frame's, and it ends at the first line of three dashes; a reader takes `from` from the head alone. A mail shown raw on a terminal can draw over its own head, so a mail is read through a program that does not obey control characters, as a seat's file tool does.
+- A C-c typed into a pane whose program is plain ends the view with it, before the program's own handler runs: it reaches the whole foreground process group, the view's bubblewrap included, which ends and takes the program with it. This was observed while building the Comms layer and has not been measured apart. A shell with job control and a full-screen program are not touched. A measure is owed before a plain program becomes a seat's command.

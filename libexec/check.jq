@@ -84,7 +84,7 @@ $b[0] as $binding
     [problems] as $first
     | if ($first | length) > 0 then {errors: $first}
       else
-        [term_problems, ($plan | key_problems($binding), unique_problems($binding), structure_problems($binding), mail_problems($binding; $clone)),
+        [term_problems, ($plan | key_problems($binding), name_problems($binding), unique_problems($binding), structure_problems($binding), mail_problems($binding; $clone)),
          table_problems, frame_problems] as $errors
         | if ($errors | length) > 0 then {errors: $errors}
           else

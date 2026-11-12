@@ -47,9 +47,14 @@ if mode == "race":
     watch(out, True)
     link, prep = os.path.join(out, ".link"), os.path.join(out, ".prep")
     swaps = 0
-    end = time.monotonic() + float(seconds)
+    start = time.monotonic()
+    end = start + float(seconds)
     as_link = False
     while time.monotonic() < end:
+        if (time.monotonic() - start) % 2.8 < 2.5:
+            time.sleep(0.01)
+            drain()
+            continue
         try:
             if as_link:
                 if os.path.lexists(link):
@@ -91,6 +96,15 @@ elif mode == "second":
     except OSError:
         written = "gone"
     print(f"second {name}: answered={'yes' if got else 'no'} opened={seen} written={written}")
+elif mode == "slow":
+    with open(place, "wb") as f:
+        f.write(f"to: {spec}\nsubject: slow\n---\n".encode())
+    for k in range(1, 11):
+        time.sleep(0.3)
+        with open(place, "ab") as f:
+            f.write(f"line {k}\n".encode())
+    got = answered(20)
+    print(f"slow {name}: answered={'yes' if got else 'no'}")
 elif mode == "lease":
     draft = os.path.join(out, "." + name)
     with open(spec, "rb") as src, open(draft, "wb") as f:

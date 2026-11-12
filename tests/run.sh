@@ -148,7 +148,7 @@ socket_dir_of() {
 agent_of() {
   local cmdline entry
   for entry in /proc/[0-9]*/cmdline; do
-    cmdline=$(tr '\0' ' ' < "$entry" 2> /dev/null) || continue
+    { cmdline=$(tr '\0' ' ' < "$entry"); } 2> /dev/null || continue
     [[ $cmdline == *gpg-agent*"--homedir $1"[\ /]* ]] && return 0
   done
   return 1
@@ -641,6 +641,25 @@ t_server_privilege() {
   check "[C10] no session was built, and the bystander survives" sessions_are "bystander "
 }
 
+t_a_server_that_ends_before_its_check() {
+  local real dead wrap=$scratch/ending
+  real=$(command -v tmux)
+  true &
+  dead=$!
+  wait "$dead"
+  mkdir -p -- "$wrap"
+  printf '%s\n' '#!/usr/bin/env bash' "for word in \"\$@\"; do" \
+    "  [[ \$word == new-session ]] || continue" "  out=\$('$real' \"\$@\") || exit" "  read -r a b _ <<< \"\$out\"" "  printf '%s\\n' \"\$a \$b $dead\"" "  exit 0" "done" \
+    "exec '$real' \"\$@\"" > "$wrap/tmux"
+  chmod +x -- "$wrap/tmux"
+  make_plan
+  check "build" exit_is 0 wp build
+  check "[C10] up refuses, with exit 1, when the server that a session term names has ended before its status is read" exit_is 1 env PATH="$wrap:$PATH" "$BASH" "$loop" up
+  check "[C10] saying so, as a refusal of its own, and naming the server" \
+    said "harbor/office.typify, term 1 (session harbor Harbor): the tmux server (process $dead) has ended, and its status could not be read; it is refused"
+  check "[C10] and leaves nothing up" test ! -e "$run"
+}
+
 t_failure_leaves_nothing() {
   make_plan '.programs[2].plan[0][2] = "Harbor"'
   check "build of a plan whose second session's name is taken" exit_is 0 wp build
@@ -759,13 +778,13 @@ t_two_workplaces() {
   render "$label2" "$second/tmux.conf" > "$scratch/plan2.json"
   cp -- "$scratch/plan2.json" "$scratch/plan.json"
   PLAN_CLONE=$second make_plan
-  check "[C25] build and up the second" bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" build && WORKPLACE_CONFIG=$1 "$BASH" "$2" up' _ "$second" "$loop"
+  check "[C25] build and up the second" exit_is 0 bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" build && WORKPLACE_CONFIG=$1 "$BASH" "$2" up' _ "$second" "$loop"
   check "[C25] each has its own server" \
     test "$(tmux -L "$label2" list-sessions -F '#{session_name}' | sort | tr '\n' ' ')" = "Harbor Orchard "
   check "[C25] down the first" exit_is 0 wp down
   check "[C25] the first is gone" no_server
   check "[C25] the second stands" test "$(tmux -L "$label2" list-panes -a -F x | wc -l)" = 5
-  check "[C25] down the second" bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" down' _ "$second" "$loop"
+  check "[C25] down the second" exit_is 0 bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" down' _ "$second" "$loop"
 }
 
 t_the_default_name() {
@@ -1696,11 +1715,11 @@ t_identity() {
   mkdir -m 0700 -- "$verify"
   jq -r '.seats[0].public_key' "$keys" | gpg --homedir "$verify" --batch --import 2> /dev/null
   check "[C40] the gpg signature verifies against keys.json's public key" \
-    env GNUPGHOME="$verify" gpg --batch --verify "$root/harbor/berth/msg.asc" "$root/harbor/berth/msg"
+    exit_is 0 env GNUPGHOME="$verify" gpg --batch --verify "$root/harbor/berth/msg.asc" "$root/harbor/berth/msg"
   printf 'keeper %s\n' "$(jq -r '.seats[0].ssh' "$keys" | cut -d' ' -f1,2)" > "$scratch/allowed"
   check "[C40] the ssh signature verifies against keys.json's line" \
-    bash -c 'ssh-keygen -Y verify -f "$1" -I keeper -n file -s "$2.sig" < "$2"' _ "$scratch/allowed" "$root/harbor/berth/msg"
-  check "[C40] the commit verifies against keys.json's public key" env GNUPGHOME="$verify" git -C "$root/harbor/berth/repo" verify-commit HEAD
+    exit_is 0 bash -c 'ssh-keygen -Y verify -f "$1" -I keeper -n file -s "$2.sig" < "$2"' _ "$scratch/allowed" "$root/harbor/berth/msg"
+  check "[C40] the commit verifies against keys.json's public key" exit_is 0 env GNUPGHOME="$verify" git -C "$root/harbor/berth/repo" verify-commit HEAD
   check "[C40] its committer is the seat's name and address" \
     test "$(git -C "$root/harbor/berth/repo" log -1 --format='%cn <%ce>')" = "Harbor Keeper <harbor.dock.keeper@$w>"
   agent_of "$verify" && gpgconf --homedir "$verify" --kill gpg-agent > /dev/null 2>&1
@@ -1738,10 +1757,16 @@ t_identity() {
   check "[C38] a state directory too long for the sockets refuses the build, with exit 2" exit_is 2 env XDG_STATE_HOME="$long" "$BASH" "$loop" build
   check "[C38] naming the socket's length and the limit" said "and GnuPG takes 106"
   check "[C38] and leaving no BUILD" test ! -e "$clone/BUILD"
-  statements_plan "$key_terms"' | (.programs[] | select(.path == "orchard/barn/picker/seat.typify") | .plan[0][4]) = " Orchard Picker"'
-  check "plan with a name that gpg trims" exit_is 0 wplan
-  check "[C35] a user id that gpg does not make as asked refuses the build" exit_is 1 wp build
-  check "[C35] naming both" said "gpg did not make the user id ' Orchard Picker <orchard.barn.picker@$w>'"
+  local altering=$scratch/altering
+  mkdir -p -- "$altering"
+  printf '%s\n' '#!/usr/bin/env bash' 'words=() quick=0 next=0' 'for w in "$@"; do [[ $w == --quick-gen-key ]] && quick=1; done' \
+    'for w in "$@"; do if (( quick && next )); then words+=("$w (altered)"); next=0; continue; fi; [[ $w == -- ]] && next=1; words+=("$w"); done' \
+    "exec '$(command -v gpg)' \"\${words[@]}\"" > "$altering/gpg"
+  chmod +x -- "$altering/gpg"
+  statements_plan "$key_terms"
+  check "plan" exit_is 0 wplan
+  check "[C35] a user id that gpg does not make as asked refuses the build" exit_is 1 env PATH="$altering:$PATH" "$BASH" "$loop" build
+  check "[C35] naming both" said "gpg did not make the user id 'Harbor Keeper <harbor.dock.keeper@$w>'"
   if [[ -d /run/user/$EUID/gnupg && -r /run/user/$EUID/gnupg ]]; then
     check "[C42] after every build, up, status, why, down and refusal of this test, no key home, nor the test's own home for verifying, has a runtime socket directory" no_socket_dir_left
     check "[C42] nor has any home of the first build, whose directories were noted while its agents ran" \
@@ -2200,7 +2225,7 @@ t_a_server_belongs_to_one_clone() {
   render default "$second/tmux.conf" > "$scratch/plan.json"
   PLAN_CLONE=$second make_plan
   cp -- "$scratch/plan-first.json" "$scratch/plan.json"
-  check "build another clone that names the same server" env WORKPLACE_CONFIG="$second" "$BASH" "$loop" build
+  check "build another clone that names the same server" exit_is 0 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" build
   check "[C53] its up refuses the server that carries the first clone's mark, with exit 1" exit_is 1 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" up
   check "[C53] naming both clones" said "the tmux server default at $socket carries the mark of the clone $clone, not this one's ($second); up leaves it alone"
   check "[C53] before any term: the other clone has no run" test ! -e "$second/BUILD/RUN"
@@ -2373,8 +2398,6 @@ t_comms_fold() {
     "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "orchard"|orchard/barn/grower/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/orchard lies at or beneath the mail path '"$root"'/orchard, where the frame shows each seat its mailbox'
     "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "tools"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s program '"$root"'/tools/probe lies at or beneath the mail path '"$root"'/tools'
     "$comms_terms"' | .programs[-1].recorded += [{term: ["record-directory", "harbor", "dock", "pilot", "mailbox/work"], origin: at(24)}]|programs/policy.typify:24 (record-directory): the seat'"'"'s directory '"$root"'/mailbox/work lies at or beneath the mail path '"$root"'/mailbox'
-    "$comms_terms"' | terms_of("harbor/dock/pilot/seat.typify"; if .[0] == "pane" then .[4] = "Pilot, Harbor" else . end)|harbor/dock/pilot/seat.typify, term 1 (pane): the name "Pilot, Harbor" cannot be named in a mail'"'"'s head, which separates its readers by commas'
-    "$comms_terms"' | terms_of("harbor/dock/pilot/seat.typify"; if .[0] == "pane" then .[4] = "Harbor Pilot " else . end)|the name "Harbor Pilot " cannot be named in a mail'"'"'s head'
     "$comms_terms"' | .programs[-1].recorded |= map(select(.term[0] != "statement" or .term[4] != "workplace")) | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; "/"; "read-only"; 25), st("orchard"; "-"; "-"; "office"; "/"; "read-only"; 26)]|seat Harbor Watch (harbor/tower/watch): no row for /: it has no view, and a seat with no view could write as any seat, which the plan'"'"'s mail terms do not allow (at programs/COMMS.typify:1)'
   )
   local entry
@@ -2384,8 +2407,6 @@ t_comms_fold() {
     check "[C54] naming it" said "${entry##*|}"
   done
   check "[C54] and after every refusal PLAN/ is as it was" test "$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)" = "$planned"
-  statements_plan 'terms_of("harbor/dock/pilot/seat.typify"; if .[0] == "pane" then .[4] = "Pilot, Harbor" else . end)'
-  check "[C54] a name with a comma is taken by a plan that holds no mail" exit_is 0 wplan
   statements_plan "$comms_terms"' | .programs[-1].recorded += [m(["mail", "mailbox"]; 9)]'
   check "[C54] two equal mail terms count once" exit_is 0 wplan
   check "[C54] and name both origins" test "$(jq -c '[.mail.origins[].line]' "$clone/PLAN/view.json")" = '[1,9]'
@@ -2432,6 +2453,21 @@ t_keys_and_names() {
   statements_plan '.state["seat-kinds"] = [{key: ["harbor", "dock", "keeper"], value: ["navi gator"], masked: false, origin: at(30)}]'
   check "[C67] plan refuses a kind's name that is not a key" exit_is 1 wplan
   check "[C67] naming its row" said 'programs/policy.typify:30 (state seat-kinds): the kind "navi gator" is refused: it holds white space'
+  local names=(
+    'Pilot, Harbor|it holds a comma, and a mail'"'"'s head separates its readers by commas'
+    'Harbor Pilot |it begins or ends with white space'
+    ' Harbor Pilot|it begins or ends with white space'
+    '.|it is .'
+    '..|it is ..'
+    'Harbor/Pilot|it holds a /'
+    $'Harbor\tPilot|it holds a control character'
+  )
+  for entry in "${names[@]}"; do
+    json=$(jq -n --arg k "${entry%%|*}" '$k')
+    statements_plan 'terms_of("harbor/dock/pilot/seat.typify"; if .[0] == "pane" then .[4] = '"$json"' else . end)'
+    check "[C67] plan refuses, in a plan without mail too, the seat's name $json: ${entry#*|}" exit_is 1 wplan
+    check "[C67] naming the term" said "harbor/dock/pilot/seat.typify, term 1 (pane): the seat's name $json is refused: ${entry#*|}"
+  done
   statements_plan 'terms_of("harbor/dock/pilot/seat.typify"; if .[0] == "pane" then .[4] = "Harbor Keeper" else . end)'
   check "[C67] plan refuses two seats of one name, with exit 1" exit_is 1 wplan
   check "[C67] naming both terms" said "the name Harbor Keeper is given to 2 of the pane terms; it must be unique (harbor/dock/keeper/seat.typify, term 1; harbor/dock/pilot/seat.typify, term 1)"
@@ -2543,6 +2579,7 @@ t_comms_carrier() {
   check "[C57] while it is gone a request waits in out" test -f "$s/comms/harbor tower watch/out/late.md"
   wp status > "$scratch/out" 2>&1
   check "[C51] status counts the requests that wait" said "requests waiting in the seats' out: 1"
+  check "[C51] and names the seat that left them" said "mail    Harbor Watch (harbor/tower/watch): 1 waiting in out"
   check "down" exit_is 0 wp down
   check "[C57] down finds the carrier gone" said "undo the carrier, pid $pid: already gone"
   check "[C57] up again" exit_is 0 wp up
@@ -2565,6 +2602,16 @@ t_comms_carrier() {
   check "[C57] and what it had written into the store is removed" test ! -e "$s/mail/harbor dock keeper/in/stray.md"
   check "[C66] both are recorded" test "$(jq -r 'select(.request == "again.md" or .request == "half.md") | .outcome' "$s/comms/record" | tr '\n' ',')" = "ok,refused,"
   check "down" exit_is 0 wp down
+  local box_out="$s/comms/harbor dock keeper/out"
+  if bwrap --dev-bind / / --tmpfs "$box_out" -- true 2> /dev/null; then
+    check "[C61] up with a file system of its own over one seat's out, made in a private mount, refuses: the carrier does not start" \
+      exit_is 1 bwrap --dev-bind / / --tmpfs "$box_out" -- "$BASH" "$loop" up
+    check "[C61] naming the seat, since a move there would be a copy" \
+      said "the carrier did not start: workplace: the out of Harbor Keeper is not a directory on the file system of $s/comms/taken, and the carrier moves by renaming alone"
+    check "[C61] and nothing is left up" test ! -e "$run"
+  else
+    skip "[C61] no private mount can be made here, so the carrier's refusal of an out on another file system is tried where one can"
+  fi
 }
 
 file_is() { [[ $(cat -- "$1" 2> /dev/null) == "$2" ]]; }
@@ -2787,10 +2834,10 @@ t_comms_from_a_pane() {
   printf '%s\n' "seat: Orchard Grower" --- "--" > "$q/t2.write"
   local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "box=" + $root + "/mailbox", "hidden=" + $s,
         "reach=" + $s + "/comms/harbor dock keeper/out", "link=a.md:" + $root + "/harbor/ledger/letter-keeper",
-        "node=d.md:dir", "node=f.md:fifo", "node=s.md:socket", "second=c.md:" + $q + "/c.md",
+        "node=d.md:dir", "node=f.md:fifo", "node=s.md:socket", "second=c.md:" + $q + "/c.md", "slow=w.md:Harbor Keeper",
         "answer=a.md", "answer=d.md", "answer=f.md", "answer=s.md"])
     | add("harbor/dock/pilot/seat.typify"; ["report=" + $root + "/harbor/berth/pilot", "box=" + $root + "/mailbox",
-        "race=r.md:" + $root + "/harbor/ledger/letter-pilot:" + $q + "/r.md:6", "lease=l.md:" + $q + "/l.md", "answer=l.md"])
+        "race=r.md:" + $root + "/harbor/ledger/letter-pilot:" + $q + "/r.md:12", "lease=l.md:" + $q + "/l.md", "answer=l.md"])
     | add("harbor/tower/watch/seat.typify"; ["report=" + $root + "/harbor/charts/watch", "box=" + $root + "/mailbox",
         "post=-rf.md:" + $q + "/rf.md", "post=--help.grab:" + $q + "/help.grab", "post=*.md:" + $q + "/plain.md",
         "post=$(touch pwned3).md:" + $q + "/plain.md", "post=%s%n.md:" + $q + "/plain.md",
@@ -2833,13 +2880,14 @@ t_comms_from_a_pane() {
     test "$(cd "$s/comms/harbor dock keeper/out" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | tr '\n' ',')" = ".c.md.second,"
   check "[C63] the carrier opened the file a seat wrote once, through no name of the seat's, and the seat's change through its second name afterwards changed nothing" \
     bash -c 'grep -qxF "second c.md: answered=yes opened=1 written=ok" "$1" && ! grep -rqF "changed through a second name" "$2/harbor dock keeper/in" "$2/harbor dock keeper/sent" && grep -rqF "as first written" "$2/harbor dock keeper/in"' _ "$report" "$s/mail"
+  check "[C57] a request written under its own name, a line every 300 ms for three seconds, rests until it is whole and is delivered whole" \
+    bash -c 'grep -qxF "slow w.md: answered=yes" "$1" && f=$(grep -rlx "subject: slow" "$2/harbor dock keeper/in") && [[ $(sed "1,/^---\$/d" "$f" | tr "\n" ,) == "line 1,line 2,line 3,line 4,line 5,line 6,line 7,line 8,line 9,line 10," ]]' _ "$report" "$s/mail"
   report=$root/harbor/berth/pilot
-  check "[C61] racing the carrier, the seat swapped its entry between a file and a link hundreds of times, and nothing opened it while it stood in out" \
+  check "[C61] racing the carrier, the seat held its entry still for 2.5 s and then swapped it between a file and a link for 0.3 s, over and over for 12 s, and nothing opened it while it stood in out" \
     bash -c '[[ $(grep "^race r.md: " "$1") =~ ^race\ r\.md:\ swaps=([0-9]+)\ opened=0$ ]] && (( BASH_REMATCH[1] >= 100 ))' _ "$report"
-  check "[C61] every one it took was served as the file or refused as a link" \
+  check "[C61] every one it took was served as the file or refused as a link: $(jq -r 'select(.request == "r.md") | .outcome' "$s/comms/record" | sort | uniq -c | tr -s ' ' | sed 's/^ //' | paste -sd, -)" \
     bash -c '[[ -n $1 ]] && ! grep -vxF -e "ok " -e "refused it is a symbolic link, and the carrier takes a regular file alone; it is removed" <<< "$1"' _ \
     "$(jq -r 'select(.request == "r.md") | .outcome + " " + (.reason // "")' "$s/comms/record")"
-  note "    the race: $(jq -r 'select(.request == "r.md") | .outcome' "$s/comms/record" | sort | uniq -c | tr -s ' ' | tr '\n' ';')"
   check "[C61] [C62] no letter from the ledger reached any seat, and the record holds none of it" \
     bash -c '! grep -rqF "the ledger" "$1" --exclude-dir=.git && ! grep -qF "ledger" "$2"' _ "$s/mail" "$s/comms/record"
   if grep -qx "lease l.md: lease=held answered=yes" "$report"; then
@@ -2897,6 +2945,7 @@ tests=(
   t_exec_by_hand
   t_fixed_part
   t_server_privilege
+  t_a_server_that_ends_before_its_check
   t_failure_leaves_nothing
   t_failure_between_a_session_and_its_mark
   t_unattached_options

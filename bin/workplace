@@ -532,11 +532,16 @@ key_listing() {
   done < <(gpg --homedir "$home" --with-colons --with-keygrip --list-keys 2> /dev/null)
 }
 
+end_key_agent() {
+  "${2:-gpgconf}" --homedir "$1" --kill gpg-agent > /dev/null 2>&1
+  "${2:-gpgconf}" --homedir "$1" --remove-socketdir > /dev/null 2>&1
+}
+
 key_step() {
   local home=$1 who=$2
   shift 2
   if ! setsid -w "$@" < /dev/null > "$build_dir/key.out" 2>&1; then
-    gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+    end_key_agent "$home"
     die "build refuses: the key of $who cannot be made: $(tail -n 2 "$build_dir/key.out" | tr '\n' ' ')" 2
   fi
 }
@@ -594,22 +599,22 @@ make_keys() {
     wanted=${uid//\\/\\x5c}
     wanted=${wanted//:/\\x3a}
     if [[ $key_uid != "$wanted" ]]; then
-      gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+      end_key_agent "$home"
       die "build refuses: gpg did not make the user id ${uid@Q} for $who; it made ${key_uid@Q}"
     fi
     key_step "$home" "$who" gpg --homedir "$home" --batch --pinentry-mode loopback --passphrase '' --quick-add-key -- "$key_fpr" ed25519 auth never
     key_listing "$home"
     if [[ -z $sub_grip || $key_usage == *[eE]* || $sub_usage != a ]]; then
-      gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+      end_key_agent "$home"
       die "build refuses: the key of $who has the usage ${key_usage@Q} and its subkey ${sub_usage@Q}, not signing and authentication alone" 2
     fi
     printf '%s 0\n' "$sub_grip" > "$home/sshcontrol" && printf '%s\n' no-autostart > "$home/gpg.conf" \
-      && rm -rf -- "$home/openpgp-revocs.d" || die "cannot finish the key home $home" 2
+      && rm -rf -- "$home/openpgp-revocs.d" || { end_key_agent "$home"; die "cannot finish the key home $home" 2; }
     pub=$(gpg --homedir "$home" --armor --export -- "$key_fpr" 2> /dev/null) && line=$(gpg --homedir "$home" --export-ssh-key -- "$key_fpr" 2> /dev/null) \
-      || die "cannot export the public key of $who" 2
+      || { end_key_agent "$home"; die "cannot export the public key of $who" 2; }
     read -r type blob comment <<< "$line"
-    fingerprint=$(ssh_fingerprint "$blob") || die "cannot compute the ssh fingerprint of $who" 2
-    gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+    fingerprint=$(ssh_fingerprint "$blob") || { end_key_agent "$home"; die "cannot compute the ssh fingerprint of $who" 2; }
+    end_key_agent "$home"
     entries=$(jq -c --argjson seat "$(jq -c '.seat' <<< "$holder")" --arg name "$name" --arg home "keys/$nn" --arg uid "$uid" \
       --arg fpr "$key_fpr" --arg sub "$sub_fpr" --arg pub "$pub" --arg ssh "$type $blob ${seat[0]}/${seat[1]}/${seat[2]}@$workplace" \
       --arg sshfp "$fingerprint" \
@@ -1036,14 +1041,14 @@ start_agents() {
       warn "an agent of $home already answers (${answer%%$'\n'*}); another run of this workplace may be up, and up leaves it alone"
       return 1
     fi
+    socket_dir=$("$kill_with" --homedir "$home" --list-dirs socketdir)
+    [[ $socket_dir == "$home" ]] || agent_record "the runtime sockets of $name's agent" "" "${ask[@]}" "$kill_with" --homedir "$home" --remove-socketdir >> "$run_dir/ledger"
     "$setpriv_program" --no-new-privs "$agent" --homedir "$home" --daemon > "$run_dir/agent.out" 2>&1 \
       || { warn "$who did not start: $(tail -n 1 "$run_dir/agent.out")"; return 1; }
     answer=$("${ask[@]}" 2> /dev/null)
     pid=${answer#D }
     pid=${pid%%$'\n'*}
-    [[ $answer == D\ * && $pid =~ ^[0-9]+$ ]] || { warn "$who does not answer"; "$kill_with" --homedir "$home" --kill gpg-agent > /dev/null 2>&1; return 1; }
-    socket_dir=$("$kill_with" --homedir "$home" --list-dirs socketdir)
-    [[ $socket_dir == "$home" ]] || agent_record "the runtime sockets of $name's agent" "" "${ask[@]}" "$kill_with" --homedir "$home" --remove-socketdir >> "$run_dir/ledger"
+    [[ $answer == D\ * && $pid =~ ^[0-9]+$ ]] || { warn "$who does not answer"; end_key_agent "$home" "$kill_with"; return 1; }
     agent_record "$who" "$answer" "${ask[@]}" "$kill_with" --homedir "$home" --kill gpg-agent >> "$run_dir/ledger"
     jq -c -n --arg what "$who, key $(jq -r '.fingerprint[-16:]' <<< "$holder"), pid $pid" --arg is "$answer" \
       --arg note "$name cannot sign until the workplace is brought down and up again" --argjson call "$(json_list "${ask[@]}")" \

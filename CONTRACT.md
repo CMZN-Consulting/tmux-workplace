@@ -162,6 +162,8 @@
   - The agent forbids every command that reads, exports, imports, deletes or changes a key, or reloads or ends the agent.
   - Removing every ssh key changes nothing, and adding one is refused.
 - **C42.** `down` ends every agent that carries the run's mark, and removes its runtime socket directory once no agent of the home answers.
+  - GnuPG makes that directory whenever it is asked about a home, also after its agent has ended. The frame asks only while an agent is expected, and removes the directory wherever it ends an agent: `build` after each key, `up` where it stops before its first term, and `down`. `up` records the directory in the ledger before it starts the agent.
+  - No build, run, status or refusal leaves a runtime socket directory of a key home. The tests find a directory by the name GnuPG gives it, the base32 of the home's SHA-1, and never ask GnuPG after an agent has ended.
 - **C43.** `status` lists each agent with its key and process id. It exits 1 when one is gone, saying that the seat cannot sign until the workplace is brought down and up again.
   - `why` names a seat's key and the term that gives it, and the masks on R and on the runtime directory's `gnupg`.
   - `doctor` reports GnuPG and its floor, the state directory and the length it leaves for a workplace's name, and the runtime directory.

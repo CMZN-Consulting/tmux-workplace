@@ -136,12 +136,45 @@ make_plan() {
      outputs: [{path: "plan.json", sha256: $p}, {path: "facts.json", sha256: $f}]}' > "$into/PLAN/manifest.json"
 }
 
+socket_dir_of() {
+  local sum alphabet=ybndrfg8ejkmcpqxot1uwisza345h769 out="" i j chunk
+  sum=$(printf '%s' "$1" | sha1sum)
+  for (( i = 0; i < 30; i += 5 )); do
+    chunk=$(( 16#${sum:i:5} ))
+    for (( j = 15; j >= 0; j -= 5 )); do out+=${alphabet:$(( (chunk >> j) & 31 )):1}; done
+  done
+  printf '%s\n' "/run/user/$EUID/gnupg/d.$out"
+}
+agent_of() {
+  local cmdline entry
+  for entry in /proc/[0-9]*/cmdline; do
+    cmdline=$(tr '\0' ' ' < "$entry" 2> /dev/null) || continue
+    [[ $cmdline == *gpg-agent*"--homedir $1"[\ /]* ]] && return 0
+  done
+  return 1
+}
+no_agent_of() { ! agent_of "$1"; }
+key_homes() {
+  local home
+  for home in "$scratch"/home/.local/state/workplace/*/keys/* "$scratch"/state-*/workplace/*/keys/* "$scratch"/verify; do
+    [[ -d $home ]] && printf '%s\n' "$home"
+  done
+}
+no_socket_dir_left() {
+  local home left=""
+  while IFS= read -r home; do
+    [[ -e $(socket_dir_of "$home") ]] && left+=" ${home#"$scratch"/}"
+  done < <(key_homes)
+  [[ -z $left ]] || { note "    a runtime socket directory is left for:$left"; return 1; }
+}
+
 cleanup() {
   local home
   if command -v gpgconf > /dev/null; then
-    for home in "$scratch"/home/.local/state/workplace/*/keys/* "$scratch"/state-*/workplace/*/keys/*; do
-      [[ -d $home ]] && gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
-    done
+    while IFS= read -r home; do
+      agent_of "$home" && gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
+      gpgconf --homedir "$home" --remove-socketdir > /dev/null 2>&1
+    done < <(key_homes)
   fi
   if [[ $TMUX_TMPDIR == "$scratch"/* ]]; then
     tmux -S "$TMUX_TMPDIR/tmux-$UID/$label" kill-server 2> /dev/null
@@ -1573,8 +1606,12 @@ t_identity() {
   check "[C37] its fingerprint is the one ssh-keygen gives" \
     test "$(jq -r '.seats[0].ssh_fingerprint' "$keys")" = "$(jq -r '.seats[0].ssh' "$keys" | ssh-keygen -lf - | cut -d' ' -f2)"
   check "[C37] the build's manifest lists keys.json" grep -qE '^[0-9a-f]{64}  keys\.json$' "$clone/BUILD/MANIFEST"
-  check "[C35] build leaves no agent running" \
-    bash -c 'for h in "$1"/keys/*; do [[ $(gpg-connect-agent --homedir "$h" --no-autostart "GETINFO pid" /bye 2> /dev/null) != D* ]] || exit 1; done' _ "$state"
+  check "[C35] build leaves no agent running" no_agent_of "$state/keys"
+  if [[ -d /run/user/$EUID/gnupg && -r /run/user/$EUID/gnupg ]]; then
+    check "[C42] and no runtime socket directory: each key home's, by the name GnuPG gives it, is absent" no_socket_dir_left
+  else
+    skip "[C42] /run/user/$EUID/gnupg cannot be read here, so whether build leaves a socket directory there is measured where it can"
+  fi
   gpg-agent --homedir "$home" --daemon > /dev/null 2>&1
   check "[C38] up refuses while an agent of a key home answers" exit_is 1 wp up
   check "[C38] naming it" said "an agent of $home already answers"
@@ -1620,6 +1657,8 @@ t_identity() {
   check "[C40] the commit verifies against keys.json's public key" env GNUPGHOME="$verify" git -C "$root/harbor/berth/repo" verify-commit HEAD
   check "[C40] its committer is the seat's name and address" \
     test "$(git -C "$root/harbor/berth/repo" log -1 --format='%cn <%ce>')" = "Harbor Keeper <harbor.dock.keeper@$w>"
+  agent_of "$verify" && gpgconf --homedir "$verify" --kill gpg-agent > /dev/null 2>&1
+  gpgconf --homedir "$verify" --remove-socketdir > /dev/null 2>&1
   check "watch ran" wait_for_probe "Harbor Watch" watch
   check "[C39] a seat that holds no key has no key home" grep -qxF "key home: none" "$root/harbor/charts/report"
   check "[C39] nor reaches the agents' runtime sockets" grep -qxF "key runtime sockets: unseen" "$root/harbor/charts/report"
@@ -1634,11 +1673,13 @@ t_identity() {
   check "[C43] saying the seat cannot sign until down and up" said "Harbor Keeper cannot sign until the workplace is brought down and up again"
   local -a socket_dirs=()
   for program in "$state"/keys/*; do socket_dirs+=("$(gpgconf --homedir "$program" --list-dirs socketdir)"); done
+  if [[ ${socket_dirs[0]} == /run/user/* ]]; then
+    check "[C42] the socket directory's name is GnuPG's, computed here without asking it" test "${socket_dirs[0]}" = "$(socket_dir_of "$state/keys/01")"
+  fi
   check "[C42] down" exit_is 0 wp down
   check "[C42] no runtime socket directory is left (${#socket_dirs[@]} looked at, noted while the agents ran)" \
     bash -c 'for d in "${@:2}"; do [[ $d == "$1"/keys/* || ! -e $d ]] || exit 1; done' _ "$state" "${socket_dirs[@]}"
-  check "[C42] and no agent answers after down" \
-    bash -c 'for h in "$1"/keys/*; do [[ $(gpg-connect-agent --homedir "$h" --no-autostart "GETINFO pid" /bye 2> /dev/null) != D* ]] || exit 1; done' _ "$state"
+  check "[C42] and no agent of a key home runs after down" no_agent_of "$state/keys"
   local before
   before=$(jq -r '.seats[0].fingerprint' "$keys")
   rm -rf -- "$clone/BUILD"
@@ -1655,6 +1696,13 @@ t_identity() {
   check "plan with a name that gpg trims" exit_is 0 wplan
   check "[C35] a user id that gpg does not make as asked refuses the build" exit_is 1 wp build
   check "[C35] naming both" said "gpg did not make the user id ' Orchard Picker <orchard.barn.picker@$w>'"
+  if [[ -d /run/user/$EUID/gnupg && -r /run/user/$EUID/gnupg ]]; then
+    check "[C42] after every build, up, status, why, down and refusal of this test, no key home, nor the test's own home for verifying, has a runtime socket directory" no_socket_dir_left
+    check "[C42] nor has any home of the first build, whose directories were noted while its agents ran" \
+      bash -c 'for d in "${@:2}"; do [[ $d == "$1"/keys/* || ! -e $d ]] || exit 1; done' _ "$state" "${socket_dirs[@]}"
+  else
+    skip "[C42] /run/user/$EUID/gnupg cannot be read here, so the directories left after the whole test are measured where it can"
+  fi
 }
 
 t_source_and_contract() {

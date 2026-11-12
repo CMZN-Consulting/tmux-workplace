@@ -1,0 +1,64 @@
+#lang typify
+declare : WorkplaceRuntime
+version : 1
+file : programs/RUNTIME.typify
+optional!
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+cell : expectation-records = shadow
+primitive : expect : text text text text variable
+writes : expect : expectation-records = put 5 "expected"
+effect : expect = state
+form : expect : <variable>
+does : expect - - - workplace <variable>
+end!
+
+declare : OfficeRuntime
+version : 1
+file : programs/OFFICE[<office-key>]/RUNTIME.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+cell : sessions = shadow
+cell : expectation-records = shadow
+primitive : expect : text text text text variable
+writes : expect : expectation-records = put 5 "expected"
+effect : expect = state
+ensure : expect : office-declared = (bound sessions <office-key>)
+form : expect : <variable>
+does : expect <office-key> - - office <variable>
+end!
+
+declare : RoomRuntime
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/RUNTIME.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+cell : windows = shadow
+cell : expectation-records = shadow
+primitive : expect : text text text text variable
+writes : expect : expectation-records = put 5 "expected"
+effect : expect = state
+ensure : expect : room-declared = (bound windows <office-key> <room-key>)
+form : expect : <variable>
+does : expect <office-key> <room-key> - room <variable>
+end!
+
+declare : SeatRuntime
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/RUNTIME.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+cell : panes = shadow
+cell : expectation-records = shadow
+primitive : expect : text text text text variable
+writes : expect : expectation-records = put 5 "expected"
+effect : expect = state
+ensure : expect : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
+form : expect : <variable>
+does : expect <office-key> <room-key> <seat-key> seat <variable>
+end!

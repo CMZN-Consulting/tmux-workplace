@@ -1,0 +1,33 @@
+#lang typify
+declare : Homes
+version : 1
+file : programs/KIND[<kind-key>]/HOME.typify
+optional!
+is : kind-key = /[A-Za-z0-9][A-Za-z0-9_-]*/ except "none"
+is : variable = /[A-Za-z_][A-Za-z0-9_]*/
+is : home-state = "kept" | "scratch"
+is : home-subpath = relative-path | "."
+is : workplace-path = canonical-path | relative-path | "."
+cell : kinds = shadow
+cell : home-records = shadow
+primitive : home : kind-key variable home-state
+writes : home : home-records = put 1
+effect : home = state
+ensure : home : kind-declared = (bound kinds <kind-key>)
+cell : home-variable-records = shadow
+primitive : home-variable : kind-key variable home-subpath
+writes : home-variable : home-variable-records = put 2
+effect : home-variable = state
+ensure : home-variable : kind-declared = (bound kinds <kind-key>)
+cell : home-seed-records = shadow
+primitive : home-seed : kind-key workplace-path
+writes : home-seed : home-seed-records = put 1
+effect : home-seed = state
+ensure : home-seed : kind-declared = (bound kinds <kind-key>)
+form : home : <variable> = <home-state>
+does : home <kind-key> <variable> <home-state>
+form : home-variable : <variable> = <home-subpath>
+does : home-variable <kind-key> <variable> <home-subpath>
+form : home-seed : <workplace-path>
+does : home-seed <kind-key> <workplace-path>
+end!

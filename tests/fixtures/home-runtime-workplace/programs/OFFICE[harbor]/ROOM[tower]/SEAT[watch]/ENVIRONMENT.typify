@@ -1,0 +1,3 @@
+environment : WORKPLACE_ROLE = watch
+environment : NAV_HOME = ordinary-home-value
+environment : NAV_CACHE = ordinary-cache-value

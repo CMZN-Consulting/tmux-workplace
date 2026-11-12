@@ -1,11 +1,15 @@
 {
+  "edition": 2,
   "reader_commit": "4bb7584a88a4e59bd1295f56f771a3f434e5d7ea",
-  "source_base_commit": "4af6fe55d21a34b6e4f8c3a46b962a9fc88bc40f",
+  "source_base_commit": "5b1a9955833177d31d15fafa70ac01129a6a7e27",
   "definitions": [
     "5.37",
     "5.42",
-    "5.44"
+    "5.44",
+    "5.49"
   ],
+  "source_freeze_sha256": "dc84c3c7f18f549e99d7ef508624e1e8ea01e2d3c6fc328a9e95310438305be2",
+  "private_prediction_freeze_sha256": "c7a32e0c10b5af9bf76f0cacddc20095788d2ccddef4401e33e14b79af060385",
   "native_only": true,
   "inputs": [
     {
@@ -98,7 +102,7 @@
     },
     {
       "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/ENVIRONMENT.typify",
-      "sha256": "ada70e92cdd8ddf1828948f0a1f11885c7fa289332d1675f29ebbbc01c3f53ad"
+      "sha256": "6d7977ccfb47af7e5a3de32123b8f86ff3564a91ba511987bb464e5a86149fbe"
     },
     {
       "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/run/START.typify",
@@ -154,30 +158,17 @@
     }
   ],
   "check_exit": 0,
-  "positive_plan_exit": 0,
-  "positive_plan_sha256": "e20a95126c947dd4b38410f4fc4682346f8cfd4e8ad7a61b41482c5f8bcaad4d",
-  "assembled_declarations_sha256": "14ed8584eb8917d67814b92d899047b177e387f9b18c8c2b7ac22f20861bd8ae",
-  "new_state_records": 10,
-  "new_record_names": [
-    "home",
-    "home-variable",
-    "home-seed",
-    "expect"
-  ],
-  "passing_ensures": 60,
-  "executable_terms": 19,
-  "recorded_events": 69,
-  "status": "unchecked",
-  "modelled": "13 of 19",
-  "bound": {
-    "c": 2,
-    "limit": 160,
-    "n": 80
-  },
-  "facts": "none",
-  "reader_changed": false,
-  "frame_plan_build_up_calls": 0,
-  "key_operations": 0,
-  "real_credentials_used": false,
+  "plan_calls": 5,
+  "positive_plan_sha256": "f387ad5f5ef0d010e4d6acc45a0f25412bba2d95d6ccdfbe8151af94a8dc1fac",
+  "positive_recorded_events": 67,
+  "positive_passing_ensures": 58,
+  "new_home_runtime_events": 10,
+  "new_events_and_origins_match": true,
+  "all_frozen_native_expectations_match": true,
+  "declarations_sha256": "14ed8584eb8917d67814b92d899047b177e387f9b18c8c2b7ac22f20861bd8ae",
+  "frame_calls": 0,
+  "runtime_calls": 0,
+  "model_calls": 0,
+  "historical_receipt": "NATIVE-RECEIPT-v1.json",
   "runtime_or_isolation_proven": false
 }

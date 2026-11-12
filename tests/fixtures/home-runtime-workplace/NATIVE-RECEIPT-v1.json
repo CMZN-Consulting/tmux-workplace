@@ -1,0 +1,183 @@
+{
+  "reader_commit": "4bb7584a88a4e59bd1295f56f771a3f434e5d7ea",
+  "source_base_commit": "4af6fe55d21a34b6e4f8c3a46b962a9fc88bc40f",
+  "definitions": [
+    "5.37",
+    "5.42",
+    "5.44"
+  ],
+  "native_only": true,
+  "inputs": [
+    {
+      "path": "layers/Access.typify",
+      "sha256": "a132aa601a373bb9c6581a73b91e4765ead10dd2530113a358c79f5e1133ac84"
+    },
+    {
+      "path": "layers/Agents.typify",
+      "sha256": "4de12232f9273699436c9de0041d18ea4f7eb38b3ce47c0cd9783e21d79f5df4"
+    },
+    {
+      "path": "layers/Homes.typify",
+      "sha256": "3150df7507f7cb3dc7786c7aa78b6a748dc31b3545fcc6fabca76289f24fda67"
+    },
+    {
+      "path": "layers/Host.typify",
+      "sha256": "8c5407efd600171fe3988b87e70c5306b30c17183805a27b6a3ed61fe0bd994d"
+    },
+    {
+      "path": "layers/Runtime.typify",
+      "sha256": "8a533b404c8940ab765f5c6729fd294a81ed4b48bf966e0f1b60e23146464a40"
+    },
+    {
+      "path": "layers/Structure.typify",
+      "sha256": "2935bebfbb90b522f2fbb491ae93a67119c4020c3870cac5234b0326c6cb5724"
+    },
+    {
+      "path": "programs/ENVIRONMENT.typify",
+      "sha256": "c6493c1846e8b6619b44cb02547319fe8192c90907dc6c86b8c4b4ad0f23cb2e"
+    },
+    {
+      "path": "programs/KINDS.typify",
+      "sha256": "263d2df3c37cfae174be350450ba62bf113761f497fd76fd73357a37b8718ca4"
+    },
+    {
+      "path": "programs/KIND[gardener]/HOME.typify",
+      "sha256": "3cf8efbc6d56411cec34b6639be7c9c5a1b39d0f3de49b9bfd2a345276fb26c9"
+    },
+    {
+      "path": "programs/KIND[gardener]/KIND.typify",
+      "sha256": "24ed117f3bf8a42e9ad2d1a9a9d490ee5d3f0a5e689a591f23990eea2e960083"
+    },
+    {
+      "path": "programs/KIND[navigator]/HOME.typify",
+      "sha256": "a7a87d5a05f3bc60f7db3f43f9d0157d607738e6c5a2158349643539d84a7e51"
+    },
+    {
+      "path": "programs/KIND[navigator]/KIND.typify",
+      "sha256": "82eb64009b966ca7df5dc7a2914881c8780ae212b5e54c666777daf4a8488afb"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/OFFICE.typify",
+      "sha256": "e8bb4b2f8a23234b66c6ff466e90ba900827c623021689908ac163108507796d"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify",
+      "sha256": "421a712e6fb9fdc4a7185542e62758b58ce5e9c0e45849d9bed84e604fa9fb55"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/RUNTIME.typify",
+      "sha256": "5d882d0e8351f9f3c488e00b9bb5d4064e5b9a48f9e40b94e3a427949b8ee7ed"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[keeper]/DIRECTORIES.typify",
+      "sha256": "e9db2978c0a464299a906b4ae4246614168c8afb307ec803464903d6b7c45793"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[keeper]/run/START.typify",
+      "sha256": "a5b5abb63b8f6d820c015bbcb8a952de3af7b24116d72d61f10cfd42b34f2e88"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/DIRECTORIES.typify",
+      "sha256": "9386bb1495daa9b457eeb63126f8fc5a8c0358576961408825469966da43f375"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/RUNTIME.typify",
+      "sha256": "b32cbd80279ac54d4215d72bc7be15eb6e3137458f1039787abd116e1a098b4a"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/SEAT.typify",
+      "sha256": "0ad58291326b813de68b259073f9defa9680d9fed4fa924f1560178b3c75718b"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/run/START.typify",
+      "sha256": "a9bcd8f4199525d2ae9de7b88748bf7247244931b39042f9a31cd8b7c1057745"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/DIRECTORIES.typify",
+      "sha256": "8cc8924510317000ad3993e00ec360e60eadf181fab9ad70b289595023499c2f"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/ENVIRONMENT.typify",
+      "sha256": "ada70e92cdd8ddf1828948f0a1f11885c7fa289332d1675f29ebbbc01c3f53ad"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/run/START.typify",
+      "sha256": "b666da362703d70f3374fb59c53644767d1b51aa0bad8b0a9b30926de9e33df6"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/RUNTIME.typify",
+      "sha256": "f65a68c5a8988b7916c508f0bb1018e7aabe55a15369e21fde5128a48d171b9f"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/DIRECTORIES.typify",
+      "sha256": "c60bdd8938d7756181d3959543f705de27d79db14e81c5317cc2936300a9a9a3"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/SEAT.typify",
+      "sha256": "de959640fe7b6da6eb2096b962a6187804d151ec870995c19bb22b9e4c75c407"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/run/START.typify",
+      "sha256": "2f2a7348000eb934d115cb8c53920196f3b78b3b074ee593bdb4e973c8b26012"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/DIRECTORIES.typify",
+      "sha256": "3d3e2cbf5885e25662831b002b4c05c53619543a9db1fd336252cd058564f4b8"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/SEAT.typify",
+      "sha256": "becd7580f775e8d7b14d3d8ed72f0c51b8a83d270752562d2a8f336430eee00b"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/run/START.typify",
+      "sha256": "35f6959d5f167bdbab2f966a1b5808e0f75ffca69f45c5413e5b4989a825ba84"
+    },
+    {
+      "path": "programs/RUNTIME.typify",
+      "sha256": "806f1e1ee2167631144be279bb06e0cf2b0e5606ad254b0cddbd6cadb4f320e6"
+    },
+    {
+      "path": "programs/STRUCTURE.typify",
+      "sha256": "112e2317c0439739e399d56606c113bb893a2a9476cc72528b6b54b470f97964"
+    },
+    {
+      "path": "programs/WORKPLACE.typify",
+      "sha256": "dfeb26fa93bbed693600db996cc741219aa1ea0e81391ac74a4a53ccae890bf7"
+    },
+    {
+      "path": "tmux.conf",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "workplace.json",
+      "sha256": "e2295f156873937531e7c50a44ae404bebde982280b1577f0926681b9a7e4636"
+    }
+  ],
+  "check_exit": 0,
+  "positive_plan_exit": 0,
+  "positive_plan_sha256": "e20a95126c947dd4b38410f4fc4682346f8cfd4e8ad7a61b41482c5f8bcaad4d",
+  "assembled_declarations_sha256": "14ed8584eb8917d67814b92d899047b177e387f9b18c8c2b7ac22f20861bd8ae",
+  "new_state_records": 10,
+  "new_record_names": [
+    "home",
+    "home-variable",
+    "home-seed",
+    "expect"
+  ],
+  "passing_ensures": 60,
+  "executable_terms": 19,
+  "recorded_events": 69,
+  "status": "unchecked",
+  "modelled": "13 of 19",
+  "bound": {
+    "c": 2,
+    "limit": 160,
+    "n": 80
+  },
+  "facts": "none",
+  "reader_changed": false,
+  "frame_plan_build_up_calls": 0,
+  "key_operations": 0,
+  "real_credentials_used": false,
+  "runtime_or_isolation_proven": false
+}

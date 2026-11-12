@@ -1,0 +1,40 @@
+name: tests on tmux 3.5a
+
+on:
+  push:
+    branches: [w1-loop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config bison libevent-dev libncurses-dev bubblewrap jq
+      - name: tmux 3.5a from its release archive
+        env:
+          TMUX_ARCHIVE: https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz
+          TMUX_SHA256: 16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951
+        run: |
+          curl -fsSL -o tmux.tar.gz "$TMUX_ARCHIVE"
+          printf '%s  %s\n' "$TMUX_SHA256" tmux.tar.gz | sha256sum -c -
+          tar -xzf tmux.tar.gz
+          cd tmux-3.5a
+          ./configure --prefix="$HOME/tmux-3.5a"
+          make -j"$(nproc)"
+          make install
+      - name: Unprivileged user namespaces for bubblewrap
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: The test file
+        run: |
+          export PATH="$HOME/tmux-3.5a/bin:$PATH"
+          tmux -V
+          bash --version | head -1
+          jq --version
+          bash tests/run.sh

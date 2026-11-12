@@ -24,53 +24,23 @@ $b[0] as $binding
          | (if $e | has("unless-before") then "(?![" + $d + ($e["unless-before"] | rx) + "])" else "" end) as $guard
          | gsub("(?<run>" + $d + "+)" + $guard; .run + .run)
        else . end);
-  def place:
-    if . == "" then error("\($term[0]): an empty path")
-    elif startswith("/") then .
-    else $root + "/" + . end;
-  def program_path:
-    if startswith("/") then . elif contains("/") then $root + "/" + . else . end;
-  def lies_beneath($p; $q): $q == "/" and $p != "/" or ($p | startswith($q + "/"));
-  def table_rows($tname; $k):
-    ($binding.tables[$tname] // error("the binding has no table \($tname)")) as $spec
-    | [($tables[$tname] // [])[] | select(.key[0:($k | length)] == $k)
-       | {path: (.key[$k | length] | place), state: .value[0], from: "plan"}] as $planned
-    | [($st.added[$tname] // {})[($k | tojson)] // [] | .[]] as $added
-    | ($added | map(.path)) as $taken
-    | ([$planned[] | select(.path as $p | $taken | index($p) | not)] + $added)
-    | sort_by(.path)
-    | . as $rows
-    | [$rows[] | select(.path as $p | any($rows[]; .state == $spec["skip-beneath"] and lies_beneath($p; .path)) | not)];
+  def absolute:
+    if startswith("/") then . else error("\($term[0]): \(.) is not an absolute path") end;
+  def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
   def resolve($e; $st):
-    if ($e | type) == "string" then {vals: [{v: $e, lit: true}], st: $st}
+    if ($e | type) == "string" then [{v: $e, lit: true}]
     elif ($e | type) != "object" then error("the binding of \($term[0]) holds an element that is neither a string nor an object")
-    elif $e | has("arg") then {vals: [{v: (arg($e.arg) | modify($e)), lit: false}], st: $st}
-    elif $e | has("path") then {vals: [{v: (arg($e.path) | place | modify($e)), lit: false}], st: $st}
+    elif $e | has("arg") then [{v: (arg($e.arg) | modify($e)), lit: false}]
+    elif $e | has("path") then [{v: (arg($e.path) | absolute | modify($e)), lit: false}]
     elif $e | has("slot") then
       key($e.slot) as $k
-      | if ($st.slots | has($k)) then {vals: [{v: ($st.slots[$k] | modify($e)), lit: false}], st: $st}
+      | if ($st.slots | has($k)) then [{v: ($st.slots[$k] | modify($e)), lit: false}]
         else error("\($term[0]): no slot \(shown($e.slot))") end
-    elif $e | has("file") then {vals: [{v: ($build + "/" + $e.file), lit: false}], st: $st}
-    elif $e | has("argv") then
-      (arg($e.argv) | try fromjson catch error("\($term[0]): argument \($e.argv) is not JSON")) as $a
-      | if ($a | type) != "array" or ($a | length) < 1 or ([$a[] | type] | unique) != ["string"]
-        then error("\($term[0]): argument \($e.argv) is not a list of strings with a program first")
-        else {vals: ([{v: ($a[0] | program_path), lit: false}] + [$a[1:][] | {v: ., lit: false}]), st: $st} end
-    elif $e | has("table") then
-      $binding.tables[$e.table] as $spec
-      | table_rows($e.table; name($e.key)) as $rows
-      | if ($rows | length) == 0 then {vals: [], st: $st}
-        else
-          reduce ($spec.head + ([$rows[] | . as $row
-            | ($spec.states[$row.state] // error("\($term[0]): the table \($e.table) has no state \($row.state)"))
-            | map(if type == "object" and has("entry") then {entry: $row[.entry]} else . end)[]]) + $spec.tail)[] as $x
-            ({vals: [], st: $st};
-             if ($x | type) == "object" and ($x | has("entry")) then .vals += [{v: $x.entry, lit: false}]
-             else resolve($x; .st) as $r | {vals: (.vals + $r.vals), st: $r.st} end)
-        end
+    elif $e | has("file") then [{v: ($build + "/" + $e.file), lit: false}]
+    elif $e | has("concat") then [{v: ([$e.concat[] | resolve(.; $st)[].v] | join("")), lit: false}]
     else error("the binding of \($term[0]) holds an element of no known kind") end;
-  def resolve_all($elems; $st):
-    reduce $elems[] as $e ({vals: [], st: $st}; resolve($e; .st) as $r | {vals: (.vals + $r.vals), st: $r.st});
+  def resolve_all($elems; $st): [$elems[] | resolve(.; $st)[]];
+  def one($e; $st): resolve($e; $st)[0].v;
   def encode($p):
     if $p | has("escape-last") then
       $p["escape-last"] as $x
@@ -80,23 +50,58 @@ $b[0] as $binding
   def program($n): $binding.programs[$n] // error("the binding names no program \($n)");
   def call($elems; $st):
     program($elems[0]) as $p
-    | resolve_all($p.argv + $elems[1:]; $st) as $r
-    | {argv: ($r.vals | encode($p)), st: $r.st};
-  def one($e; $st): resolve_all([$e]; $st).vals[0].v;
+    | (resolve_all($p.argv; $st) | map(.lit = true)) + resolve_all($elems[1:]; $st) | encode($p);
+  def view_args($spec; $k; $directory; $st):
+    [($tables[$spec.cell] // [])[] | select(.key[0:3] == $k) | {path: .key[3], state: .value[0]}] as $rows
+    | if ($rows | length) == 0 then []
+      else
+        ($rows | map(select(.path == $spec.root))) as $root
+        | if ($root | length) != 1 then error("\($term[0]): the view of \($k | join("/")) has no row for \($spec.root)") else . end
+        | [$rows[] | . as $r | $rows[]
+           | select(.state == $spec.hides and $r.state != $spec.hides and beneath($r.path; .path))
+           | "\($r.path) (\($r.state)) lies beneath \(.path) (\(.state))"] as $contradictions
+        | if ($contradictions | length) > 0
+          then error("\($term[0]): the view of \($k | join("/")) is refused whole: \($contradictions | join("; "))")
+          else . end
+        | ($rows | map(select(.path != $spec.root)) | sort_by(.path)) as $rest
+        | def emit($r):
+            ($spec.states[$r.state] // error("\($term[0]): no state \($r.state)"))
+            | map(if type == "object" and has("row") then $r[.row] else . end);
+          [(resolve_all($spec.head; $st) | map(.v))[],
+           emit($root[0])[],
+           $spec["after-root"][],
+           ($rest[] | emit(.)[]),
+           ($spec.tail[] | if type == "object" and has("seat") then $directory else . end)]
+      end;
+  def seat_record($s; $st):
+    one($s.name; $st) as $name
+    | name($s.key) as $k
+    | one($s.directory; $st) as $directory
+    | (arg($s.argv) | try fromjson catch error("\($term[0]): argument \($s.argv) is not JSON")) as $argv
+    | if ($argv | type) != "array" or ($argv | length) < 1 or ([$argv[] | type] | unique) != ["string"]
+      then error("\($term[0]): argument \($s.argv) is not a list of strings with a program first") else . end
+    | if ($argv[0] | contains("=")) or (($argv[0] | contains("/")) and ($argv[0] | startswith("/") | not)) or $argv[0] == ""
+      then error("\($term[0]): the program \($argv[0]) is neither an absolute path nor a bare name, or it holds =") else . end
+    | $binding.tables[$s.view] as $vspec
+    | $binding.tables[$s.environment] as $espec
+    | {name: $name, key: $k, directory: $directory,
+       command: (view_args($vspec; $k; $directory; $st) + $argv),
+       environment: [($tables[$espec.cell] // [])[] | select(.key[0:3] == $k) | [.key[3], .value[0]]],
+       view: ([($tables[$vspec.cell] // [])[] | select(.key[0:3] == $k)] | length)};
   def phase_call:
     entry as $e
     | if nargs != $e.arity then error("\($term[0]) takes \($e.arity) arguments, and the term has \(nargs)") else . end
     | reduce ($e.set // [])[] as $s ($st; .slots[key($s[0])] = one($s[1]; .))
     | . as $s1
     | [($e.require // [])[] | [.[0], one(.[1]; $s1)]] as $req
-    | [($e.add // empty) | one(.target; $s1)] as $targets
-    | (if $e | has("call") then call($e.call; $s1) else {argv: [], st: $s1} end) as $c
-    | ["ok", ($c.st | tojson),
-       (if $e | has("expect") then "1" else "0" end), ($e.expect // ""),
-       ($req | length | tostring)] + ($req | flatten)
-      + [($targets | length | tostring)] + $targets
+    | (if ($e | has("claim")) and ($s1.slots | has(key($e.claim.slot))) then
+         {argv: call($e.claim.call; $s1), st: ($s1 | .slots |= del(.[key($e.claim.slot)])), claimed: shown($e.claim.slot)}
+       elif $e | has("call") then {argv: call($e.call; $s1), st: $s1, claimed: ""}
+       else {argv: [], st: $s1, claimed: ""} end) as $c
+    | (if $e | has("seat") then seat_record($e.seat; $s1) | tojson else "" end) as $seat
+    | ["ok", ($c.st | tojson), ($req | length | tostring)] + ($req | flatten)
       + [($c.argv | length | tostring)] + $c.argv
-      + [(($e.capture // []) | length | tostring)]
+      + [(($e.capture // []) | length | tostring), $seat, $c.claimed]
     | .[];
   def phase_after:
     entry as $e
@@ -105,34 +110,23 @@ $b[0] as $binding
       then error("\($term[0]) printed \($caps | length) values, and the binding captures \($cn | length)")
       else . end
     | reduce range(0; $cn | length) as $i ($st; .slots[key($cn[$i])] = $caps[$i])
-    | . as $before
-    | (if $e | has("add") then
-         $e.add as $a | name($a.key) as $k | one($a.state; .) as $state
-         | ($binding.tables[$a.table].states | has($state)
-            or error("\($term[0]): the table \($a.table) has no state \($state)")) as $ok
-         | reduce $resolved[] as $p (.;
-             if any((.added[$a.table] // {})[$k | tojson] // [] | .[]; .path == $p) then .
-             else .added[$a.table][$k | tojson] += [{path: $p, state: $state, from: one($a.target; .)}] end)
-       else . end)
     | . as $s
+    | [($e.verify // [])[]
+       | if .[0] == "equals" then
+           (one(.[1]; $s)) as $a | (one(.[2]; $s)) as $want
+           | if $a == $want then empty else error("\($term[0]): \($a) where the binding requires \($want)") end
+         else [.[0], one(.[1]; $s)] end] as $verify
     | def record($r):
-        {what: (if $r | has("what") then shown($r.what) else $term[0] end),
-         when: (if $r | has("when") then call($r.when; $s).argv else null end),
+        {what: (if $r | has("what") then [$r.what[] | if type == "object" and has("slot") then one(.; $s) else part end] | join("/") else $term[0] end),
+         when: (if $r | has("when") then call($r.when; $s) else null end),
          is: (if $r | has("is") then one($r.is; $s) else null end),
-         call: call($r.call; $s).argv};
-      (if $e | has("then") then call($e.then; $s).argv else [] end) as $then
-      | (if $e | has("add") then
-           name($e.add.key) as $k
-           | [$resolved[] | . as $p
-              | select(any(($before.added[$e.add.table] // {})[$k | tojson] // [] | .[]; .path == $p) | not)
-              | {what: (([$e.add.table] + $k) | join("/")), path: $p, state: one($e.add.state; $s),
-                 from: one($e.add.target; $s)} | tojson]
-         else [] end) as $added
+         call: call($r.call; $s)};
+      (if $e | has("then") then call($e.then; $s) else [] end) as $then
       | ["ok", ($s | tojson),
          (if $e | has("undo") then record($e.undo) | tojson else "" end),
          (if $e | has("check") then record($e.check) | tojson else "" end),
-         ($then | length | tostring)] + $then
-        + [($added | length | tostring)] + $added
+         ($verify | length | tostring)] + ($verify | flatten)
+        + [($then | length | tostring)] + $then
       | .[];
   if $phase == "call" then phase_call
   elif $phase == "after" then phase_after

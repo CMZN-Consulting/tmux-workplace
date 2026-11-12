@@ -8,9 +8,14 @@ loop=$tool/bin/workplace
 fixtures=$here/fixtures
 failures=0
 total=0
+skips=$(mktemp /tmp/wpt-skips.XXXXXX)
 declare -a failed_tests=()
 
 note() { printf '%s\n' "$*"; }
+skip() {
+  note "  SKIP: $*"
+  printf '%s\n' "$*" >> "$skips"
+}
 fail() {
   note "  FAIL: $*"
   test_failed=1
@@ -24,46 +29,117 @@ check() {
 T() { tmux -L "$label" "$@"; }
 wp() { "$BASH" "$loop" "$@"; }
 
+name_of_clone() {
+  local sum
+  sum=$(printf '%s' "$1" | sha256sum)
+  printf '%s\n' "${1##*/}-${sum:0:12}"
+}
+
+make_clone() {
+  local dir=$1
+  mkdir -p -- "$dir/layers"
+  cp -- "$fixtures/tmux.conf" "$dir/tmux.conf"
+  cp -- "$fixtures/layers/structure.typify" "$fixtures/layers/access.typify" "$dir/layers/"
+}
+
 setup() {
   scratch=$(mktemp -d /tmp/wpt.XXXXXX)
+  scratch=$(cd -P -- "$scratch" && pwd -P)
   export HOME=$scratch/home
   export TMUX_TMPDIR=$scratch/t
   mkdir -p -- "$HOME" "$TMUX_TMPDIR"
-  label=wpt-$$-$1
   root=$scratch/root
-  mkdir -p -- "$root/config" "$root/tools" \
-    "$root/harbor/ledger/inner" "$root/harbor/charts" "$root/harbor/berth" "$root/harbor/vault/shelf" \
-    "$root/orchard/cellar/inner" "$root/orchard/almanac" "$root/orchard/crate-picker" "$root/orchard/silo/bin"
+  mkdir -p -- "$root/tools" \
+    "$root/harbor/ledger" "$root/harbor/charts" "$root/harbor/berth" "$root/harbor/vault/shelf" \
+    "$root/harbor/scratch" "$root/harbor/hold" "$root/harbor/holdall" \
+    "$root/orchard/cellar" "$root/orchard/almanac" "$root/orchard/crate-picker"
   printf '%s\n' secret > "$root/harbor/ledger/secret"
+  printf '%s\n' secret > "$root/harbor/hold/secret"
   printf '%s\n' secret > "$root/orchard/cellar/secret"
   printf '%s\n' page > "$root/harbor/charts/page"
+  printf '%s\n' page > "$root/harbor/scratch/page"
   printf '%s\n' page > "$root/orchard/almanac/page"
   cp -- "$fixtures/probe" "$root/tools/probe"
-  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$root/tools/forbidden.real"
-  printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$root/tools/allowed"
-  chmod +x -- "$root/tools/forbidden.real" "$root/tools/allowed"
-  ln -s forbidden.real "$root/tools/forbidden"
-  ln -s forbidden.real "$root/tools/forbidden-alias"
-  cp -- "$fixtures/tmux.conf" "$root/config/tmux.conf"
+  clone=$root/config
+  make_clone "$clone"
   export WORKPLACE_ROOT=$root
-  export WORKPLACE_CONFIG=$root/config
-  plan=$scratch/plan.json
-  jq --arg l "$label" 'walk(if . == "@LABEL@" then $l else . end)' "$fixtures/workplace.json" > "$plan"
-  run=$root/config/BUILD/RUN
+  export WORKPLACE_CONFIG=$clone
+  cd -- "$scratch" || return 1
+  label=$(name_of_clone "$clone")
+  render "$label" > "$scratch/plan.json"
+  run=$clone/BUILD/RUN
   local count
   count=$(env | grep -c '^TMUX=')
   [[ $count == 0 ]] || fail "TMUX is set in the test's environment ($count)"
 }
 
-cleanup() {
-  T kill-server 2> /dev/null
-  rm -rf -- "$scratch"
+render() {
+  local name=$1 conf=${2:-$clone/tmux.conf} system=() path
+  for path in /bin /sbin /lib /lib64; do [[ -e $path ]] && system+=("$path"); done
+  jq --arg root "$root" --arg name "$name" --arg conf "$conf" --args '
+    def put: if type == "string" then gsub("@ROOT@"; $root) | gsub("@LABEL@"; $name) else . end;
+    walk(put)
+    | (.programs[0].plan[0][2]) = $conf
+    | .state.view += [$ARGS.positional[] | {key: ["orchard", "barn", "grower", .], value: ["read-only"], masked: false,
+                                            origin: {kind: "program", path: "orchard/barn/grower/seat.typify", line: 10}}]
+  ' "${system[@]}" < "$fixtures/plan.json"
 }
 
-variant() {
-  local filter=$1 out=$2
-  shift 2
-  jq "$@" "$filter" "$plan" > "$out"
+collect_by_find() {
+  local path type mode uid target
+  for path in "$@"; do
+    [[ -e $path || -L $path ]] || continue
+    IFS=$'\t' read -r type mode uid target < <(find "$path" -maxdepth 0 -printf '%y\t%m\t%U\t%l\n')
+    while (( ${#mode} < 4 )); do mode=0$mode; done
+    printf '%s\t%s\t%s\n' exists "$path" ""
+    [[ $type == d ]] && printf '%s\t%s\t%s\n' directory "$path" ""
+    [[ $type == l ]] && printf '%s\t%s\t%s\n' symlink "$path" "$target"
+    printf '%s\t%s\t%s\n' mode "$path" "$mode"
+    printf '%s\t%s\t%s\n' owner "$path" "$uid"
+  done
+}
+
+make_plan() {
+  local into=${PLAN_CLONE:-$clone} filter=.
+  local -a options=()
+  if (( $# )); then filter=${!#}; options=("${@:1:$#-1}"); fi
+  rm -rf -- "$into/BUILD"
+  mkdir -p -- "$into/PLAN"
+  local rendered
+  rendered=$(jq "${options[@]}" "$filter" "$scratch/plan.json") || return 1
+  printf '%s\n' "$rendered" > "$into/PLAN/plan.json"
+  local -a paths
+  mapfile -t paths < <(jq -r '
+    def term: if type == "object" then .term else . end;
+    ([.state.view[]?.key[3]]
+     + [.programs[].plan[] | term | select(.[0] == "start") | .[4]]
+     + [.programs[].plan[] | term | select(.[0] == "server") | .[2]]) | unique | .[]' "$into/PLAN/plan.json")
+  paths+=("$root" "$root/tools/probe")
+  collect_by_find "${paths[@]}" | jq -R -s --arg root "$root" '
+    {collector: "find", root: $root,
+     facts: (split("\n")[:-1] | map(split("\t") | {fact: .[0], args: [.[1]]} + (if .[0] | IN("exists", "directory") then {} else {value: .[2]} end)))}
+  ' > "$into/PLAN/facts.json"
+  local plan_sum facts_sum structure_sum access_sum
+  facts_sum=$(sha256sum < "$into/PLAN/facts.json")
+  if [[ ${FACTS_MEMBER-digest} == digest ]]; then
+    jq --arg d "sha256:${facts_sum%% *}" '.facts = $d' <<< "$rendered" > "$into/PLAN/plan.json"
+  fi
+  plan_sum=$(sha256sum < "$into/PLAN/plan.json")
+  structure_sum=$(sha256sum < "$into/layers/structure.typify")
+  access_sum=$(sha256sum < "$into/layers/access.typify")
+  jq -n --arg root "$root" --arg p "${plan_sum%% *}" --arg f "${facts_sum%% *}" \
+    --arg s "${structure_sum%% *}" --arg a "${access_sum%% *}" '
+    {root: $root, reader: "fixture", derivations: {name: "fixture"},
+     inputs: [{path: "layers/structure.typify", sha256: $s}, {path: "layers/access.typify", sha256: $a}],
+     outputs: [{path: "plan.json", sha256: $p}, {path: "facts.json", sha256: $f}]}' > "$into/PLAN/manifest.json"
+}
+
+cleanup() {
+  if [[ $TMUX_TMPDIR == "$scratch"/* ]]; then
+    tmux -S "$TMUX_TMPDIR/tmux-$UID/$label" kill-server 2> /dev/null
+    [[ -n ${label2-} ]] && tmux -S "$TMUX_TMPDIR/tmux-$UID/$label2" kill-server 2> /dev/null
+  fi
+  rm -rf -- "$scratch"
 }
 
 pane_by_title() {
@@ -76,17 +152,18 @@ screen_of() {
   local id
   id=$(pane_by_title "$1")
   [[ -n $id ]] || return 1
-  T capture-pane -p -t "$id"
+  T capture-pane -p -J -S - -t "$id"
 }
 
-wait_for_probe() {
-  local title=$1 seat=$2 i
-  for (( i = 0; i < 100; i++ )); do
-    if screen_of "$title" | grep -qx "probe $seat done"; then return 0; fi
+wait_for_line() {
+  local title=$1 line=$2 i
+  for (( i = 0; i < 120; i++ )); do
+    if screen_of "$title" | grep -qxF -- "$line"; then return 0; fi
     sleep 0.05
   done
   return 1
 }
+wait_for_probe() { wait_for_line "$1" "probe $2 done"; }
 
 screen_has() { screen_of "$1" | grep -qxF -- "$2"; }
 no_server() { ! T list-sessions > /dev/null 2>&1; }
@@ -99,411 +176,665 @@ exit_is() {
   [[ $got == "$want" ]] || { note "    exit $got, wanted $want; output:"; sed 's/^/    | /' "$scratch/out"; return 1; }
 }
 said() { grep -qF -- "$1" "$scratch/out"; }
-
-seat_call() {
-  jq -c --arg s "$1" 'select(.[5] == "respawn-pane" and any(.[]; . == $s))' "$run/calls.jsonl"
+nnp_of() {
+  local line
+  while IFS= read -r line; do
+    [[ $line == NoNewPrivs:* ]] && { printf '%s\n' "${line//[[:space:]]/}"; return 0; }
+  done < "/proc/$1/status"
 }
-
-view_targets() {
-  local -a args
-  mapfile -d '' -t args < <(jq --raw-output0 '.[]' <<< "$1")
-  local i=0 n=${#args[@]}
-  while (( i < n )) && [[ ${args[i]} != --dev-bind ]]; do i=$(( i + 1 )); done
-  (( i < n )) || return 0
-  i=$(( i + 3 ))
-  while (( i < n )) && [[ ${args[i]} != -- ]]; do
-    case ${args[i]} in
-      --perms) i=$(( i + 2 )) ;;
-      --tmpfs) printf '%s\n' "tmpfs ${args[i + 1]}"; i=$(( i + 2 )) ;;
-      --bind | --ro-bind) printf '%s\n' "${args[i]#--} ${args[i + 1]} ${args[i + 2]}"; i=$(( i + 3 )) ;;
-      *) printf '%s\n' "unknown ${args[i]}"; i=$(( i + 1 )) ;;
-    esac
-  done
+up_fixture() {
+  make_plan "$@" && wp build > "$scratch/out" 2>&1 && wp up >> "$scratch/out" 2>&1 \
+    || { note "    build or up failed:"; sed 's/^/    | /' "$scratch/out"; return 1; }
+}
+seat_command() { jq -c --arg n "$1" 'select(.name == $n) | .command' "$run"/seats/*.json; }
+view_ops() {
+  jq -r '
+    . as $c | ($c | index("--die-with-parent")) as $start | ($c | index("--chdir")) as $end
+    | def walk_ops($i):
+        if $i >= $end then empty
+        elif $c[$i] == "--perms" then walk_ops($i + 2)
+        elif $c[$i] == "--tmpfs" or $c[$i] == "--proc" or $c[$i] == "--dev" then "\($c[$i][2:]) \($c[$i + 1])", walk_ops($i + 2)
+        elif $c[$i] == "--bind" or $c[$i] == "--ro-bind" then "\($c[$i][2:]) \($c[$i + 2])", walk_ops($i + 3)
+        else "unknown \($c[$i])", walk_ops($i + 1) end;
+      walk_ops($start + 1)' <<< "$1"
 }
 
 t_inputs_and_refusals() {
   check "[C1] status without WORKPLACE_ROOT exits 2" exit_is 2 env -u WORKPLACE_ROOT "$BASH" "$loop" status
   check "[C1] a relative WORKPLACE_ROOT exits 2" exit_is 2 env WORKPLACE_ROOT=root "$BASH" "$loop" status
   check "[C1] WORKPLACE_CONFIG outside the root exits 2" exit_is 2 env WORKPLACE_CONFIG="$scratch" "$BASH" "$loop" status
-  check "[C2] build without --plan exits 2" exit_is 2 wp build
-  check "[C2] the refusal says Typify's plan is not wired" said "Typify's plan is not wired in yet"
-  variant '.programs[1].plan[0][0] = "summon"' "$scratch/unknown.json"
-  check "[C2] a plan with an unknown primitive does not build" exit_is 1 wp build --plan "$scratch/unknown.json"
-  check "[C2] the refusal names the primitive" said "the binding has no primitive summon"
-  check "[C3] the refused build left no BUILD" test ! -e "$root/config/BUILD"
-  variant '.programs[1].plan[0] |= .[0:3]' "$scratch/arity.json"
-  check "[C2] a term with the wrong number of arguments does not build" exit_is 1 wp build --plan "$scratch/arity.json"
-  variant '.status = "failed"' "$scratch/failed.json"
-  check "[C2] a plan whose status is failed does not build" exit_is 1 wp build --plan "$scratch/failed.json"
-  variant '.programs[1].plan[0][4] = "Har\u0007bor"' "$scratch/control.json"
-  check "[C2] a plan with a control character does not build" exit_is 1 wp build --plan "$scratch/control.json"
-  variant '.state.view[0].value = ["open"]' "$scratch/state.json"
-  check "[C2] a view row with an unknown state does not build" exit_is 1 wp build --plan "$scratch/state.json"
-  check "[C2] the refusal names the state" said "open is not one of"
-  variant '.state.view[0].key |= .[0:3]' "$scratch/key.json"
-  check "[C2] a view row whose key is not four strings does not build" exit_is 1 wp build --plan "$scratch/key.json"
-  check "[C4] up without a build exits 1" exit_is 1 wp up
-  check "[C4] up says it never builds" said "never builds"
-  check "[C4] up without a build made no server" no_server
-  check "[C3] the fixture builds" exit_is 0 wp build --plan "$plan"
+  check "[C2] build without PLAN/ exits 2 and names the file" exit_is 2 wp build
+  check "[C2] the refusal names PLAN/plan.json" said "PLAN/plan.json is missing"
+  check "[C2] build takes no arguments" exit_is 2 wp build --plan x
+  make_plan '.programs[1].plan[0][0] = "summon"'
+  check "[C3] a plan with an unknown primitive does not build" exit_is 1 wp build
+  check "[C3] the refusal names the primitive" said "the binding has no primitive summon"
+  check "[C2] the refused build left no BUILD" test ! -e "$clone/BUILD"
+  make_plan '.programs[1].plan[0] += ["extra"]'
+  check "[C3] a term with the wrong number of arguments does not build" exit_is 1 wp build
+  make_plan '.status = "failed"'
+  check "[C3] a plan whose status is failed does not build" exit_is 1 wp build
+  make_plan '.programs[1].plan[0][2] = "Har\u0007bor"'
+  check "[C3] a plan with a control character does not build" exit_is 1 wp build
+  make_plan '.programs[6].plan[1].term[4] = "harbor"'
+  check "[C4] a relative path in a term is refused" exit_is 1 wp build
+  check "[C4] the refusal names the path" said "harbor is not an absolute, canonical path"
+  make_plan '.state.view[1].key[3] = "harbor/holdall"'
+  check "[C4] a relative path in a row is refused" exit_is 1 wp build
+  check "[C4] the refusal names it" said "harbor/holdall is not an absolute, canonical path"
+  make_plan '.state.view[0].value = ["open"]'
+  check "[C3] a view row with an unknown state does not build" exit_is 1 wp build
+  check "[C3] the refusal names the state" said "open is not one of"
+  make_plan '.state.view[0].key |= .[0:3]'
+  check "[C3] a view row whose key is not four strings does not build" exit_is 1 wp build
+  make_plan '.state.view[0].key[2] = "nobody"'
+  check "[C3] a row for a seat the plan does not make is refused" exit_is 1 wp build
+  make_plan '.programs[7].plan[0][4] = "Harbor Keeper"'
+  check "[C3] two seats of one name are refused" exit_is 1 wp build
+  check "[C3] the refusal names the name" said "the name Harbor Keeper is given to 2"
+  make_plan '.state.view |= map(select(.key[2] != "picker" or .key[3] != "/"))'
+  check "[C12] a seat with rows and no row for / is refused" exit_is 1 wp build
+  check "[C12] the refusal names the seat" said "the view of orchard/barn/picker has no row for /"
+  make_plan --arg root "$root" '.state.view += [{key: ["orchard", "barn", "picker", ($root + "/orchard/cellar/inner")], value: ["read-write"]}]'
+  mkdir -p -- "$root/orchard/cellar/inner"
+  check "[C13] a row opened beneath a hidden row refuses the table whole" exit_is 1 wp build
+  check "[C13] the refusal names both paths" said "$root/orchard/cellar/inner (read-write) lies beneath $root/orchard/cellar (hidden)"
+  make_plan --arg root "$root" '.state.view += [{key: ["harbor", "dock", "keeper", ($root + "/harbor/nowhere")], value: ["read-write"]}]'
+  check "[C4] a grant on a missing path is refused" exit_is 1 wp build
+  check "[C4] the refusal names the path" said "a view grants $root/harbor/nowhere, which does not exist"
+  make_plan
+  check "[C2] the fixture builds" exit_is 0 wp build
   local name
-  for name in plan.json binding.json libexec/resolve.jq libexec/check.jq libexec/exec share/denied MANIFEST; do
-    check "[C3] BUILD holds $name" test -f "$root/config/BUILD/$name"
+  for name in plan.json plan-facts.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq MANIFEST; do
+    check "[C2] BUILD holds $name" test -f "$clone/BUILD/$name"
   done
-  check "[C3] the manifest's plan hash is the input's hash" \
-    test "$(sha256sum < "$plan" | cut -d' ' -f1)" = "$(grep '  plan.json$' "$root/config/BUILD/MANIFEST" | cut -d' ' -f1)"
-  check "[C3] the manifest's binding hash is the tool's binding's hash" \
-    test "$(sha256sum < "$tool/host/binding.json" | cut -d' ' -f1)" = "$(grep '  binding.json$' "$root/config/BUILD/MANIFEST" | cut -d' ' -f1)"
-  check "[C3] a second build refuses while BUILD exists" exit_is 1 wp build --plan "$plan"
-  check "[C21] status reports the build verified and exits 0" exit_is 0 wp status
-  check "[C21] status says verified" said "build: verified"
-  printf '%s\n' ' ' >> "$root/config/BUILD/plan.json"
-  check "[C4] up refuses a build whose plan differs from its manifest" exit_is 1 wp up
-  check "[C4] the refusal names the file" said "plan.json does not match its MANIFEST"
-  check "[C4] the refused up made no server" no_server
-  check "[C21] status reports the changed build and exits 1" exit_is 1 wp status
-  rm -rf -- "$root/config/BUILD"
-  check "[C3] the fixture builds again" exit_is 0 wp build --plan "$plan"
-  printf '%s\n' extra > "$root/config/BUILD/extra"
-  check "[C4] up refuses a file its manifest does not list" exit_is 1 wp up
-  rm -f -- "$root/config/BUILD/extra" "$root/config/BUILD/share/denied"
-  check "[C4] up refuses a build missing a listed file" exit_is 1 wp up
-  check "[C4] the refused up made no server" no_server
+  check "[C2] BUILD's plan is PLAN's plan, byte for byte" cmp -s "$clone/PLAN/plan.json" "$clone/BUILD/plan.json"
+  check "[C2] a second build refuses while BUILD exists" exit_is 1 wp build
+  rm -rf -- "$clone/BUILD"
+  printf '%s\n' changed >> "$clone/layers/access.typify"
+  check "[C2] a changed source is refused" exit_is 1 wp build
+  check "[C2] the refusal names the source" said "the input $clone/layers/access.typify has changed"
+  make_plan
+  printf '%s\n' ' ' >> "$clone/PLAN/plan.json"
+  check "[C2] a changed plan is refused" exit_is 1 wp build
+  check "[C2] the refusal names the plan" said "the plan's file $clone/PLAN/plan.json has changed"
+  make_plan
+  jq --arg r "$scratch" '.root = $r' "$clone/PLAN/manifest.json" > "$scratch/m" && cp -- "$scratch/m" "$clone/PLAN/manifest.json"
+  check "[C2] a plan of another root is refused" exit_is 1 wp build
+  check "[C2] the refusal names the root" said "the plan belongs to the root $scratch"
+  make_plan
+  chmod 0700 -- "$root/harbor/berth"
+  check "[C2] a differing fact is refused" exit_is 1 wp build
+  check "[C2] the refusal names the fact" said "fact mode of $root/harbor/berth: the plan says 0755, the machine says 0700"
+  FACTS_MEMBER=none make_plan
+  chmod 0700 -- "$root/harbor/berth"
+  check "[C2] a plan whose facts member is none compares no fact" exit_is 0 wp build
+  chmod 0755 -- "$root/harbor/berth"
+  make_plan
+  printf '%s\n' ' ' >> "$clone/PLAN/facts.json"
+  jq --arg s "$(sha256sum < "$clone/PLAN/facts.json" | cut -d' ' -f1)" '.outputs |= map(if .path == "facts.json" then .sha256 = $s else . end)' \
+    "$clone/PLAN/manifest.json" > "$scratch/m" && cp -- "$scratch/m" "$clone/PLAN/manifest.json"
+  check "[C2] a facts file that is not the one the plan was made on is refused" exit_is 1 wp build
+  check "[C2] the refusal names the digest" said "PLAN/facts.json is not the facts file the plan was made on"
+  make_plan
+  check "[C2] the fixture builds" exit_is 0 wp build
+  printf '%s\n' ' ' >> "$clone/BUILD/plan.json"
+  check "[C5] up refuses a build whose plan differs from its manifest" exit_is 1 wp up
+  check "[C5] the refusal names the file" said "plan.json does not match its MANIFEST"
+  check "[C5] up says it never builds" said "never builds"
+  check "[C5] the refused up made no server" no_server
+  check "[C22] status reports the changed build and exits 1" exit_is 1 wp status
 }
 
 t_program_floors() {
   local bin=$scratch/old
   mkdir -p -- "$bin"
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "tmux 2.8"' > "$bin/tmux"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "tmux 2.9"' > "$bin/tmux"
   printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "jq-1.6"' > "$bin/jq"
   chmod +x -- "$bin/tmux" "$bin/jq"
-  check "build" exit_is 0 wp build --plan "$plan"
+  make_plan
+  check "build" exit_is 0 wp build
   mv -- "$bin/jq" "$bin/jq.off"
-  check "[C5] an older tmux is refused with exit 2" exit_is 2 env PATH="$bin:$PATH" "$BASH" "$loop" up
-  check "[C5] the refusal names both versions" said "tmux 2.8 found; 2.9 or later is needed"
+  check "[C6] an older tmux is refused with exit 2" exit_is 2 env PATH="$bin:$PATH" "$BASH" "$loop" up
+  check "[C6] the refusal names both versions" said "tmux 2.9 found; 3.0 or later is needed"
   mv -- "$bin/jq.off" "$bin/jq"
-  check "[C5] an older jq is refused with exit 2" exit_is 2 env PATH="$bin:$PATH" "$BASH" "$loop" status
-  check "[C5] the refusal names both versions" said "jq 1.6 found; 1.7 or later is needed"
-  check "[C5] the bash floor is in the source (no older bash is installed to run it)" \
+  check "[C6] an older jq is refused with exit 2" exit_is 2 env PATH="$bin:$PATH" "$BASH" "$loop" status
+  check "[C6] the refusal names both versions" said "jq 1.6 found; 1.7 or later is needed"
+  check "[C6] the bash floor is in the source (no older bash is installed to run it)" \
     grep -qF '(( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 2) ))' "$loop"
-  check "[C5] nothing was started" no_server
+  check "[C6] nothing was started" no_server
 }
 
-t_structure_and_starts() {
-  check "build" exit_is 0 wp build --plan "$plan"
-  check "up" exit_is 0 wp up
-  check "[C6] the sessions are harbor and orchard" sessions_are "harbor orchard "
-  local windows panes
-  windows=$(T list-windows -a -F '#{session_name}:#{window_name}' | sort | tr '\n' ' ')
-  check "[C6] the windows are harbor:dock, harbor:tower, orchard:barn" test "$windows" = "harbor:dock harbor:tower orchard:barn "
-  panes=$(T list-panes -a -F '#{session_name}/#{window_name}/#{pane_title}' | sort | tr '\n' ',')
-  check "[C6] the panes and titles are the five seats" \
-    test "$panes" = "harbor/dock/Harbor Keeper,harbor/dock/Harbor Pilot,harbor/tower/Harbor Watch,orchard/barn/Orchard Grower,orchard/barn/Orchard Picker,"
-  local row name seat office
+t_structure_and_order() {
+  check "build and up" up_fixture
+  check "[C8] the sessions are Harbor and Orchard" sessions_are "Harbor Orchard "
+  check "[C8] the windows are Harbor:Dock, Harbor:Tower, Orchard:Barn" \
+    test "$(T list-windows -a -F '#{session_name}:#{window_name}' | sort | tr '\n' ' ')" = "Harbor:Dock Harbor:Tower Orchard:Barn "
+  check "[C9] every pane is a seat, and no other pane stands" \
+    test "$(T list-panes -a -F '#{session_name}/#{window_name}/#{pane_title}' | sort | tr '\n' ',')" = \
+    "Harbor/Dock/Harbor Keeper,Harbor/Dock/Harbor Pilot,Harbor/Tower/Harbor Watch,Orchard/Barn/Orchard Grower,Orchard/Barn/Orchard Picker,"
+  local row title seat place
   for row in "Harbor Pilot:pilot:harbor" "Harbor Keeper:keeper:harbor" "Harbor Watch:watch:harbor" \
     "Orchard Grower:grower:orchard" "Orchard Picker:picker:orchard"; do
-    IFS=: read -r name seat office <<< "$row"
-    check "[C6] $name runs its command" wait_for_probe "$name" "$seat"
-    check "[C6] $name started in $office, a relative path joined to the root" \
-      screen_has "$name" "probe $seat start cwd=$root/$office seat="
+    IFS=: read -r title seat place <<< "$row"
+    check "[C8] $title runs its program" wait_for_probe "$title" "$seat"
+    check "[C8] $title started in its first directory" screen_has "$title" "probe $seat start cwd=$root/$place"
+    check "[C17] $title's pane command is exec and the seat's name, and nothing else" \
+      test "$(T display -p -t "$(pane_by_title "$title")" '#{pane_start_command}')" = "$BASH $clone/BUILD/bin/workplace exec -- \"$title\""
   done
-  local kinds
-  kinds=$(jq -r '.[5]' "$run/calls.jsonl" | tr '\n' ' ')
-  check "[C6] the calls were made in plan order" test "$kinds" = \
-    "start-server new-session set-option new-window new-session set-option split-window select-layout split-window select-layout respawn-pane respawn-pane respawn-pane respawn-pane respawn-pane "
-  local pilot keeper grower picker
-  pilot=$(T display -p -t "$(pane_by_title 'Harbor Pilot')" '#{pane_left} #{pane_top} #{pane_width}')
-  keeper=$(T display -p -t "$(pane_by_title 'Harbor Keeper')" '#{pane_left} #{pane_top} #{pane_width}')
-  check "[C6] dock: keeper is right of pilot, on the same line, the same width within one" \
-    awk -v a="$pilot" -v b="$keeper" 'BEGIN { split(a, p, " "); split(b, k, " "); d = p[3] - k[3]; exit !(k[1] > p[1] && k[2] == p[2] && d <= 1 && d >= -1) }'
-  grower=$(T display -p -t "$(pane_by_title 'Orchard Grower')" '#{pane_left} #{pane_top}')
-  picker=$(T display -p -t "$(pane_by_title 'Orchard Picker')" '#{pane_left} #{pane_top}')
-  check "[C6] barn: picker is below grower" \
-    awk -v a="$grower" -v b="$picker" 'BEGIN { split(a, g, " "); split(b, p, " "); exit !(p[2] > g[2] && p[1] == g[1]) }'
-  check "[C6] no pane reaches past its window" \
-    test -z "$(T list-panes -a -F '#{pane_top} #{pane_height} #{window_height} #{pane_left} #{pane_width} #{window_width}' \
-      | awk '$1 + $2 > $3 || $4 + $5 > $6')"
+  check "[C8] the calls followed the binding's order: server, sessions, windows, panes, arrangements, starts" \
+    test "$(jq -r '.[7]' "$run/calls.jsonl" | tr '\n' ' ')" = \
+    "start-server new-session set-option new-session set-option rename-window new-window rename-window display-message select-pane split-window select-pane display-message select-pane display-message select-pane split-window select-pane select-layout select-layout select-layout respawn-pane respawn-pane respawn-pane respawn-pane respawn-pane "
+  check "[C8] the dock's seats stand side by side" \
+    test "$(for t in "Harbor Pilot" "Harbor Keeper"; do T display -p -t "$(pane_by_title "$t")" '#{pane_top}'; done | sort -u | wc -l)" = 1
+  check "[C8] no pane reaches past its window" \
+    test -z "$(T list-panes -a -F '#{pane_top} #{pane_height} #{window_height} #{pane_left} #{pane_width} #{window_width}' | awk '$1 + $2 > $3 || $4 + $5 > $6')"
+  local server
+  server=$(T display -p '#{pid}')
+  if [[ $(nnp_of $$) == NoNewPrivs:1 ]]; then
+    skip "[C10] the server and a seat with no view report NoNewPrivs:1, but so would any process this shell starts; measured where the shell does not run under it"
+  else
+    check "[C10] the server runs under no-new-privileges" test "$(nnp_of "$server")" = "NoNewPrivs:1"
+    check "[C10] a seat with no view runs under no-new-privileges" \
+      test "$(nnp_of "$(T display -p -t "$(pane_by_title 'Harbor Watch')" '#{pane_pid}')")" = "NoNewPrivs:1"
+  fi
   local mark
   mark=$(jq -r '.slots[(["run"] | tojson)]' "$run/state.json")
   check "[C11] each session carries the run's mark" \
-    test "$(T show-options -qv -t =harbor: @workplace) $(T show-options -qv -t =orchard: @workplace)" = "$mark $mark"
-  check "[C15] every start was followed by clearing its pane's history" \
-    test "$(jq -c 'select(.[5] == "respawn-pane") | [.[] | select(. == "clear-history")] | length' "$run/calls.jsonl" | sort -u)" = 1
-  check "[C21] status exits 0 with the workplace up" exit_is 0 wp status
-  check "[C21] status lists every seat ok" test "$(grep -c '^ok          seat/' "$scratch/out")" = 5
-  for name in calls.jsonl ledger checks added.jsonl facts.json state.json; do
-    check "[C20] RUN holds $name" test -f "$run/$name"
+    test "$(T show-options -qv -t =Harbor: @workplace) $(T show-options -qv -t =Orchard: @workplace)" = "$mark $mark"
+  check "[C17] every start was followed by clearing its pane's history" \
+    test "$(jq -c 'select(.[7] == "respawn-pane") | [.[] | select(. == "clear-history")] | length' "$run/calls.jsonl" | sort -u)" = 1
+  check "[C22] status exits 0 with the workplace up" exit_is 0 wp status
+  check "[C22] status lists every seat ok" test "$(grep -c '^ok      seat/' "$scratch/out")" = 5
+  local name
+  for name in calls.jsonl ledger checks slots.json state.json tables.json; do
+    check "[C21] RUN holds $name" test -f "$run/$name"
   done
-  check "[C8] the learned pane ids are written back as facts" \
-    test "$(jq '[.facts[] | select(.fact == "slot" and .args[0] == "pane")] | length' "$run/facts.json")" = 5
-  check "[C8] the facts hold every program the plan needs, as an absolute path" \
-    test "$(jq -r '[.facts[] | select(.args[0] == "program") | .value | startswith("/")] | all and length == 3' "$run/facts.json")" = true
-  check "[C19] a second up refuses while the workplace is up" exit_is 1 wp up
-  check "[C19] the refusal says it is up already" said "is up already"
-  check "[C19] the second up left the first standing" sessions_are "harbor orchard "
-}
-
-t_holding_panes() {
-  variant '.programs |= map(.plan |= map(select((if type == "object" then .term else . end)[0] != "start")))' "$scratch/held.json"
-  check "build of a plan with no start" exit_is 0 wp build --plan "$scratch/held.json"
-  check "up" exit_is 0 wp up
-  check "[C15] every pane holds a tmux client" test "$(T list-panes -a -F '#{pane_current_command}' | sort -u)" = tmux
-  check "[C15] no held pane has printed anything" \
-    test -z "$(for id in $(T list-panes -a -F '#{pane_id}'); do T capture-pane -p -t "$id"; done | tr -d '[:space:]')"
+  check "[C21] RUN holds one recorded start per seat" test "$(ls "$run/seats" | wc -l)" = 5
+  check "[C21] the learned pane ids are kept in RUN" \
+    test "$(jq '[.[] | select(.slot[0] == "pane")] | length' "$run/slots.json")" = 5
+  check "[C20] a second up refuses while the workplace is up" exit_is 1 wp up
+  check "[C20] the refusal says it is up already" said "is up already"
 }
 
 t_a_foreign_tmux_in_the_environment() {
   T -f /dev/null new-session -d -s bystander
-  T select-pane -t =bystander: -T "Bystander"
+  T select-pane -t =bystander: -T Bystander
   local socket pane
   socket=$(T display -p -t =bystander: '#{socket_path},#{pid},#{session_id}')
   pane=$(T display -p -t =bystander: '#{pane_id}')
-  check "build" exit_is 0 wp build --plan "$plan"
-  check "[C22] up with TMUX and TMUX_PANE naming the bystander's pane" \
+  make_plan
+  check "build" exit_is 0 wp build
+  check "[C10] up with TMUX and TMUX_PANE naming the bystander's pane" \
     exit_is 0 env TMUX="$socket" TMUX_PANE="$pane" "$BASH" "$loop" up
-  check "[C22] every title landed on its own seat" \
+  check "[C10] every title landed on its own seat" \
     test "$(T list-panes -a -F '#{pane_title}' | sort | tr '\n' ',')" = "Bystander,Harbor Keeper,Harbor Pilot,Harbor Watch,Orchard Grower,Orchard Picker,"
   check "[C11] no run mark reached the bystander" test -z "$(T show-options -qv -t =bystander: @workplace)"
-  check "[C22] down with the same environment" exit_is 0 env TMUX="$socket" TMUX_PANE="$pane" "$BASH" "$loop" down
+  check "[C10] down with the same environment" exit_is 0 env TMUX="$socket" TMUX_PANE="$pane" "$BASH" "$loop" down
   check "[C18] the bystander survives" sessions_are "bystander "
 }
 
-t_seat_views() {
-  check "build" exit_is 0 wp build --plan "$plan"
-  check "up" exit_is 0 wp up
-  local row title seat office hidden ro rw shelf vault
-  for row in "Harbor Keeper:keeper:harbor:ledger:charts:berth:vault:shelf" \
-    "Orchard Picker:picker:orchard:cellar:almanac:crate-picker:silo:bin"; do
-    IFS=: read -r title seat office hidden ro rw vault shelf <<< "$row"
-    check "$seat ran" wait_for_probe "$title" "$seat"
-    check "[C13] $seat does not see $hidden (tmpfs 0000)" screen_has "$title" "hidden $hidden: unseen"
-    check "[C12] under the hidden $hidden, the read-write $hidden/inner is unreachable" \
-      screen_has "$title" "reach $hidden/inner: write=refused"
-    check "[C13] $seat reads $ro and cannot write it" screen_has "$title" "ro $ro: read=ok write=refused"
-    check "[C13] $seat writes $rw" screen_has "$title" "rw $rw: write=ok"
-    check "[C13] $seat's write to $rw is there outside the sandbox" test -f "$root/$office/$rw/probe-$seat"
-    check "[C13] $seat cannot list the searchable $vault (tmpfs 0111)" screen_has "$title" "list $vault: refused"
-    check "[C12] under the searchable $vault, the read-write $vault/$shelf is reachable" \
-      screen_has "$title" "reach $vault/$shelf: write=ok"
-    check "[C12] that write is there outside the sandbox" test -f "$root/$office/$vault/$shelf/probe-$seat"
-  done
-  check "[C14] keeper cannot run the denied executable" screen_has "Harbor Keeper" "exec ../tools/forbidden: refused"
-  check "[C14] nor its other name" screen_has "Harbor Keeper" "exec ../tools/forbidden-alias: refused"
-  check "[C14] keeper runs an executable that is not denied" screen_has "Harbor Keeper" "exec ../tools/allowed: ok"
-  for row in "Harbor Pilot:pilot:ledger:charts:vault" "Orchard Grower:grower:cellar:almanac:silo"; do
-    IFS=: read -r title seat hidden ro vault <<< "$row"
-    check "$seat ran" wait_for_probe "$title" "$seat"
-    check "[C12] $seat, with no view, sees $hidden" screen_has "$title" "hidden $hidden: seen"
-    check "[C12] $seat, with no view, writes $ro" screen_has "$title" "ro $ro: read=ok write=ok"
-    check "[C12] $seat, with no view, lists $vault" screen_has "$title" "list $vault: ok"
-  done
-  check "[C14] pilot, with no view, runs the executable keeper may not" screen_has "Harbor Pilot" "exec ../tools/forbidden: ok"
-  local keeper_call pilot_call expected
-  keeper_call=$(seat_call keeper)
-  pilot_call=$(seat_call pilot)
-  expected="bind $root/harbor/berth $root/harbor/berth
-ro-bind $root/harbor/charts $root/harbor/charts
-tmpfs $root/harbor/ledger
-tmpfs $root/harbor/vault
-bind $root/harbor/vault/shelf $root/harbor/vault/shelf
-ro-bind $root/config/BUILD/share/denied $root/tools/forbidden.real"
-  check "[C12] keeper's view is emitted in byte order, with nothing beneath the hidden ledger" \
-    test "$(view_targets "$keeper_call")" = "$expected"
-  check "[C12] keeper's start begins with bubblewrap's fixed head" \
-    test "$(jq -r '[.[] | select(. == "--unshare-user" or . == "--die-with-parent")] | length' <<< "$keeper_call")" = 2
-  check "[C5] bubblewrap is named by its absolute path" \
-    test "$(jq -r '.[] | select(endswith("/bwrap"))' <<< "$keeper_call")" = "$(command -v bwrap)"
-  check "[C12] pilot, with no rows, starts without bubblewrap" \
-    test "$(jq '[.[] | select(endswith("bwrap"))] | length' <<< "$pilot_call")" = 0
-  check "[C14] two names of one target make one row" \
-    test "$(jq -c '.what' "$run/added.jsonl" | wc -l)" = 1
-  check "[C14] the added row replaced the plan's read-only row at the same path" \
-    test "$(view_targets "$keeper_call" | grep -c "forbidden.real")" = 1
-  check "[C21] status lists the added row" exit_is 0 wp status
-  check "[C14] status lists it as unchecked" \
-    said "unchecked   view/harbor/dock/keeper $root/tools/forbidden.real: denied, added by the loop for $root/tools/forbidden"
+t_programs_out_of_order() {
+  check "build and up, the programs reversed" up_fixture '.programs |= reverse'
+  check "[C8] the same sessions" sessions_are "Harbor Orchard "
+  check "[C8] the same seats" \
+    test "$(T list-panes -a -F '#{session_name}/#{window_name}/#{pane_title}' | sort | tr '\n' ',')" = \
+    "Harbor/Dock/Harbor Keeper,Harbor/Dock/Harbor Pilot,Harbor/Tower/Harbor Watch,Orchard/Barn/Orchard Grower,Orchard/Barn/Orchard Picker,"
+  check "[C8] the server's term still came first" test "$(jq -r '.[7]' "$run/calls.jsonl" | head -1)" = start-server
+  check "[C8] every seat runs" wait_for_probe "Orchard Picker" picker
 }
 
-t_a_row_of_three_and_a_grid() {
-  variant '.programs[3].plan |= (.[0:1] + [["pane", "harbor", "dock", "mate", "keeper", "right", "Harbor Mate", "harbor"]] + .[1:])
-    | .programs[4].plan |= (.[0:1] + [["pane", "orchard", "barn", "hand", "grower", "right", "Orchard Hand", "orchard"],
-                                      ["pane", "orchard", "barn", "keep", "picker", "right", "Orchard Keep", "orchard"]] + [["arrange", "orchard", "barn", "tiled"]])' "$scratch/grid.json"
-  check "build" exit_is 0 wp build --plan "$scratch/grid.json"
-  check "up" exit_is 0 wp up
-  local widths tops
-  widths=$(for t in "Harbor Pilot" "Harbor Keeper" "Harbor Mate"; do T display -p -t "$(pane_by_title "$t")" '#{pane_width}'; done | tr '\n' ' ')
-  tops=$(for t in "Harbor Pilot" "Harbor Keeper" "Harbor Mate"; do T display -p -t "$(pane_by_title "$t")" '#{pane_top}'; done | sort -u | wc -l)
-  check "[C6] dock: pilot, keeper and mate stand on one line" test "$tops" = 1
-  check "[C6] dock: their widths differ by at most one ($widths)" \
-    awk -v w="$widths" 'BEGIN { n = split(w, a, " "); lo = a[1]; hi = a[1]; for (i = 2; i <= n; i++) { if (a[i] < lo) lo = a[i]; if (a[i] > hi) hi = a[i] } exit !(n == 3 && hi - lo <= 1) }'
-  check "[C6] barn: tiled makes two rows of two" \
-    test "$(for t in "Orchard Grower" "Orchard Hand" "Orchard Picker" "Orchard Keep"; do T display -p -t "$(pane_by_title "$t")" '#{pane_top}'; done | sort -u | wc -l)" = 2
-  check "[C6] no pane reaches past its window" \
-    test -z "$(T list-panes -a -F '#{pane_top} #{pane_height} #{window_height} #{pane_left} #{pane_width} #{window_width}' \
-      | awk '$1 + $2 > $3 || $4 + $5 > $6')"
+t_room_of_eight() {
+  check "build and up, the dock with eight seats" up_fixture --arg root "$root" '
+    .programs += [range(1; 7) as $i | {path: "harbor/dock/deck\($i)/seat.typify", language: "Seat", status: "present",
+      plan: [["pane", "harbor", "dock", "deck\($i)", "Deck \($i)"],
+             {term: ["start", "harbor", "dock", "deck\($i)", ($root + "/harbor"), ([$root + "/tools/probe", "deck\($i)"] | tojson)], unchecked: true}],
+      ensure: [], skips: [], recorded: []}]'
+  check "[C9] the dock holds eight panes" test "$(T list-panes -t "$(jq -r '.slots[(["window", "harbor", "dock"] | tojson)]' "$run/state.json")" -F x | wc -l)" = 8
+  check "[C9] the window is tmux's default size" \
+    test "$(T display -p -t "$(jq -r '.slots[(["window", "harbor", "dock"] | tojson)]' "$run/state.json")" '#{window_width}x#{window_height}')" = 80x24
+  check "[C9] no pane stands that is not a seat" test "$(T list-panes -a -F x | wc -l)" = 11
+  check "[C8] no pane reaches past its window" \
+    test -z "$(T list-panes -a -F '#{pane_top} #{pane_height} #{window_height} #{pane_left} #{pane_width} #{window_width}' | awk '$1 + $2 > $3 || $4 + $5 > $6')"
+  check "[C8] the eighth seat runs" wait_for_probe "Deck 6" deck6
+  check "[C8] the dock ends in its declared layout: eight panes on one line" \
+    test "$(T list-panes -t "$(jq -r '.slots[(["window", "harbor", "dock"] | tojson)]' "$run/state.json")" -F '#{pane_top}' | sort -u | wc -l)" = 1
+}
+
+t_views() {
+  check "build and up" up_fixture
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  check "[C14] hidden: keeper does not see ledger" screen_has "Harbor Keeper" "hidden ledger: unseen"
+  check "[C14] no row: charts has its nearest ancestor's state, / read-only" screen_has "Harbor Keeper" "ro charts: read=ok write=refused"
+  check "[C14] read-write: keeper writes berth" screen_has "Harbor Keeper" "rw berth: write=ok"
+  check "[C14] that write is there outside" test -f "$root/harbor/berth/probe-keeper"
+  check "[C14] searchable-only: vault cannot be listed" screen_has "Harbor Keeper" "list vault: refused"
+  check "[C14] searchable-only: the row beneath it, vault/shelf, is reachable" screen_has "Harbor Keeper" "reach vault/shelf: write=ok"
+  check "[C14] scratch: an empty writable directory" screen_has "Harbor Keeper" "scratch scratch: entries=0 write=ok"
+  check "[C14] scratch: nothing written there reaches the machine" test ! -e "$root/harbor/scratch/probe-keeper"
+  check "[C13] /a against /ab: hold is hidden" screen_has "Harbor Keeper" "hidden hold: unseen"
+  check "[C13] /a against /ab: holdall is open" screen_has "Harbor Keeper" "rw holdall: write=ok"
+  check "[C15] keeper has its own PID namespace" bash -c '[[ $(grep -E "^pid " <<< "$1") =~ ^pid\ [0-9]\ procs\ [0-9]$ ]]' _ "$(screen_of 'Harbor Keeper')"
+  local host_ns keeper_ns watch_ns
+  host_ns="ns ipc $(stat -L -c %i /proc/self/ns/ipc) pid $(stat -L -c %i /proc/self/ns/pid)"
+  keeper_ns=$(screen_of 'Harbor Keeper' | grep '^ns ')
+  check "[C15] keeper has its own IPC namespace ($keeper_ns against $host_ns)" \
+    bash -c '[[ -n $1 && ${1#ns ipc } != "${2#ns ipc }" && ${1% pid *} != "${2% pid *}" ]]' _ "$keeper_ns" "$host_ns"
+  check "grower ran" wait_for_probe "Orchard Grower" grower
+  check "[C14] searchable-only /: grower cannot list /" screen_has "Orchard Grower" "list /: refused"
+  check "[C14] searchable-only /: what has no row does not exist" screen_has "Orchard Grower" "hidden ../harbor/ledger: unseen"
+  check "[C14] searchable-only /: grower writes its read-write row" screen_has "Orchard Grower" "rw crate-picker: write=ok"
+  check "pilot ran" wait_for_probe "Harbor Pilot" pilot
+  check "[C14] a seat with no grant, / read-only: pilot sees ledger" screen_has "Harbor Pilot" "hidden ledger: seen"
+  check "[C14] a seat with no grant: pilot cannot write berth" screen_has "Harbor Pilot" "rw berth: write=refused"
+  check "watch ran" wait_for_probe "Harbor Watch" watch
+  check "[C12] a seat with no rows starts without bubblewrap and writes charts" screen_has "Harbor Watch" "rw charts: write=ok"
+  check "[C12] it has no PID namespace of its own" bash -c '! [[ $(grep -E "^pid " <<< "$1") =~ ^pid\ [0-9]\ procs ]]' _ "$(screen_of 'Harbor Watch')"
+  check "[C12] it shares the host's IPC and PID namespaces" test "$(screen_of 'Harbor Watch' | grep '^ns ')" = "$host_ns"
+  local expected
+  expected="bind /
+proc /proc
+dev /dev
+bind $root/harbor/berth
+tmpfs $root/harbor/hold
+bind $root/harbor/holdall
+tmpfs $root/harbor/ledger
+tmpfs $root/harbor/scratch
+tmpfs $root/harbor/vault
+bind $root/harbor/vault/shelf"
+  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order" \
+    test "$(view_ops "$(seat_command 'Harbor Keeper')" | sed 's/^ro-bind /bind /')" = "$expected"
+  check "[C12] bwrap is named by its absolute path" \
+    test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Keeper')")" = "$(command -v bwrap)"
+  check "[C12] watch's command has no bubblewrap" test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Watch')")" = "$root/tools/probe"
+}
+
+t_environment() {
+  export WORKPLACE_LEAK=yes
+  check "build and up with WORKPLACE_LEAK in the loop's environment" up_fixture
+  unset WORKPLACE_LEAK
+  check "[C16] the variable reached the server" test "$(T show-environment -g WORKPLACE_LEAK)" = "WORKPLACE_LEAK=yes"
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  local env_line allowed name extra=""
+  env_line=$(screen_of "Harbor Keeper" | grep '^env ')
+  check "[C16] keeper printed its environment" test -n "$env_line"
+  allowed=" $(jq -r '.inherit | join(" ")' "$tool/host/binding.json") GREETING PROBE_SEAT "
+  check "[C16] it does not reach keeper" bash -c '[[ $1 != *WORKPLACE_LEAK* ]]' _ "$env_line"
+  check "[C16] keeper receives its rows" bash -c '[[ " $1 " == *" GREETING "* && " $1 " == *" PROBE_SEAT "* ]]' _ "$env_line"
+  check "[C16] a row's value arrives as written" screen_has "Harbor Keeper" "value GREETING=hello, harbor"
+  check "[C16] keeper receives no TMUX, TMUX_PANE or WORKPLACE variable" bash -c '[[ $1 != *TMUX* && $1 != *WORKPLACE* ]]' _ "$env_line"
+  for name in ${env_line#env }; do [[ $allowed == *" $name "* ]] || extra+=" $name"; done
+  check "[C16] keeper receives nothing but the inherited names and its rows ($env_line)" test -z "$extra"
+  check "watch ran" wait_for_probe "Harbor Watch" watch
+  local watch_line
+  watch_line=$(screen_of 'Harbor Watch' | grep '^env ')
+  check "[C16] watch printed its environment" test -n "$watch_line"
+  check "[C16] watch, with no rows, receives only inherited names" \
+    bash -c '[[ $1 != *PROBE_SEAT* && $1 != *GREETING* && $1 != *WORKPLACE* ]]' _ "$watch_line"
+}
+
+t_exec_by_hand() {
+  check "build and up" up_fixture
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  check "[C17] exec --print prints the call" exit_is 0 wp exec --print "Harbor Keeper"
+  check "[C17] the call starts with env -i" test "$(jq -r '.[0:2] | map(split("/") | last) | join(" ")' "$scratch/out")" = "env -i"
+  check "[C17] and runs bubblewrap" test "$(jq -r '[.[] | select(endswith("/bwrap"))] | length' "$scratch/out")" = 1
+  local pane_lines hand_lines hand_env
+  pane_lines=$(screen_of "Harbor Keeper" | grep -vE '^(pid |env |ns |$)')
+  local -a same=()
+  local name value
+  for name in TERM COLORTERM LANG HOME USER LOGNAME PATH; do
+    value=$(T show-environment -g "$name" 2> /dev/null) && [[ $value == "$name="* ]] && same+=("$value")
+  done
+  [[ " ${same[*]} " == *" TERM="* ]] || same+=("TERM=$(T show-options -gv default-terminal)")
+  hand_lines=$(cd / && env -i "${same[@]}" WORKPLACE_ROOT="$root" WORKPLACE_CONFIG="$clone" WORKPLACE_LEAK=yes \
+    "$BASH" "$loop" exec "Harbor Keeper" < /dev/null 2>&1)
+  hand_env=$(grep '^env ' <<< "$hand_lines")
+  hand_lines=$(grep -vE '^(pid |env |ns |$)' <<< "$hand_lines")
+  check "[C17] exec by hand, from another directory, gives the pane's view" test "$pane_lines" = "$hand_lines"
+  [[ $pane_lines == "$hand_lines" ]] || diff <(printf '%s\n' "$pane_lines") <(printf '%s\n' "$hand_lines") | sed 's/^/    | /'
+  check "[C17] and, given the pane's inherited names, the pane's environment ($hand_env)" \
+    test "$hand_env" = "$(screen_of 'Harbor Keeper' | grep '^env ')"
+  printf '%s\n' ' ' >> "$clone/BUILD/binding.json"
+  check "[C17] exec refuses a changed build" exit_is 2 wp exec "Harbor Keeper" < /dev/null
+  check "[C17] the refusal says so" said "exec starts a seat only from a verified build"
+  check "[C17] exec of an unknown seat exits 2" exit_is 2 wp exec -- "Nobody"
+  check "[C18] down" exit_is 0 wp down
+  check "[C17] exec with nothing up exits 2" exit_is 2 wp exec "Harbor Keeper"
+}
+
+t_fixed_part() {
+  check "build and up, keeper measuring its terminal" up_fixture --arg root "$root" '
+    (.programs[6].plan[1].term[5]) = ([$root + "/tools/probe", "keeper", ("report=" + $root + "/harbor/berth/report"), ("term=" + $root + "/harbor/berth/other")] | tojson)'
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  T display -p -t "$(pane_by_title 'Harbor Pilot')" '#{pane_tty}' > "$root/harbor/berth/other"
+  local i
+  for (( i = 0; i < 100; i++ )); do grep -q "term done" "$root/harbor/berth/report" 2> /dev/null && break; sleep 0.1; done
+  check "[C15] /dev/tty opens with a private /dev" grep -qx "term /dev/tty: open" "$root/harbor/berth/report"
+  check "[C15] the terminal's size can be read" grep -qx "term stty: ok" "$root/harbor/berth/report"
+  check "[C15] job control: a job stops" grep -qx "term job stopped: yes" "$root/harbor/berth/report"
+  check "[C15] job control: fg brings it back" grep -qx "term fg: ok" "$root/harbor/berth/report"
+  check "[C15] another pane's terminal cannot be written" grep -qx "term other pane: refused" "$root/harbor/berth/report"
+  check "[C15] nothing reached the other pane" bash -c '[[ $1 != *other-pane-write-mark* ]]' _ "$(screen_of 'Harbor Pilot')"
+  sleep 0.3
+  check "[C15] a full-screen program switches to the alternate screen" \
+    test "$(T display -p -t "$(pane_by_title 'Harbor Keeper')" '#{alternate_on}')" = 1
+}
+
+t_server_privilege() {
+  if [[ $(nnp_of $$) == NoNewPrivs:1 ]]; then
+    skip "[C10] this shell already runs under no-new-privileges, so no server it starts can lack it; measured where the shell does not"
+    return 0
+  fi
+  make_plan
+  check "build" exit_is 0 wp build
+  T -f /dev/null new-session -d -s bystander
+  check "[C10] up refuses a running server without no-new-privileges" exit_is 1 wp up
+  check "[C10] the refusal says why" said "runs without no-new-privileges; it is refused"
+  check "[C10] no session was built, and the bystander survives" sessions_are "bystander "
 }
 
 t_failure_leaves_nothing() {
-  variant '.programs[-1].plan += [["session", "harbor", "again", "stray", "Stray", "harbor"]]' "$scratch/late.json"
-  check "build of a plan whose last term fails" exit_is 0 wp build --plan "$scratch/late.json"
+  make_plan '.programs[2].plan[0][2] = "Harbor"'
+  check "build of a plan whose second session's name is taken" exit_is 0 wp build
+  check "[C19] up exits 1 when a primitive fails" exit_is 1 wp up
+  check "[C19] the failure names the term" said "orchard/office.typify, term 1"
+  check "[C19] nothing of the workplace is left, and no server" no_server
+  check "[C19] no RUN is left" test ! -e "$run"
+  mkdir -p -- "$root/orchard/gone"
+  make_plan --arg root "$root" '.programs[10].plan[1].term[4] = ($root + "/orchard/gone")'
+  check "build of a plan whose last seat starts in a directory that will be removed" exit_is 0 wp build
+  rmdir -- "$root/orchard/gone"
   T -f /dev/null new-session -d -s bystander
-  check "[C16] up exits 1 when a primitive fails" exit_is 1 wp up
-  check "[C16] the failure names the term" said "orchard/barn/picker/seat.typify, term 2"
-  check "[C16] no session of the workplace is left; the test's own survives" sessions_are "bystander "
-  check "[C16] no RUN is left" test ! -e "$run"
-  T kill-session -t =bystander
-  rm -rf -- "$root/config/BUILD"
-  variant '.programs[3].plan[0][4] = "nobody"' "$scratch/middle.json"
-  check "build of a plan that fails in the middle" exit_is 0 wp build --plan "$scratch/middle.json"
-  check "[C16] up exits 1" exit_is 1 wp up
-  check "[C8] the failure names the missing slot" said "no slot pane/harbor/dock/nobody"
-  check "[C16] no session is left, and no server" no_server
-  rm -rf -- "$root/config/BUILD"
-  variant '(.programs[1].plan[0][5]) = "harbor/nowhere"' "$scratch/nodir.json"
-  check "build of a plan whose session directory is missing" exit_is 0 wp build --plan "$scratch/nodir.json"
-  check "[C9] up exits 1 before tmux falls back to the home directory" exit_is 1 wp up
-  check "[C9] the refusal names the directory" said "harbor/nowhere is not a directory"
-  check "[C9] no server was left" no_server
-  rm -rf -- "$root/config/BUILD"
-  variant '(.programs[1].plan[0][1]) = "har/bor"' "$scratch/slash.json"
-  check "build of a plan whose office name holds a slash" exit_is 0 wp build --plan "$scratch/slash.json"
-  check "[C9] up refuses the name" exit_is 1 wp up
-  check "[C9] the refusal says it is not a name" said "is not a name"
-  rm -rf -- "$root/config/BUILD"
-  variant '(.programs[5].plan[0].term[5]) = "tools/nothing-here"' "$scratch/unresolved.json"
-  check "build of a plan that denies a missing executable" exit_is 0 wp build --plan "$scratch/unresolved.json"
-  check "[C14] up refuses a target that does not resolve" exit_is 1 wp up
-  check "[C16] and tears down what it made" no_server
+  check "[C19] up exits 1 at the last start" exit_is 1 wp up
+  check "[C19] the failure names the directory" said "$root/orchard/gone is not a directory"
+  check "[C19] every session it made is torn down, by its captured id" said "undo session/harbor: done"
+  check "[C19] the test's own session survives" sessions_are "bystander "
+  check "[C19] no RUN is left" test ! -e "$run"
 }
 
 t_unattached_options() {
   local conf
-  for conf in tmux-destroy-unattached.conf tmux-exit-unattached.conf; do
-    rm -rf -- "$root/config/BUILD"
-    cp -- "$fixtures/$conf" "$root/config/tmux.conf"
-    check "build with $conf" exit_is 0 wp build --plan "$plan"
-    check "[C10] up refuses with $conf" exit_is 1 wp up
-    check "[C10] the refusal comes from the server's check" said "the binding expects 'off off'"
-    check "[C10] no session was built" no_server
+  for conf in tmux-destroy-unattached.conf tmux-exit-unattached.conf tmux-exit-empty-off.conf; do
+    rm -rf -- "$clone/BUILD" "$clone/PLAN"
+    cp -- "$fixtures/$conf" "$clone/tmux.conf"
+    make_plan
+    check "build with $conf" exit_is 0 wp build
+    check "[C11] up refuses with $conf" exit_is 1 wp up
+    check "[C11] the refusal comes from the server's check" said "where the binding requires"
+    check "[C11] no session was built" test -z "$(T list-sessions -F x 2> /dev/null)"
   done
 }
 
 t_down_removes_only_its_own() {
-  check "build" exit_is 0 wp build --plan "$plan"
-  check "up" exit_is 0 wp up
+  check "build and up" up_fixture
   T new-session -d -s bystander
-  T new-session -d -s harbor-annex
+  T new-session -d -s Harbor-annex
   check "[C18] down" exit_is 0 wp down
-  check "[C18] down removed the workplace and left the test's sessions" sessions_are "bystander harbor-annex "
+  check "[C18] down undid the sessions newest first" \
+    test "$(grep -o 'undo session/[a-z]*' "$scratch/out" | tr '\n' ' ')" = "undo session/orchard undo session/harbor "
+  check "[C18] down removed the workplace and left the test's sessions" sessions_are "bystander Harbor-annex "
   check "[C18] down removed RUN" test ! -e "$run"
-  check "[C18] down kept BUILD" test -f "$root/config/BUILD/MANIFEST"
-  check "[C21] status says down" exit_is 0 wp status
-  check "[C21] status reports run: down" said "run: down"
+  check "[C18] down kept BUILD" test -f "$clone/BUILD/MANIFEST"
+  check "[C22] status says down" exit_is 0 wp status
+  check "[C22] status reports run: down" said "run: down"
   check "[C18] a second down has nothing to do" exit_is 0 wp down
   check "[C18] it says so" said "nothing is up"
-  check "[C4] the workplace comes up again from the same build" exit_is 0 wp up
-  check "[C18] and goes down again" exit_is 0 wp down
-  check "[C18] the test's sessions are still alive" sessions_are "bystander harbor-annex "
 }
 
-t_down_when_a_session_was_replaced() {
-  check "build" exit_is 0 wp build --plan "$plan"
-  check "up" exit_is 0 wp up
-  T kill-session -t =orchard
-  T new-session -d -s orchard
-  check "[C21] status exits 1 when a session is gone" exit_is 1 wp status
-  check "[C21] status names it" said "gone        session/orchard"
-  check "[C18] down" exit_is 0 wp down
-  check "[C17] down left the stranger's orchard alone" sessions_are "orchard "
-  check "[C17] down said why" said "undo session/orchard: it does not carry this run's mark, left alone"
+t_status_and_down_on_a_damaged_run() {
+  check "build and up" up_fixture
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  T kill-pane -t "$(pane_by_title 'Harbor Keeper')"
+  check "[C22] status exits 1 when a seat is gone" exit_is 1 wp status
+  check "[C22] status names the seat" said "gone    seat/Harbor Keeper"
+  check "[C22] and the others ok" said "ok      seat/Harbor Pilot"
+  local elsewhere=$scratch/other-tmp
+  mkdir -p -- "$elsewhere"
+  check "[C18] down from a shell that reaches another socket refuses" exit_is 2 env TMUX_TMPDIR="$elsewhere" "$BASH" "$loop" down
+  check "[C18] the refusal names both sockets" said "tmux from this shell would reach $elsewhere"
+  check "[C18] and RUN is kept" test -d "$run"
+  check "[C18] down from the right shell" exit_is 0 wp down
 }
 
 t_down_after_the_server_restarted() {
-  check "build" exit_is 0 wp build --plan "$plan"
-  check "up" exit_is 0 wp up
+  check "build and up" up_fixture
   local first i
-  first=$(T display -p -t =harbor: '#{session_id}')
+  first=$(T display -p -t =Harbor: '#{session_id}')
   T kill-server
   for (( i = 0; i < 100; i++ )); do [[ -S $TMUX_TMPDIR/tmux-$UID/$label ]] || break; sleep 0.05; done
   T -f /dev/null new-session -d -s stranger
   check "the stranger now holds the id the workplace's first session had" \
     test "$(T display -p -t =stranger: '#{session_id}')" = "$first"
   check "[C18] down" exit_is 0 wp down
-  check "[C17] down did not kill the stranger that reuses the id" sessions_are "stranger "
-  check "[C17] down said it left it alone" said "undo session/harbor: it does not carry this run's mark, left alone"
+  check "[C18] down did not kill the stranger that reuses the id" sessions_are "stranger "
+  check "[C18] down said it left it alone" said "undo session/harbor: it does not carry this run's mark, left alone"
+}
+
+t_two_workplaces() {
+  check "build and up the first" up_fixture
+  local second=$root/config2
+  make_clone "$second"
+  label2=$(name_of_clone "$second")
+  check "[C25] the two workplaces carry different names ($label, $label2)" test "$label" != "$label2"
+  render "$label2" "$second/tmux.conf" > "$scratch/plan2.json"
+  cp -- "$scratch/plan2.json" "$scratch/plan.json"
+  PLAN_CLONE=$second make_plan
+  check "[C25] build and up the second" bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" build && WORKPLACE_CONFIG=$1 "$BASH" "$2" up' _ "$second" "$loop"
+  check "[C25] each has its own server" \
+    test "$(tmux -L "$label2" list-sessions -F '#{session_name}' | sort | tr '\n' ' ')" = "Harbor Orchard "
+  check "[C25] down the first" exit_is 0 wp down
+  check "[C25] the first is gone" no_server
+  check "[C25] the second stands" test "$(tmux -L "$label2" list-panes -a -F x | wc -l)" = 5
+  check "[C25] down the second" bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" down' _ "$second" "$loop"
+}
+
+t_the_default_name() {
+  render default > "$scratch/plan.json"
+  label=default
+  check "[C25] a plan whose server term says default builds and comes up" up_fixture
+  check "[C25] its server is tmux's default socket under this test's own TMUX_TMPDIR" test -S "$TMUX_TMPDIR/tmux-$UID/default"
+  check "[C25] the seats run there" wait_for_probe "Harbor Watch" watch
+  check "[C25] down" exit_is 0 wp down
+}
+
+t_structure_and_form_refusals() {
+  make_plan '.programs[2].plan += [["session", "orchard", "Orchard Again"]]'
+  check "[C3] a second session for one office is refused" exit_is 1 wp build
+  check "[C3] the refusal names it" said "the plan holds 2 session terms for orchard"
+  make_plan '.programs[5].plan |= map(select(.[0] != "window"))'
+  check "[C3] a room with panes and no window is refused" exit_is 1 wp build
+  check "[C3] the refusal names the pane's missing window" said "the pane term for orchard/barn has no window term"
+  make_plan '.programs |= map(select(.path | IN("orchard/barn/grower/seat.typify", "orchard/barn/picker/seat.typify") | not))
+    | .state.view |= map(select(.key[1] != "barn")) | .state.environment |= map(select(.key[1] != "barn"))'
+  check "[C3] a room with no seat is refused" exit_is 1 wp build
+  check "[C3] the refusal names it" said "the window term for orchard/barn has no pane term"
+  make_plan '.programs |= map(select(.path | startswith("orchard/barn") | not))
+    | .state.view |= map(select(.key[0] != "orchard")) | .state.environment |= map(select(.key[0] != "orchard"))'
+  check "[C3] an office with no room is refused" exit_is 1 wp build
+  check "[C3] the refusal names it" said "the session term for orchard has no window term"
+  make_plan '.programs[7].plan |= map(select(type == "array"))'
+  check "[C3] a pane with no start is refused" exit_is 1 wp build
+  check "[C3] the refusal names it" said "the pane term for harbor/dock/pilot has no start term"
+  make_plan '.programs[0].plan += [.programs[0].plan[0]]'
+  check "[C3] two server terms are refused" exit_is 1 wp build
+  make_plan '.programs[3].plan[1][3] = "spiral"'
+  check "[C3] an unknown layout is refused at build" exit_is 1 wp build
+  check "[C3] the refusal names it" said "spiral is not one of"
+  make_plan '.programs[7].plan[1].term[5] = (["tools/probe", "pilot"] | tojson)'
+  check "[C3] a relative program is refused at build" exit_is 1 wp build
+  check "[C3] the refusal names it" said "the program tools/probe is neither an absolute path nor a bare name"
+  make_plan '.programs[7].plan[0][4] = "-x"'
+  check "[C3] a seat whose name begins with - is refused" exit_is 1 wp build
+  make_plan --arg root "$root" '.state.view[1].key[3] = ($root + "/harbor/holdall/")'
+  check "[C4] a path with a trailing slash is refused" exit_is 1 wp build
+  check "[C4] as not canonical" said "holdall/ is not an absolute, canonical path"
+  make_plan --arg root "$root" '.programs[7].plan[1].term[4] = ($root + "/harbor/../harbor")'
+  check "[C4] a path with .. is refused" exit_is 1 wp build
+  make_plan --arg root "$root" '.state.view += [{key: ["harbor", "dock", "keeper", ($root + "/harbor/charts/page")], value: ["hidden"]}]'
+  check "[C4] a tmpfs state on a file is refused" exit_is 1 wp build
+  check "[C4] the refusal names the path" said "a view makes $root/harbor/charts/page a tmpfs, and it is not a directory"
+  make_plan
+  jq '.outputs = []' "$clone/PLAN/manifest.json" > "$scratch/m" && cp -- "$scratch/m" "$clone/PLAN/manifest.json"
+  check "[C2] a manifest whose outputs leave out the plan is refused" exit_is 1 wp build
+  check "[C2] the refusal names what is missing" said "does not list plan.json facts.json among its outputs"
+  make_plan
+  jq --arg r "$scratch" '.root = $r' "$clone/PLAN/facts.json" > "$scratch/f" && cp -- "$scratch/f" "$clone/PLAN/facts.json"
+  local digest
+  digest=$(sha256sum < "$clone/PLAN/facts.json" | cut -d' ' -f1)
+  jq --arg d "sha256:$digest" '.facts = $d' "$clone/PLAN/plan.json" > "$scratch/p" && cp -- "$scratch/p" "$clone/PLAN/plan.json"
+  jq --arg p "$(sha256sum < "$clone/PLAN/plan.json" | cut -d' ' -f1)" --arg f "$digest" \
+    '.outputs = [{path: "plan.json", sha256: $p}, {path: "facts.json", sha256: $f}]' "$clone/PLAN/manifest.json" > "$scratch/m" \
+    && cp -- "$scratch/m" "$clone/PLAN/manifest.json"
+  check "[C2] a facts file of another root is refused" exit_is 1 wp build
+  check "[C2] the refusal names the root" said "the facts file belongs to the root $scratch"
+  make_plan
+  mv -- "$root/harbor/hold" "$root/harbor/hold.away"
+  check "[C2] a path the facts record that is gone is refused" exit_is 1 wp build
+  check "[C2] the refusal names the fact" said "fact exists of $root/harbor/hold: the plan says true, the machine has no such fact"
+  mv -- "$root/harbor/hold.away" "$root/harbor/hold"
 }
 
 t_without_bubblewrap() {
   local bin=$scratch/bin program
   mkdir -p -- "$bin"
-  for program in bash env tmux jq mkdir cp rm sha256sum; do
+  for program in bash env tmux jq mkdir cp rm sha256sum stat setpriv sort; do
     ln -s -- "$(command -v "$program")" "$bin/$program"
   done
-  check "bwrap and realpath are not on the reduced PATH" test -z "$(PATH=$bin command -v bwrap realpath)"
-  variant '.state.view = [] | .programs |= map(.plan |= map(select((if type == "object" then .term else . end)[0] != "resolve")))' "$scratch/open.json"
-  check "[C5] a plan with no view and no resolve builds with only bash, env, tmux, jq, mkdir, cp, rm and sha256sum" \
-    exit_is 0 env PATH="$bin" "$BASH" "$loop" build --plan "$scratch/open.json"
-  check "[C5] and comes up" exit_is 0 env PATH="$bin" "$BASH" "$loop" up
-  check "[C5] every seat runs" wait_for_probe "Orchard Picker" picker
-  check "[C12] picker, now with no view, sees cellar" screen_has "Orchard Picker" "hidden cellar: seen"
-  check "[C5] status with the same programs" exit_is 0 env PATH="$bin" "$BASH" "$loop" status
-  check "[C5] down with the same programs" exit_is 0 env PATH="$bin" "$BASH" "$loop" down
-  rm -rf -- "$root/config/BUILD"
-  check "the plan with views builds" exit_is 0 env PATH="$bin" "$BASH" "$loop" build --plan "$plan"
-  check "[C5] but does not come up without bubblewrap" exit_is 2 env PATH="$bin" "$BASH" "$loop" up
-  check "[C5] the refusal names bwrap" said "this plan needs bwrap"
-  check "[C5] no server was started" no_server
+  check "bwrap is not on the reduced PATH" test -z "$(PATH=$bin command -v bwrap)"
+  make_plan '.state.view = []'
+  check "[C6] a plan with no view builds with only bash, env, tmux, jq, mkdir, cp, rm, sha256sum, stat and setpriv, and sort for the probe" \
+    exit_is 0 env PATH="$bin" "$BASH" "$loop" build
+  check "[C6] and comes up" exit_is 0 env PATH="$bin" "$BASH" "$loop" up
+  check "[C6] every seat runs" wait_for_probe "Orchard Picker" picker
+  check "[C6] down with the same programs" exit_is 0 env PATH="$bin" "$BASH" "$loop" down
+  rm -rf -- "$clone/BUILD"
+  make_plan
+  check "the plan with views builds" exit_is 0 env PATH="$bin" "$BASH" "$loop" build
+  check "[C6] but does not come up without bubblewrap" exit_is 2 env PATH="$bin" "$BASH" "$loop" up
+  check "[C6] the refusal names bwrap" said "this plan needs bwrap"
+  check "[C6] no server was started" no_server
 }
 
 t_hostile_text() {
-  local dir='ha#{pid}#(touch pwned-dir)rbor#[c;'
-  mkdir -p -- "$root/$dir"
-  variant 'def office: if type == "object" then .term |= office elif .[1] == "harbor" then .[1] = "har#{pid}bor" else . end;
-    .programs |= map(.plan |= map(office))
-    | .state.view |= map(if .key[0] == "harbor" then .key[0] = "har#{pid}bor" else . end)
-    | .programs[1].plan[1][2:6] = ["to#(touch pwned-room)wer#[x];", "watch", "W#{pid}#(touch pwned-title)a##[b;", $dir]
-    | .programs[7].plan = [{"term": ["start", "har#{pid}bor", "to#(touch pwned-room)wer#[x];", "watch", $dir,
-        (["tools/probe", "watch", ";", "a;", "b\\;", "#{pid}", "", "-x", "x;y", "$(touch pwned-arg)", "#[fg=red]", "a##[b"] | tojson)],
-        "unchecked": true}]' "$scratch/hostile.json" --arg dir "$dir"
-  check "build" exit_is 0 wp build --plan "$scratch/hostile.json"
-  check "up" exit_is 0 wp up
-  check "[C7] the office's name is kept as written" sessions_are "har#{pid}bor orchard "
-  check "[C7] the room's name is kept as written" \
-    test "$(T list-windows -a -F '#{window_name}' | grep -c -xF 'to#(touch pwned-room)wer#[x];')" = 1
+  local dir="$root/ha#{pid}#(touch pwned-dir)rbor#[c;"
+  mkdir -p -- "$dir"
   local title='W#{pid}#(touch pwned-title)a##[b;'
+  check "build and up with names, a title and a directory that tmux would expand or split" up_fixture --arg dir "$dir" --arg title "$title" --arg root "$root" '
+    .programs[1].plan[0][2] = "Har#{pid}bor;"
+    | .programs[4].plan[0][3] = "To#(touch pwned-room)wer#[x];"
+    | .programs[8].plan = [["pane", "harbor", "tower", "watch", $title],
+        {term: ["start", "harbor", "tower", "watch", $dir,
+          ([$root + "/tools/probe", "watch", ";", "a;", "b\\;", "#{pid}", "", "-x", "x;y", "$(touch pwned-arg)", "#[fg=red]", "a##[b"] | tojson)],
+         unchecked: true}]'
+  check "[C7] the office's name is kept as written" sessions_are "Har#{pid}bor; Orchard "
+  check "[C7] the room's name is kept as written" \
+    test "$(T list-windows -a -F '#{window_name}' | grep -c -xF 'To#(touch pwned-room)wer#[x];')" = 1
   check "[C7] the title is kept as written" test -n "$(pane_by_title "$title")"
   check "watch ran" wait_for_probe "$title" watch
-  check "[C7] watch started in the directory as written" screen_has "$title" "probe watch start cwd=$root/$dir seat="
+  check "[C7] watch started in the directory as written" screen_has "$title" "probe watch start cwd=$dir"
   local arg
   for arg in ';' 'a;' 'b\;' '#{pid}' '' '-x' 'x;y' '$(touch pwned-arg)' '#[fg=red]' 'a##[b'; do
     check "[C7] the argument [$arg] arrives as written" screen_has "$title" "arg [$arg]"
   done
-  check "[C6] no text of the plan ran as a command" test -z "$(find "$scratch" -name 'pwned-*' -print -quit)"
+  check "[C7] no text of the plan ran as a command" test -z "$(find "$scratch" -name 'pwned-*' -print -quit)"
+}
+
+t_why() {
+  make_plan
+  check "[C23] why answers for a row" exit_is 0 wp why "Harbor Keeper" "$root/harbor/berth"
+  check "[C23] it names the row and its state" said "row: $root/harbor/berth read-write"
+  check "[C23] it lists both claims behind the row" said "claims behind $root/harbor/berth: 2"
+  check "[C23] with the losing claim's origin" said "read-only  from harbor/office.typify:2"
+  check "[C23] and the winner's" said "read-write  from harbor/dock/keeper/seat.typify:4"
+  check "[C23] a path with no row names its nearest ancestor's row" exit_is 0 wp why "Harbor Keeper" "$root/harbor/charts/page"
+  check "[C23] the ancestor is /" said "its nearest ancestor's row is / read-only"
+  check "[C23] a seat with no rows has no view" exit_is 0 wp why "Harbor Watch" /etc
+  check "[C23] it says so" said "no view"
+  check "[C23] why refuses a relative path" exit_is 2 wp why "Harbor Keeper" harbor
+}
+
+t_doctor() {
+  check "[C24] doctor exits 0 on this machine" exit_is 0 wp doctor
+  check "[C24] it checks setpriv" said "ok      no-new-privileges can be set"
+  check "[C24] it checks bubblewrap's namespaces" said "with unprivileged user namespaces"
+  local bin=$scratch/bin program
+  mkdir -p -- "$bin"
+  for program in bash env tmux jq mkdir cp rm sha256sum stat; do
+    ln -s -- "$(command -v "$program")" "$bin/$program"
+  done
+  check "[C24] doctor exits 1 without setpriv" exit_is 1 env PATH="$bin" "$BASH" "$loop" doctor
+  check "[C24] it names what is missing" said "missing setpriv"
+  check "[C24] it says bubblewrap is needed only for a view" said "absent  bwrap: needed only by a plan in which a seat has a view"
+}
+
+t_the_reference_plan_as_printed() {
+  local reference=/tmp/workplace-reference-a4 pinned=fa8d54f683c2e4a80c24e3f7120f76fb42b51d720d7c5cb53c05f4a66d463cee sum
+  if [[ ! -f $reference/config/PLAN/plan.json ]]; then
+    skip "[C8] the reference root of the layers' commit 1127c90 is not on this machine"
+    return 0
+  fi
+  sum=$(sha256sum < "$reference/config/PLAN/plan.json")
+  if [[ ${sum%% *} != "$pinned" ]]; then
+    skip "[C8] the plan at $reference is not the reader's plan $pinned"
+    return 0
+  fi
+  if [[ -e $reference/config/BUILD ]]; then
+    skip "[C8] a BUILD already stands in $reference; this test makes and removes only its own"
+    return 0
+  fi
+  export WORKPLACE_ROOT=$reference WORKPLACE_CONFIG=$reference/config
+  clone=$reference/config
+  run=$clone/BUILD/RUN
+  label=$(jq -r '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "server")][0][1]' "$clone/PLAN/plan.json")
+  reference_build=$reference/config/BUILD
+  trap 'cleanup; rm -rf -- "$reference_build"' EXIT
+  check "[C2] the reader's plan, as printed, builds" exit_is 0 wp build
+  check "[C8] and comes up" exit_is 0 wp up
+  check "[C9] its five seats stand, and no other pane" \
+    test "$(T list-panes -a -F '#{session_name}/#{window_name}/#{pane_title}' | sort | tr '\n' ',')" = \
+    "harbor/dock/Harbor Keeper,harbor/dock/Harbor Pilot,harbor/tower/Harbor Watch,orchard/barn/Orchard Grower,orchard/barn/Orchard Picker,"
+  local row title seat
+  for row in "Harbor Pilot:pilot" "Harbor Keeper:keeper" "Harbor Watch:watch" "Orchard Grower:grower" "Orchard Picker:picker"; do
+    IFS=: read -r title seat <<< "$row"
+    check "[C8] $title runs its program" wait_for_probe "$title" "$seat"
+  done
+  check "[C14] keeper: ledger, opened searchable-only, does not list" screen_has "Harbor Keeper" "hidden ledger: unseen"
+  check "[C14] keeper: the grant beneath it is reachable" screen_has "Harbor Keeper" "reach ledger/inner: write=ok"
+  check "[C14] keeper: charts is read-only" screen_has "Harbor Keeper" "ro charts: read=ok write=refused"
+  check "[C14] picker: silo cannot be listed, its bin is reachable" \
+    bash -c '[[ $1 == *"list silo: refused"* && $1 == *"reach silo/bin: write=ok"* ]]' _ "$(screen_of 'Orchard Picker')"
+  check "[C22] status exits 0" exit_is 0 wp status
+  check "[C23] why names the two claims behind keeper's ledger" exit_is 0 wp why "Harbor Keeper" "$reference/harbor/ledger"
+  check "[C23] the losing claim, hidden, with its origin as written" said "hidden  from programs/ACCESS.typify:7"
+  check "[C18] down" exit_is 0 wp down
+  check "[C18] nothing of the workplace is left" no_server
 }
 
 t_source_and_contract() {
-  check "[C6] the loop holds no eval" bash -c '! grep -nw eval "$1"/bin/workplace "$1"/libexec/*' _ "$tool"
-  check "[C6] the loop holds no sh -c or bash -c" \
+  check "[C8] the loop holds no eval" bash -c '! grep -nw eval "$1"/bin/workplace "$1"/libexec/*' _ "$tool"
+  check "[C8] the loop holds no sh -c or bash -c" \
     bash -c '! grep -nE "(^|[^[:alnum:]])(ba)?sh -c" "$1"/bin/workplace "$1"/libexec/* "$1"/host/binding.json' _ "$tool"
-  check "[C15] nothing sends keys to a pane" bash -c '! grep -rn "send-keys" "$1"/bin "$1"/libexec "$1"/host' _ "$tool"
-  check "[C15] every -t of the binding names a captured slot, never an index" \
-    test "$(jq '[.primitives[] | (.call, .then, .undo.when, .undo.call, .check.call) | select(. != null) | . as $c
+  check "[C17] nothing sends keys or pastes into a pane: no send-keys, send, send-prefix or paste-buffer in the loop or the binding" \
+    bash -c '! grep -rnwE "send-keys|send|send-prefix|paste-buffer|pasteb" "$1"/bin "$1"/libexec "$1"/host' _ "$tool"
+  check "[C9] every -t of the binding names a captured slot, never a name or an index" \
+    test "$(jq '[.primitives[] | (.call, .then, .claim.call, .undo.when, .undo.call, .check.call) | select(. != null) | . as $c
       | range(0; length) | select($c[.] == "-t") | $c[. + 1] | (type == "object" and has("slot"))] | all' "$tool/host/binding.json")" = true
-  check "[C15] respawn-pane -k is followed by clear-history in start" \
+  check "[C17] respawn-pane -k is followed by clear-history in start" \
     test "$(jq -r '.primitives.start.call | map(strings) | (index("respawn-pane") < index("clear-history"))' "$tool/host/binding.json")" = true
-  check "[C22] every tmux call of the binding names its server" \
-    test "$(jq -c '.programs.tmux.argv[1:3]' "$tool/host/binding.json")" = '["-L",{"slot":["server"]}]'
-  check "[C22] the loop removes TMUX and TMUX_PANE before anything else" \
+  check "[C10] every tmux call runs under setpriv --no-new-privs and names its server" \
+    test "$(jq -c '.programs.tmux.argv[0:5]' "$tool/host/binding.json")" = '[{"slot":["program","setpriv"]},"--no-new-privs",{"slot":["program","tmux"]},"-L",{"slot":["server"]}]'
+  check "[C10] the loop removes TMUX and TMUX_PANE before anything else" \
     test "$(sed -n 4p "$tool/bin/workplace")" = "unset TMUX TMUX_PANE"
   check "every tmux call of these tests names its server" \
-    bash -c '! grep -nE "(^|[;&|({!]|\\\$\\()[[:space:]]*tmux " "$1" | grep -v "tmux -L"' _ "$here/run.sh"
+    bash -c '! grep -nE "(^|[;&|({!]|\\\$\\()[[:space:]]*tmux " "$1" | grep -vE "tmux -L|tmux -S"' _ "$here/run.sh"
   check "the tests run as a user, not root" test "$EUID" -ne 0
   check "nothing of the loop runs through sudo, doas or pkexec" \
     bash -c '! grep -rnwE "sudo|doas|pkexec" "$1"/bin "$1"/libexec "$1"/host' _ "$tool"
   check "bubblewrap is not setuid" test ! -u "$(command -v bwrap)"
   local n missing=""
   for n in $(grep -oE '\*\*C[0-9]+\.\*\*' "$tool/CONTRACT.md" | tr -d '*.'); do
-    grep -qF "[$n]" "$here/run.sh" || missing+=" $n"
+    grep -qE "^[[:space:]]*check \"\\[$n\\]" "$here/run.sh" || missing+=" $n"
   done
   check "every sentence of the contract is shown by a check that carries its number${missing:+ (missing:$missing)}" test -z "$missing"
 }
@@ -511,18 +842,28 @@ t_source_and_contract() {
 tests=(
   t_inputs_and_refusals
   t_program_floors
-  t_structure_and_starts
-  t_holding_panes
+  t_structure_and_order
   t_a_foreign_tmux_in_the_environment
-  t_seat_views
-  t_a_row_of_three_and_a_grid
+  t_programs_out_of_order
+  t_room_of_eight
+  t_views
+  t_environment
+  t_exec_by_hand
+  t_fixed_part
+  t_server_privilege
   t_failure_leaves_nothing
   t_unattached_options
   t_down_removes_only_its_own
-  t_down_when_a_session_was_replaced
+  t_status_and_down_on_a_damaged_run
   t_down_after_the_server_restarted
+  t_two_workplaces
+  t_the_default_name
+  t_structure_and_form_refusals
   t_without_bubblewrap
   t_hostile_text
+  t_why
+  t_doctor
+  t_the_reference_plan_as_printed
   t_source_and_contract
 )
 (( $# )) && tests=("$@")
@@ -531,6 +872,7 @@ for name in "${tests[@]}"; do
   note "== $name"
   (
     test_failed=0
+    label2=""
     setup "${name#t_}"
     trap cleanup EXIT
     "$name"
@@ -544,4 +886,9 @@ for name in "${tests[@]}"; do
   fi
 done
 note "== $(( total - failures )) of $total tests passed"
+if [[ -s $skips ]]; then
+  note "== $(grep -c '' "$skips") checks skipped, each with its reason:"
+  sed 's/^/   /' "$skips"
+fi
+rm -f -- "$skips"
 (( failures == 0 )) || { note "failed: ${failed_tests[*]}"; exit 1; }

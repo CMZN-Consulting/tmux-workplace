@@ -1,0 +1,193 @@
+{
+  "programs": [
+    {
+      "path": "workplace.typify",
+      "language": "Workplace",
+      "status": "present",
+      "plan": [
+        ["server", "@LABEL@", "@ROOT@/config/tmux.conf"]
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "harbor/office.typify",
+      "language": "Office",
+      "status": "present",
+      "plan": [
+        ["session", "harbor", "Harbor"]
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": [
+        {"term": ["claim", "harbor", "dock", "keeper", "@ROOT@/harbor/berth", "read-only"], "origin": {"kind": "program", "path": "harbor/office.typify", "line": 2}}
+      ]
+    },
+    {
+      "path": "orchard/office.typify",
+      "language": "Office",
+      "status": "present",
+      "plan": [
+        ["session", "orchard", "Orchard"]
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "harbor/dock/room.typify",
+      "language": "Room",
+      "status": "present",
+      "plan": [
+        ["window", "harbor", "dock", "Dock"],
+        ["arrange", "harbor", "dock", "even-horizontal"]
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "harbor/tower/room.typify",
+      "language": "Room",
+      "status": "present",
+      "plan": [
+        ["window", "harbor", "tower", "Tower"],
+        ["arrange", "harbor", "tower", "tiled"]
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "orchard/barn/room.typify",
+      "language": "Room",
+      "status": "present",
+      "plan": [
+        ["window", "orchard", "barn", "Barn"],
+        ["arrange", "orchard", "barn", "even-vertical"]
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "harbor/dock/keeper/seat.typify",
+      "language": "Seat",
+      "status": "present",
+      "plan": [
+        ["pane", "harbor", "dock", "keeper", "Harbor Keeper"],
+        {"term": ["start", "harbor", "dock", "keeper", "@ROOT@/harbor", "[\"@ROOT@/tools/probe\", \"keeper\", \"hidden=ledger\", \"ro=charts\", \"rw=berth\", \"list=vault\", \"reach=vault/shelf\", \"scratch=scratch\", \"hidden=hold\", \"rw=holdall\", \"env\", \"value=GREETING\", \"pid\", \"ns\"]"], "unchecked": true}
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": [
+        {"term": ["claim", "harbor", "dock", "keeper", "/", "read-only"], "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 3}},
+        {"term": ["claim", "harbor", "dock", "keeper", "@ROOT@/harbor/berth", "read-write"], "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 4}}
+      ]
+    },
+    {
+      "path": "harbor/dock/pilot/seat.typify",
+      "language": "Seat",
+      "status": "present",
+      "plan": [
+        ["pane", "harbor", "dock", "pilot", "Harbor Pilot"],
+        {"term": ["start", "harbor", "dock", "pilot", "@ROOT@/harbor", "[\"@ROOT@/tools/probe\", \"pilot\", \"hidden=ledger\", \"ro=charts\", \"rw=berth\", \"list=vault\", \"env\", \"pid\"]"], "unchecked": true}
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "harbor/tower/watch/seat.typify",
+      "language": "Seat",
+      "status": "present",
+      "plan": [
+        ["pane", "harbor", "tower", "watch", "Harbor Watch"],
+        {"term": ["start", "harbor", "tower", "watch", "@ROOT@/harbor", "[\"@ROOT@/tools/probe\", \"watch\", \"hidden=ledger\", \"rw=charts\", \"env\", \"pid\", \"ns\"]"], "unchecked": true}
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "orchard/barn/grower/seat.typify",
+      "language": "Seat",
+      "status": "present",
+      "plan": [
+        ["pane", "orchard", "barn", "grower", "Orchard Grower"],
+        {"term": ["start", "orchard", "barn", "grower", "@ROOT@/orchard", "[\"@ROOT@/tools/probe\", \"grower\", \"list=/\", \"hidden=../harbor/ledger\", \"rw=crate-picker\", \"env\", \"pid\"]"], "unchecked": true}
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    },
+    {
+      "path": "orchard/barn/picker/seat.typify",
+      "language": "Seat",
+      "status": "present",
+      "plan": [
+        ["pane", "orchard", "barn", "picker", "Orchard Picker"],
+        {"term": ["start", "orchard", "barn", "picker", "@ROOT@/orchard", "[\"@ROOT@/tools/probe\", \"picker\", \"hidden=cellar\", \"ro=almanac\", \"rw=crate-picker\", \"env\", \"pid\"]"], "unchecked": true}
+      ],
+      "ensure": [],
+      "skips": [],
+      "recorded": []
+    }
+  ],
+  "state": {
+    "view": [
+      {"key": ["harbor", "dock", "pilot", "/"], "value": ["read-only"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/pilot/seat.typify", "line": 3}},
+      {"key": ["harbor", "dock", "keeper", "@ROOT@/harbor/holdall"], "value": ["read-write"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 11}},
+      {"key": ["harbor", "dock", "keeper", "@ROOT@/harbor/hold"], "value": ["hidden"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 10}},
+      {"key": ["harbor", "dock", "keeper", "@ROOT@/harbor/scratch"], "value": ["scratch"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 9}},
+      {"key": ["harbor", "dock", "keeper", "@ROOT@/harbor/vault/shelf"], "value": ["read-write"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 8}},
+      {"key": ["harbor", "dock", "keeper", "@ROOT@/harbor/vault"], "value": ["searchable-only"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 7}},
+      {"key": ["harbor", "dock", "keeper", "@ROOT@/harbor/berth"], "value": ["read-write"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 4}},
+      {"key": ["harbor", "dock", "keeper", "@ROOT@/harbor/ledger"], "value": ["hidden"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 5}},
+      {"key": ["harbor", "dock", "keeper", "/"], "value": ["read-only"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 3}},
+      {"key": ["orchard", "barn", "grower", "/"], "value": ["searchable-only"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 3}},
+      {"key": ["orchard", "barn", "grower", "/usr"], "value": ["read-only"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 4}},
+      {"key": ["orchard", "barn", "grower", "/etc"], "value": ["read-only"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 5}},
+      {"key": ["orchard", "barn", "grower", "@ROOT@/tools"], "value": ["read-only"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 6}},
+      {"key": ["orchard", "barn", "grower", "@ROOT@/orchard"], "value": ["read-only"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 7}},
+      {"key": ["orchard", "barn", "grower", "@ROOT@/orchard/crate-picker"], "value": ["read-write"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 8}},
+      {"key": ["orchard", "barn", "picker", "/"], "value": ["read-only"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/picker/seat.typify", "line": 3}},
+      {"key": ["orchard", "barn", "picker", "@ROOT@/orchard/cellar"], "value": ["hidden"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/picker/seat.typify", "line": 4}},
+      {"key": ["orchard", "barn", "picker", "@ROOT@/orchard/crate-picker"], "value": ["read-write"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/picker/seat.typify", "line": 5}}
+    ],
+    "environment": [
+      {"key": ["harbor", "dock", "keeper", "PROBE_SEAT"], "value": ["keeper"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 12}},
+      {"key": ["harbor", "dock", "keeper", "GREETING"], "value": ["hello, harbor"], "masked": false, "origin": {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 13}},
+      {"key": ["orchard", "barn", "picker", "PROBE_SEAT"], "value": ["picker"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/picker/seat.typify", "line": 6}},
+      {"key": ["orchard", "barn", "grower", "PROBE_SEAT"], "value": ["grower"], "masked": false, "origin": {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 9}}
+    ]
+  },
+  "bound": {"c": 1, "n": 19, "limit": 19},
+  "modelled": "14 of 19",
+  "facts": "none",
+  "origins": [
+    {"kind": "program", "path": "workplace.typify", "line": 1},
+    {"kind": "program", "path": "harbor/office.typify", "line": 1},
+    {"kind": "program", "path": "orchard/office.typify", "line": 1},
+    {"kind": "program", "path": "harbor/dock/room.typify", "line": 1},
+    {"kind": "program", "path": "harbor/dock/room.typify", "line": 2},
+    {"kind": "program", "path": "harbor/tower/room.typify", "line": 1},
+    {"kind": "program", "path": "harbor/tower/room.typify", "line": 2},
+    {"kind": "program", "path": "orchard/barn/room.typify", "line": 1},
+    {"kind": "program", "path": "orchard/barn/room.typify", "line": 2},
+    {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 1},
+    {"kind": "program", "path": "harbor/dock/keeper/seat.typify", "line": 2},
+    {"kind": "program", "path": "harbor/dock/pilot/seat.typify", "line": 1},
+    {"kind": "program", "path": "harbor/dock/pilot/seat.typify", "line": 2},
+    {"kind": "program", "path": "harbor/tower/watch/seat.typify", "line": 1},
+    {"kind": "program", "path": "harbor/tower/watch/seat.typify", "line": 2},
+    {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 1},
+    {"kind": "program", "path": "orchard/barn/grower/seat.typify", "line": 2},
+    {"kind": "program", "path": "orchard/barn/picker/seat.typify", "line": 1},
+    {"kind": "program", "path": "orchard/barn/picker/seat.typify", "line": 2}
+  ],
+  "status": "unchecked",
+  "ensure": [],
+  "diagnostics": []
+}

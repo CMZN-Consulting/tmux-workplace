@@ -8,8 +8,9 @@ if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 2) ))
   exit 2
 fi
 
-TMUX_FLOOR=(2 9)
-JQ_FLOOR=(1 7)
+TMUX_FLOOR=3.0
+JQ_FLOOR=1.7
+ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 
 say() { printf '%s\n' "$*"; }
 warn() { printf '%s\n' "workplace: $*" >&2; }
@@ -22,29 +23,44 @@ case $source_dir in
 esac
 tool=$(cd -P -- "$source_dir/.." && pwd -P) || die "cannot find the tool's directory" 2
 
+version_key() {
+  [[ $1 =~ ^([0-9]+)\.([0-9]+)([a-z]?)$ ]] || return 1
+  local letter=0
+  [[ -n ${BASH_REMATCH[3]} ]] && printf -v letter '%d' "'${BASH_REMATCH[3]}"
+  printf '%s\n' "$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + letter ))"
+}
+
 at_least() {
-  local have_major=$1 have_minor=$2 need_major=$3 need_minor=$4
-  (( have_major > need_major || (have_major == need_major && have_minor >= need_minor) ))
+  local have want
+  have=$(version_key "$1") || return 1
+  want=$(version_key "$2") || return 1
+  (( have >= want ))
+}
+
+version_of() {
+  local program=$1 flag=$2 version
+  version=$("$program" "$flag" 2> /dev/null) || return 1
+  [[ $version =~ ([0-9]+\.[0-9]+[a-z]?) ]] || return 1
+  printf '%s\n' "${BASH_REMATCH[1]}"
 }
 
 need_version() {
-  local program=$1 flag=$2 major=$3 minor=$4 version
-  command -v "$program" > /dev/null || die "$program $major.$minor or later is needed and is not on PATH" 2
-  version=$("$program" "$flag" 2> /dev/null) || die "cannot read $program's version" 2
-  [[ $version =~ ([0-9]+)\.([0-9]+) ]] || die "cannot read $program's version from: $version" 2
-  at_least "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "$major" "$minor" \
-    || die "$program ${BASH_REMATCH[1]}.${BASH_REMATCH[2]} found; $major.$minor or later is needed" 2
+  local program=$1 flag=$2 floor=$3 found
+  command -v "$program" > /dev/null || die "$program $floor or later is needed and is not on PATH" 2
+  found=$(version_of "$program" "$flag") || die "cannot read $program's version" 2
+  at_least "$found" "$floor" || die "$program $found found; $floor or later is needed" 2
 }
 
-need_jq() { need_version jq --version "${JQ_FLOOR[@]}"; }
-need_tmux() { need_version tmux -V "${TMUX_FLOOR[@]}"; }
+need_jq() { need_version jq --version "$JQ_FLOOR"; }
+need_tmux() { need_version tmux -V "$TMUX_FLOOR"; }
 
 need_programs() {
   local program found
   program_slots='{}'
-  for program in tmux "$@"; do
+  for program in "${ALWAYS[@]}" "$@"; do
     found=$(command -v -- "$program") || die "this plan needs $program, and $program is not on PATH" 2
     [[ $found == /* ]] || die "$program resolves to $found, which is not a program on PATH" 2
+    [[ $found != *=* ]] || die "$program resolves to $found, whose path holds =, which env would read as a variable" 2
     program_slots=$(jq -c --arg n "$program" --arg p "$found" '.[(["program", $n] | tojson)] = $p' <<< "$program_slots")
   done
 }
@@ -61,6 +77,7 @@ locate() {
   if [[ $root != / && $clone != "$root" && $clone != "$root"/* ]]; then
     die "WORKPLACE_CONFIG ($clone) is not at or below WORKPLACE_ROOT ($root)" 2
   fi
+  plan_dir=$clone/PLAN
   build_dir=$clone/BUILD
   run_dir=$build_dir/RUN
 }
@@ -85,6 +102,7 @@ plan_report() {
   local plan=$1 binding=$2 checker=$3 errors
   report=$(jq -c --slurpfile b "$binding" -f "$checker" "$plan" 2>&1) \
     || die "the plan is not JSON that jq can read: $report"
+  [[ -n $report ]] || die "the plan $plan is empty"
   mapfile -t errors < <(jq -r '.errors[]' <<< "$report")
   if (( ${#errors[@]} )); then
     printf '%s\n' "${errors[@]/#/workplace: }" >&2
@@ -94,57 +112,176 @@ plan_report() {
   plan_terms=$(jq -r '.terms' <<< "$report")
 }
 
-manifest_files=(plan.json binding.json libexec/resolve.jq libexec/check.jq libexec/exec share/denied)
+sha_of() {
+  local sum
+  sum=$(sha256sum -- "$1" 2> /dev/null) || return 1
+  printf '%s\n' "${sum%%  *}"
+}
+
+collect_facts() {
+  local path type mode uid named
+  local -a fields
+  for path in "$@"; do
+    mapfile -d '' -t fields < <(QUOTING_STYLE=literal stat --printf '%F\0%a\0%u\0%N\0' -- "$path" 2> /dev/null)
+    (( ${#fields[@]} == 4 )) || continue
+    type=${fields[0]} mode=${fields[1]} uid=${fields[2]} named=${fields[3]}
+    while (( ${#mode} < 4 )); do mode=0$mode; done
+    printf '%s\0%s\0%s\0' exists "$path" ""
+    [[ $type == directory ]] && printf '%s\0%s\0%s\0' directory "$path" ""
+    [[ $type == "symbolic link" ]] && printf '%s\0%s\0%s\0' symlink "$path" "${named#"$path -> "}"
+    printf '%s\0%s\0%s\0' mode "$path" "$mode"
+    printf '%s\0%s\0%s\0' owner "$path" "$uid"
+  done
+}
+
+check_facts() {
+  local facts=$1 differences problems
+  problems=$(jq -r --arg root "$root" '
+    def canonical: . == "/" or (startswith("/") and (endswith("/") | not) and (.[1:] | split("/") | all(. != "" and . != "." and . != "..")));
+    (if .root != $root then "the facts file belongs to the root \(.root), not to \($root)" else empty end),
+    (.facts[] | if (.fact | IN("exists", "directory", "symlink", "mode", "owner") | not) then "the facts file holds an unknown fact \(.fact)"
+               elif ((.args | length) != 1 or (.args[0] | type) != "string" or (.args[0] | canonical | not)) then "the facts file names a path that is not absolute and canonical: \(.args)"
+               else empty end)' "$facts") || die "cannot read the plan's facts"
+  if [[ -n $problems ]]; then
+    printf '%s\n' "$problems" | while IFS= read -r line; do warn "$line"; done
+    return 1
+  fi
+  local -a paths
+  mapfile -t paths < <(jq -r '[.facts[].args[0]] | unique | .[]' "$facts")
+  local collected
+  collected=$(collect_facts "${paths[@]}" | jq -R -s -c \
+    'split("\u0000")[:-1] | [range(0; length; 3) as $i | .[$i:$i + 3]]
+     | map({fact: .[0], args: [.[1]]} + (if .[0] | IN("exists", "directory") then {} else {value: .[2]} end))') \
+    || die "cannot collect the machine's facts"
+  differences=$(jq -r --argjson now "$collected" '
+    def by($f): [$f[] | {key: ([.fact, .args[0]] | tojson), value: .}] | from_entries;
+    by($now) as $machine
+    | .facts[] | . as $v | ([.fact, .args[0]] | tojson) as $k
+    | if ($machine | has($k) | not) then
+        "fact \(.fact) of \(.args[0]): the plan says \(.value // true), the machine has no such fact"
+      elif (has("value")) and $machine[$k].value != .value then
+        "fact \(.fact) of \(.args[0]): the plan says \(.value), the machine says \($machine[$k].value)"
+      else empty end
+  ' "$facts") || die "cannot compare the plan's facts"
+  if [[ -n $differences ]]; then
+    printf '%s\n' "$differences" | while IFS= read -r line; do warn "$line"; done
+    return 1
+  fi
+}
+
+manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq)
 
 cmd_build() {
-  local plan=""
-  while (( $# )); do
-    case $1 in
-      --plan)
-        (( $# >= 2 )) || die "--plan needs a file" 2
-        plan=$2
-        shift 2
-        ;;
-      *) die "build takes --plan FILE; $1 is not one of its arguments" 2 ;;
-    esac
-  done
-  [[ -n $plan ]] || die "Typify's plan is not wired in yet, so build takes --plan FILE" 2
+  (( $# == 0 )) || die "build takes no arguments; it reads PLAN/ in the configuration's clone" 2
   need_jq
   locate
+  local name
+  for name in "${ALWAYS[@]}"; do command -v "$name" > /dev/null || die "build needs $name, and $name is not on PATH" 2; done
   if [[ -e $build_dir || -L $build_dir ]]; then
     die "$build_dir exists; build refuses until it is removed"
   fi
-  [[ -f $plan ]] || die "no plan file at $plan" 2
-  plan_report "$plan" "$tool/host/binding.json" "$tool/libexec/check.jq"
-  local -a sources=("$plan" "$tool/host/binding.json" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq"
-    "$tool/libexec/exec" "$tool/share/denied")
+  for name in plan.json manifest.json; do
+    [[ -f $plan_dir/$name ]] || die "PLAN/$name is missing from $clone" 2
+  done
+  local facts_member
+  facts_member=$(jq -r '.facts // "absent" | if type == "string" then . else "not a string" end' "$plan_dir/plan.json" 2> /dev/null) \
+    || die "PLAN/plan.json is not JSON that jq can read"
+  local manifest=$plan_dir/manifest.json declared
+  jq -e 'type == "object" and (.root | type) == "string" and (.inputs | type) == "array" and (.outputs | type) == "array"' \
+    "$manifest" > /dev/null 2>&1 || die "PLAN/manifest.json is not a manifest: it needs root, inputs and outputs"
+  declared=$(jq -r '.root' "$manifest")
+  [[ $declared == "$root" || $declared == "${WORKPLACE_ROOT%/}" ]] \
+    || die "the plan belongs to the root $declared, not to $root"
+  local -a entries
+  local path want got bad=0 i
+  mapfile -t entries < <(jq -r '.inputs[] | "\(.sha256)\t\(.path)"' "$manifest")
+  for line in "${entries[@]}"; do
+    want=${line%%$'\t'*}
+    path=${line#*$'\t'}
+    [[ $path == /* ]] || path=$clone/$path
+    if ! got=$(sha_of "$path"); then warn "the input $path is missing"; bad=1
+    elif [[ $got != "$want" ]]; then warn "the input $path has changed since the plan was made"; bad=1; fi
+  done
+  local covered
+  covered=$(jq -r --arg facts "$([[ -f $plan_dir/facts.json ]] && printf '%s' yes)" '
+    [.outputs[].path] as $listed
+    | (["plan.json"] + (if $facts == "yes" then ["facts.json"] else [] end))[]
+    | select(. as $f | $listed | index($f) | not)' "$manifest")
+  [[ -z $covered ]] || die "PLAN/manifest.json does not list $(printf '%s ' $covered)among its outputs"
+  mapfile -t entries < <(jq -r '.outputs[] | "\(.sha256)\t\(.path)"' "$manifest")
+  for line in "${entries[@]}"; do
+    want=${line%%$'\t'*}
+    path=$plan_dir/${line#*$'\t'}
+    if ! got=$(sha_of "$path"); then warn "the plan's file $path is missing"; bad=1
+    elif [[ $got != "$want" ]]; then warn "the plan's file $path has changed since the plan was made"; bad=1; fi
+  done
+  (( bad == 0 )) || die "build refuses: the plan no longer matches its sources"
+  plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq"
+  if [[ $facts_member == none ]]; then
+    :
+  elif [[ $facts_member =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    [[ -f $plan_dir/facts.json ]] || die "the plan was made on facts with the digest $facts_member, and PLAN/facts.json is missing" 2
+    [[ sha256:$(sha_of "$plan_dir/facts.json") == "$facts_member" ]] \
+      || die "PLAN/facts.json is not the facts file the plan was made on ($facts_member)"
+    check_facts "$plan_dir/facts.json" || die "build refuses: the machine differs from the facts the plan was made on"
+  else
+    die "the plan's facts member is $facts_member, neither none nor a sha256 digest"
+  fi
+  local -a must
+  mapfile -t must < <(jq -r '.must_exist[]' <<< "$report")
+  for path in "${must[@]}"; do
+    [[ -e $path ]] || { warn "a view grants $path, which does not exist"; bad=1; }
+  done
+  mapfile -t must < <(jq -r '.must_be_directory[]' <<< "$report")
+  for path in "${must[@]}"; do
+    [[ -d $path ]] || { warn "a view makes $path a tmpfs, and it is not a directory"; bad=1; }
+  done
+  local -a tests
+  mapfile -d '' -t tests < <(jq --raw-output0 '.requires[][]' <<< "$report")
+  where=build
+  for (( i = 0; i + 1 < ${#tests[@]}; i += 2 )); do
+    meets "${tests[i]}" "${tests[i + 1]}" || bad=1
+  done
+  (( bad == 0 )) || die "build refuses: a path the plan names is missing or of the wrong kind"
+  local -a sources=("$plan_dir/plan.json" "$plan_dir/manifest.json" "$tool/host/binding.json"
+    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq")
+  local -a listed=("${manifest_files[@]}")
+  if [[ -f $plan_dir/facts.json ]]; then
+    sources+=("$plan_dir/facts.json")
+    listed+=(plan-facts.json)
+  fi
   mkdir -- "$build_dir" || die "cannot make $build_dir"
+  trap 'rm -rf -- "$build_dir"' EXIT
+  trap 'exit 130' INT TERM
   if ! {
-    mkdir -- "$build_dir/libexec" "$build_dir/share" &&
-      cp -- "$plan" "$build_dir/plan.json" &&
+    mkdir -- "$build_dir/libexec" "$build_dir/bin" &&
+      cp -- "$plan_dir/plan.json" "$build_dir/plan.json" &&
+      { [[ ! -f $plan_dir/facts.json ]] || cp -- "$plan_dir/facts.json" "$build_dir/plan-facts.json"; } &&
+      cp -- "$plan_dir/manifest.json" "$build_dir/plan-manifest.json" &&
       cp -- "$tool/host/binding.json" "$build_dir/binding.json" &&
-      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/exec" "$build_dir/libexec/" &&
-      cp -- "$tool/share/denied" "$build_dir/share/denied" &&
-      (cd -- "$build_dir" && sha256sum -- "${manifest_files[@]}") > "$build_dir/MANIFEST.tmp"
+      cp -- "$tool/bin/workplace" "$build_dir/bin/workplace" &&
+      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$build_dir/libexec/"
   }; then
     rm -rf -- "$build_dir"
     die "build failed; $build_dir was removed"
   fi
   local -a source_sums copy_sums
   mapfile -t source_sums < <(sha256sum -- "${sources[@]}")
-  mapfile -t copy_sums < "$build_dir/MANIFEST.tmp"
-  local i
+  mapfile -t copy_sums < <(cd -- "$build_dir" && sha256sum -- "${listed[@]}")
+  (( ${#copy_sums[@]} == ${#sources[@]} )) || { rm -rf -- "$build_dir"; die "cannot hash the build; $build_dir was removed"; }
   for i in "${!sources[@]}"; do
     if [[ ${source_sums[i]%%  *} != "${copy_sums[i]%%  *}" ]]; then
       rm -rf -- "$build_dir"
       die "the copy of ${sources[i]} differs from its source; $build_dir was removed"
     fi
   done
-  printf '%s\n' "${copy_sums[@]}" > "$build_dir/MANIFEST"
-  rm -f -- "$build_dir/MANIFEST.tmp"
+  printf '%s\n' "${copy_sums[@]}" > "$build_dir/MANIFEST" || die "cannot write $build_dir/MANIFEST"
   local sum
-  sum=$(sha256sum -- "$build_dir/MANIFEST")
-  say "built $build_dir: $plan_terms terms; manifest ${sum%%  *}"
+  sum=$(sha_of "$build_dir/MANIFEST") || die "cannot hash $build_dir/MANIFEST"
+  trap - EXIT INT TERM
+  say "built $build_dir: $plan_terms terms; manifest $sum"
+  say "the plan's reader: $(jq -r '.reader // "not given"' "$manifest")"
+  say "its derivations: $(jq -r '(.derivations // {}) | to_entries | map("\(.key) \(.value)") | join(", ")' "$manifest")"
 }
 
 verify_build() {
@@ -188,6 +325,8 @@ log_call() {
 }
 
 teardown() {
+  local mode=${1:-down}
+  undo_failed=0
   [[ -f $run_dir/ledger ]] || return 0
   local -a records fields when call
   local i n record what is out
@@ -201,7 +340,7 @@ teardown() {
     n=${fields[2]}
     when=("${fields[@]:3:n}")
     call=("${fields[@]:3+n+1}")
-    if (( n )); then
+    if (( n )) && [[ $mode == down ]]; then
       if ! run_call out "${when[@]}"; then
         say "undo $what: already gone"
         continue
@@ -213,78 +352,100 @@ teardown() {
     fi
     if run_call out "${call[@]}"; then
       say "undo $what: done"
-    else
+    elif [[ $mode == down ]]; then
       warn "undo $what: failed: $(jq_message "$run_dir/call.err")"
+      undo_failed=1
+    else
+      say "undo $what: already gone"
     fi
   done
 }
 
 resolve_step() {
-  local phase=$1 term=$2 caps=$3 resolved=$4
+  local phase=$1 term=$2 caps=$3
   jq -n --raw-output0 \
-    --argjson st "$state" --argjson term "$term" --argjson caps "$caps" --argjson resolved "$resolved" \
+    --argjson st "$state" --argjson term "$term" --argjson caps "$caps" \
     --slurpfile b "$build_dir/binding.json" --slurpfile t "$run_dir/tables.json" \
-    --arg root "$root" --arg build "$build_dir" --arg phase "$phase" \
+    --arg build "$build_dir" --arg phase "$phase" \
     -f "$build_dir/libexec/resolve.jq" > "$run_dir/step" 2> "$run_dir/step.err"
 }
 
 meets() {
-  local test=$1 value=$2
+  local test=$1 value=$2 line
   case $test in
     directory) [[ -d $value ]] || { warn "$where: $value is not a directory"; return 1; } ;;
     file) [[ -f $value ]] || { warn "$where: $value is not a file"; return 1; } ;;
-    exists) [[ -e $value ]] || { warn "$where: $value does not exist"; return 1; } ;;
     name) [[ -n $value && $value != */* ]] || { warn "$where: '$value' is not a name: empty, or it holds a /"; return 1; } ;;
+    no-new-privs-if-running)
+      [[ $value =~ ^[0-9]+$ ]] || { warn "$where: $value is not a process id"; return 1; }
+      [[ -e /proc/$value ]] || return 0
+      meets no-new-privs "$value"
+      ;;
+    no-new-privs)
+      [[ $value =~ ^[0-9]+$ && -r /proc/$value/status ]] || { warn "$where: cannot read the status of process $value"; return 1; }
+      while IFS= read -r line; do
+        [[ $line == NoNewPrivs:* ]] || continue
+        [[ ${line//[[:space:]]/} == NoNewPrivs:1 ]] && return 0
+        warn "$where: the tmux server (process $value) runs without no-new-privileges; it is refused"
+        return 1
+      done < "/proc/$value/status"
+      warn "$where: process $value reports no NoNewPrivs line"
+      return 1
+      ;;
     *) warn "$where: the binding asks for an unknown test: $test"; return 1 ;;
   esac
+}
+
+seat_file() {
+  local sum
+  sum=$(printf '%s' "$1" | sha256sum) || return 1
+  printf '%s\n' "$run_dir/seats/${sum%% *}.json"
+}
+
+save_seat() {
+  local record=$1 name file
+  name=$(jq -r '.name' <<< "$record") || return 1
+  file=$(seat_file "$name") || return 1
+  jq -c --slurpfile b "$build_dir/binding.json" '.inherit = $b[0].inherit' <<< "$record" > "$file"
 }
 
 apply_term() {
   local record=$1 term
   term=$(jq -c '.term' <<< "$record")
   where=$(jq -r '"\(.path), term \(.n) (\(.term | join(" ")))"' <<< "$record")
-  if ! resolve_step call "$term" '[]' '[]'; then
+  if ! resolve_step call "$term" '[]'; then
     warn "$where: $(jq_message "$run_dir/step.err")"
     return 1
   fi
-  local -a fields argv targets resolved=() captured=()
+  local -a fields argv captured=()
   mapfile -d '' -t fields < "$run_dir/step"
-  local next_state=${fields[1]} has_expect=${fields[2]} expect=${fields[3]} count=${fields[4]} i=5 k target found
+  local next_state=${fields[1]} count=${fields[2]} i=3 k
   for (( k = 0; k < count; k++ )); do
     meets "${fields[i]}" "${fields[i + 1]}" || return 1
     i=$(( i + 2 ))
   done
   count=${fields[i]}
   i=$(( i + 1 ))
-  targets=("${fields[@]:i:count}")
-  i=$(( i + count ))
-  for target in "${targets[@]}"; do
-    found=$(realpath -e -- "$target" 2> /dev/null) || { warn "$where: $target does not resolve to an existing file"; return 1; }
-    resolved+=("$found")
-  done
-  count=${fields[i]}
-  i=$(( i + 1 ))
   argv=("${fields[@]:i:count}")
   i=$(( i + count ))
-  local wanted=${fields[i]} out=""
+  local wanted=${fields[i]} seat=${fields[i + 1]} out=""
   state=$next_state
+  if [[ -n $seat ]]; then
+    save_seat "$seat" || { warn "$where: cannot record the seat"; return 1; }
+  fi
   if (( ${#argv[@]} )); then
     log_call "${argv[@]}"
     if ! run_call out "${argv[@]}"; then
-      warn "$where: ${argv[0]} failed: $(jq_message "$run_dir/call.err")"
-      return 1
-    fi
-    if [[ $has_expect == 1 && $out != "$expect" ]]; then
-      warn "$where: ${argv[0]} printed '${out//$'\n'/ }', and the binding expects '${expect//$'\n'/ }'"
+      warn "$where: ${argv[0]##*/} failed: $(jq_message "$run_dir/call.err")"
       return 1
     fi
   fi
   local caps_json='[]'
   if (( wanted )); then
-    read -r -a captured <<< "$out"
+    read -r -d "" -a captured <<< "$out" || :
     caps_json=$(json_list "${captured[@]}")
   fi
-  if ! resolve_step after "$term" "$caps_json" "$(json_list "${resolved[@]}")"; then
+  if ! resolve_step after "$term" "$caps_json"; then
     warn "$where: $(jq_message "$run_dir/step.err")"
     return 1
   fi
@@ -294,15 +455,17 @@ apply_term() {
   [[ -n ${fields[3]} ]] && printf '%s\n' "${fields[3]}" >> "$run_dir/checks"
   count=${fields[4]}
   i=5
-  local -a then_call=("${fields[@]:i:count}")
-  i=$(( i + count ))
+  for (( k = 0; k < count; k++ )); do
+    meets "${fields[i]}" "${fields[i + 1]}" || return 1
+    i=$(( i + 2 ))
+  done
   count=${fields[i]}
   i=$(( i + 1 ))
-  (( count )) && printf '%s\n' "${fields[@]:i:count}" >> "$run_dir/added.jsonl"
+  local -a then_call=("${fields[@]:i:count}")
   if (( ${#then_call[@]} )); then
     log_call "${then_call[@]}"
     if ! run_call out "${then_call[@]}"; then
-      warn "$where: ${then_call[0]} failed: $(jq_message "$run_dir/call.err")"
+      warn "$where: ${then_call[0]##*/} failed: $(jq_message "$run_dir/call.err")"
       return 1
     fi
   fi
@@ -321,31 +484,199 @@ cmd_up() {
   local run
   printf -v run 'workplace-%08x%08x' "$SRANDOM" "$SRANDOM"
   jq -c '.tables' <<< "$report" > "$run_dir/tables.json"
+  mkdir -- "$run_dir/seats" || die "cannot make $run_dir/seats"
   state=$(jq -n -c --arg root "$root" --arg clone "$clone" --arg build "$build_dir" --arg run "$run" --arg bash "$BASH" \
     --argjson programs "$program_slots" \
     '{slots: ({(["root"] | tojson): $root, (["clone"] | tojson): $clone, (["build"] | tojson): $build,
-               (["run"] | tojson): $run, (["bash"] | tojson): $bash} + $programs), added: {}}')
+               (["run"] | tojson): $run, (["bash"] | tojson): $bash} + $programs)}')
   : > "$run_dir/ledger"
   : > "$run_dir/checks"
-  : > "$run_dir/added.jsonl"
   : > "$run_dir/calls.jsonl"
   local -a records
-  mapfile -t records < <(jq -c '.programs[] | .path as $p | .plan | to_entries[]
-    | {path: $p, n: (.key + 1), term: (.value | if type == "object" then .term else . end)}' "$build_dir/plan.json")
+  local ordered
+  ordered=$(jq -c --slurpfile b "$build_dir/binding.json" '
+    $b[0].order as $order
+    | [.programs[] | .path as $p | .plan | to_entries[]
+       | {path: $p, n: (.key + 1), term: (.value | if type == "object" then .term else . end)}]
+    | sort_by(.term[0] as $name | $order | index($name))[]' "$build_dir/plan.json") \
+    || { rm -rf -- "$run_dir"; die "cannot order the plan's terms"; }
+  mapfile -t records <<< "$ordered"
+  if (( ${#records[@]} != plan_terms )); then
+    rm -rf -- "$run_dir"
+    die "the plan holds $plan_terms terms, and ${#records[@]} were ordered"
+  fi
   local record applied=0
   for record in "${records[@]}"; do
     if ! apply_term "$record"; then
-      teardown
+      teardown failed
       rm -rf -- "$run_dir"
       die "up stopped after $applied of ${#records[@]} terms; everything it made is torn down"
     fi
     applied=$(( applied + 1 ))
   done
+  local leftover
+  leftover=$(jq -r --slurpfile b "$build_dir/binding.json" \
+    '[.slots | keys[] | fromjson | select(.[0] as $s | $b[0].spares | index($s)) | join("/")] | join(", ")' <<< "$state")
+  if [[ -n $leftover ]]; then
+    warn "a pane would stand that is not a seat: nothing claimed $leftover"
+    teardown failed
+    rm -rf -- "$run_dir"
+    die "up stopped after $applied terms; everything it made is torn down"
+  fi
   printf '%s\n' "$state" > "$run_dir/state.json"
-  jq -n --argjson st "$state" --arg root "$root" \
-    '{collector: "workplace", root: $root,
-      facts: [$st.slots | to_entries[] | {fact: "slot", args: (.key | fromjson), value: .value}]}' > "$run_dir/facts.json"
+  jq -n --argjson st "$state" \
+    '[$st.slots | to_entries[] | {slot: (.key | fromjson), value: .value}]' > "$run_dir/slots.json"
   say "up: $applied terms applied; run $run"
+}
+
+cmd_exec() {
+  local print=0
+  if [[ ${1-} == --print ]]; then print=1; shift; fi
+  [[ ${1-} == -- ]] && shift
+  (( $# == 1 )) || die "exec takes a seat's name, with --print and -- before it" 2
+  local seat=$1
+  need_jq
+  locate
+  [[ -d $run_dir/seats ]] || die "nothing is up under $clone; exec starts a seat of a running workplace" 2
+  verify_build || die "exec starts a seat only from a verified build" 2
+  local record file
+  file=$(seat_file "$seat") || die "cannot name the seat's record"
+  [[ -f $file ]] || die "no seat is named $seat in this workplace" 2
+  record=$(jq -c --arg n "$seat" 'select(.name == $n)' "$file") || die "cannot read $file"
+  [[ -n $record ]] || die "the record at $file is not the seat $seat's" 2
+  local -a inherit pairs command assignments=()
+  mapfile -t inherit < <(jq -r '.inherit[]' <<< "$record")
+  local name directory
+  directory=$(jq -r '.directory' <<< "$record")
+  PWD=$directory
+  for name in "${inherit[@]}"; do
+    [[ -n ${!name+x} ]] && assignments+=("$name=${!name}")
+  done
+  mapfile -d '' -t pairs < <(jq --raw-output0 '.environment[] | "\(.[0])=\(.[1])"' <<< "$record")
+  assignments+=("${pairs[@]}")
+  mapfile -d '' -t command < <(jq --raw-output0 '.command[]' <<< "$record")
+  local env_program
+  env_program=$(command -v env) || die "exec needs env, and env is not on PATH" 2
+  local -a argv=("$env_program" -i "${assignments[@]}" "${command[@]}")
+  if (( print )); then
+    json_list "${argv[@]}"
+    return 0
+  fi
+  cd -- "$directory" || die "cannot enter $directory" 2
+  exec "${argv[@]}"
+}
+
+cmd_why() {
+  (( $# == 2 )) || die "why takes a seat's name and an absolute path" 2
+  local seat=$1 path=$2
+  [[ $path == /* ]] || die "why takes an absolute path, not $path" 2
+  need_jq
+  locate
+  local plan=$plan_dir/plan.json binding=$tool/host/binding.json
+  [[ -f $build_dir/plan.json ]] && { plan=$build_dir/plan.json; binding=$build_dir/binding.json; }
+  [[ -f $plan ]] || die "no plan in $plan_dir" 2
+  jq -r --arg seat "$seat" --arg path "$path" --slurpfile b "$binding" -f /dev/stdin "$plan" <<'JQ'
+    $b[0].tables.view as $spec
+    | def term: if type == "object" and .unchecked == true then .term else . end;
+      def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
+      [.programs[].plan[] | term | select(.[0] == "pane" and .[4] == $seat) | .[1:4]] as $keys
+      | if ($keys | length) != 1 then "no seat is named \($seat) in this plan"
+        else
+          $keys[0] as $k
+          | [(.state[$spec.cell] // [])[] | select(.key[0:3] == $k)] as $rows
+          | ([$rows[] | select(.key[3] == $path or beneath($path; .key[3]))] | sort_by(.key[3] | length) | last) as $row
+          | [.programs[] | .path as $file | (.recorded // [])[]
+             | select(.term[0] == $spec.claims.term)
+             | select([.term[$spec.claims.key[]]] == ($k + [$row.key[3] // ""]))
+             | "  \(.term[$spec.claims.value])  from \(.origin.path // $file):\(.origin.line // "?")"] as $claims
+          | "seat \($seat) (\($k | join("/"))), path \($path)",
+            (if ($rows | length) == 0 then "no view: the seat sees the machine as its user does"
+             elif $row == null then "no row covers the path"
+             elif $row.key[3] == $path then "row: \($path) \($row.value[0])"
+             else "no row at the path; its nearest ancestor's row is \($row.key[3]) \($row.value[0])" end),
+            (if $row != null then "claims behind \($row.key[3]): \($claims | length)", $claims[] else empty end)
+        end
+JQ
+}
+
+cmd_doctor() {
+  (( $# == 0 )) || die "doctor takes no arguments" 2
+  local bad=0 program found
+  if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 2) )); then
+    say "ok      bash $BASH_VERSION"
+  else
+    say "old     bash $BASH_VERSION; 5.2 or later is needed"
+    bad=1
+  fi
+  local spec version
+  for spec in "jq --version $JQ_FLOOR" "tmux -V $TMUX_FLOOR"; do
+    set -- $spec
+    if ! command -v "$1" > /dev/null; then say "missing $1"; bad=1; continue; fi
+    if version=$(version_of "$1" "$2"); then
+      if at_least "$version" "$3"; then say "ok      $1 $version"; else say "old     $1 $version; $3 or later is needed"; bad=1; fi
+    else
+      say "unknown $1: its version cannot be read"
+      bad=1
+    fi
+  done
+  for program in setpriv env mkdir cp rm sha256sum stat; do
+    if found=$(command -v "$program"); then
+      version=$(version_of "$found" --version) || version="version unknown"
+      say "ok      $program $version $found"
+    else
+      say "missing $program"
+      bad=1
+    fi
+  done
+  if [[ -r /proc/sys/dev/tty/legacy_tiocsti ]]; then
+    if [[ $(< /proc/sys/dev/tty/legacy_tiocsti) == 0 ]]; then
+      say "ok      TIOCSTI is off: a seat started by hand cannot push input into the terminal that started it"
+    else
+      say "note    TIOCSTI is on: a seat started by hand with exec can push input into the terminal that started it"
+    fi
+  else
+    say "note    the kernel does not say whether TIOCSTI is on"
+  fi
+  if found=$(command -v setpriv) && "$found" --no-new-privs true 2> /dev/null; then
+    say "ok      no-new-privileges can be set"
+  else
+    say "missing no-new-privileges: setpriv --no-new-privs fails"
+    bad=1
+  fi
+  if found=$(command -v bwrap); then
+    if "$found" --unshare-user --unshare-pid --ro-bind / / -- true 2> /dev/null; then
+      say "ok      bwrap $found, with unprivileged user namespaces"
+    else
+      say "refused bwrap cannot make a user namespace on this host"
+      local step=""
+      [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns && $(< /proc/sys/kernel/apparmor_restrict_unprivileged_userns) == 1 ]] \
+        && step="sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
+      [[ -r /proc/sys/kernel/unprivileged_userns_clone && $(< /proc/sys/kernel/unprivileged_userns_clone) == 0 ]] \
+        && step="sysctl -w kernel.unprivileged_userns_clone=1"
+      [[ -r /proc/sys/user/max_user_namespaces && $(< /proc/sys/user/max_user_namespaces) == 0 ]] \
+        && step="sysctl -w user.max_user_namespaces=15000"
+      say "        the host's one root step, which the workplace never takes: ${step:-unknown on this host}"
+      bad=1
+    fi
+  else
+    say "absent  bwrap: needed only by a plan in which a seat has a view"
+  fi
+  return "$bad"
+}
+
+same_socket() {
+  local recorded label here
+  recorded=$(jq -r '.slots[(["socket"] | tojson)] // empty' "$run_dir/state.json" 2> /dev/null)
+  label=$(jq -r '.slots[(["server"] | tojson)] // empty' "$run_dir/state.json" 2> /dev/null)
+  [[ -n $recorded && -n $label ]] || { warn "the run's record names no server socket"; return 1; }
+  local dir=${TMUX_TMPDIR:-/tmp}/tmux-$UID there
+  here=$(cd -P -- "$dir" 2> /dev/null && pwd -P) || here=$dir
+  here=$here/$label
+  there=$(cd -P -- "${recorded%/*}" 2> /dev/null && pwd -P) || there=${recorded%/*}
+  there=$there/${recorded##*/}
+  [[ $here == "$there" ]] && return 0
+  warn "this run's server listens at $recorded, and tmux from this shell would reach $here; run it with the TMUX_TMPDIR of up"
+  return 1
 }
 
 cmd_down() {
@@ -357,7 +688,12 @@ cmd_down() {
     say "down: nothing is up under $clone"
     return 0
   fi
-  teardown
+  [[ -f $run_dir/state.json ]] || die "the run under $run_dir did not finish up; remove $run_dir by hand after checking its server" 2
+  same_socket || die "down refuses, and keeps $run_dir" 2
+  teardown down
+  if (( undo_failed )); then
+    die "an undo failed; $run_dir is kept"
+  fi
   rm -rf -- "$run_dir"
   say "down: done"
 }
@@ -370,8 +706,8 @@ cmd_status() {
   if [[ ! -d $build_dir ]]; then
     say "build: none"
   elif verify_build; then
-    sum=$(sha256sum -- "$build_dir/MANIFEST")
-    say "build: verified, manifest ${sum%%  *}"
+    sum=$(sha_of "$build_dir/MANIFEST")
+    say "build: verified, manifest $sum"
   else
     say "build: does not match its manifest"
     bad=1
@@ -381,6 +717,7 @@ cmd_status() {
     return "$bad"
   fi
   need_tmux
+  same_socket || return 2
   local run
   run=$(jq -r '.slots[(["run"] | tojson)] // "unknown"' "$run_dir/state.json" 2> /dev/null) || run=unknown
   say "run: up, $run"
@@ -393,21 +730,17 @@ cmd_status() {
     is=${fields[1]}
     call=("${fields[@]:2}")
     if run_call out "${call[@]}" && [[ $out == "$is" ]]; then
-      say "ok          $what"
+      say "ok      $what"
     else
-      say "gone        $what"
+      say "gone    $what"
       bad=1
     fi
-  done
-  mapfile -t records < "$run_dir/added.jsonl"
-  for record in "${records[@]}"; do
-    say "unchecked   $(jq -r '"\(.what) \(.path): \(.state), added by the loop for \(.from)"' <<< "$record")"
   done
   return "$bad"
 }
 
 usage() {
-  say "usage: workplace build --plan FILE | up | down | status"
+  say "usage: workplace build | up | exec [--print] SEAT | down | status | why SEAT PATH | doctor"
   say "reads WORKPLACE_ROOT and WORKPLACE_CONFIG"
 }
 
@@ -417,11 +750,13 @@ shift
 case $command in
   build) cmd_build "$@" ;;
   up) cmd_up "$@" ;;
+  exec) cmd_exec "$@" ;;
   down) cmd_down "$@" ;;
-  status)
-    cmd_status "$@"
+  status | doctor)
+    "cmd_$command" "$@"
     exit $?
     ;;
+  why) cmd_why "$@" ;;
   help | --help | -h) usage ;;
   *)
     usage >&2

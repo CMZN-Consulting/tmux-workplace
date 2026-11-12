@@ -2,43 +2,95 @@
 shopt -s nullglob dotglob
 name=$1
 shift
-printf '%s\n' "probe $name start cwd=$PWD seat=${PROBE_SEAT-}"
+report=""
+say() {
+  printf '%s\n' "$*"
+  [[ -n $report ]] && printf '%s\n' "$*" >> "$report"
+}
+pause() { read -r -t "$1" _ <> <(:) || :; }
+term_checks() {
+  local file=$1 other="" i
+  for (( i = 0; i < 200; i++ )); do
+    [[ -s $file ]] && break
+    pause 0.05
+  done
+  IFS= read -r other < "$file" || :
+  if exec 3<> /dev/tty; then say "term /dev/tty: open"; exec 3>&-; else say "term /dev/tty: refused"; fi
+  if stty size > /dev/null 2>&1; then say "term stty: ok"; else say "term stty: refused"; fi
+  set -m
+  pause 2 &
+  local job=$!
+  kill -STOP "$job" 2> /dev/null
+  pause 0.2
+  if [[ $(jobs -l) == *Stopped* ]]; then say "term job stopped: yes"; else say "term job stopped: no"; fi
+  kill -CONT "$job" 2> /dev/null
+  if fg %1 > /dev/null 2>&1; then say "term fg: ok"; else say "term fg: refused"; fi
+  set +m
+  if [[ -n $other ]] && { printf '%s' 'other-pane-write-mark' > "$other"; } 2> /dev/null; then say "term other pane: written"; else say "term other pane: refused"; fi
+}
+term_file=""
+say "probe $name start cwd=$PWD"
 for argument in "$@"; do
   case $argument in
+    report=*) report=${argument#report=}; : > "$report" ;;
     hidden=*)
       place=${argument#hidden=}
       listing=("$place"/*)
       if [[ -e $place/secret ]] || (( ${#listing[@]} )); then seen=seen; else seen=unseen; fi
-      printf '%s\n' "hidden $place: $seen"
+      say "hidden $place: $seen"
       ;;
     ro=*)
       place=${argument#ro=}
       if IFS= read -r line < "$place/page" 2> /dev/null; then got=ok; else got=refused; fi
       if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
-      printf '%s\n' "ro $place: read=$got write=$put"
+      say "ro $place: read=$got write=$put"
       ;;
     rw=*)
       place=${argument#rw=}
       if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
-      printf '%s\n' "rw $place: write=$put"
+      say "rw $place: write=$put"
       ;;
     reach=*)
       place=${argument#reach=}
       if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
-      printf '%s\n' "reach $place: write=$put"
+      say "reach $place: write=$put"
       ;;
     list=*)
       place=${argument#list=}
       if [[ -r $place ]]; then got=ok; else got=refused; fi
-      printf '%s\n' "list $place: $got"
+      say "list $place: $got"
       ;;
-    exec=*)
-      place=${argument#exec=}
-      if "$place" > /dev/null 2>&1; then got=ok; else got=refused; fi
-      printf '%s\n' "exec $place: $got"
+    scratch=*)
+      place=${argument#scratch=}
+      listing=("$place"/*)
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      say "scratch $place: entries=${#listing[@]} write=$put"
       ;;
-    *) printf '%s\n' "arg [$argument]" ;;
+    env)
+      mapfile -d '' -t entries < /proc/self/environ
+      names=()
+      for entry in "${entries[@]}"; do names+=("${entry%%=*}"); done
+      mapfile -t names < <(printf '%s\n' "${names[@]}" | sort)
+      say "env ${names[*]}"
+      ;;
+    value=*)
+      variable=${argument#value=}
+      say "value $variable=${!variable-unset}"
+      ;;
+    pid)
+      procs=(/proc/[0-9]*)
+      say "pid $$ procs ${#procs[@]}"
+      ;;
+    ns) say "ns ipc $(stat -L -c %i /proc/self/ns/ipc) pid $(stat -L -c %i /proc/self/ns/pid)" ;;
+    term=*) term_file=${argument#term=} ;;
+    *) say "arg [$argument]" ;;
   esac
 done
-printf '%s\n' "probe $name done"
+say "probe $name done"
+if [[ -n $term_file ]]; then
+  term_checks "$term_file"
+  say "probe $name term done"
+  tput smcup
+  say "full screen"
+fi
 IFS= read -r _

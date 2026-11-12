@@ -1,0 +1,5 @@
+record : pane = kept
+record : programs = none
+record-limit : 268435456
+record-chain : file
+record-path : records

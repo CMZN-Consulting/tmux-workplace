@@ -1,0 +1,89 @@
+#lang typify
+declare : WorkplaceLogs
+version : 1
+file : programs/LOGS.typify
+optional!
+is : record-what = "pane" | "programs"
+is : record-state = "kept" | "none"
+is : record-bytes = /[1-9][0-9]{0,15}/
+is : record-sink = "journal" | "file"
+is : workplace-path = canonical-path | relative-path | "."
+cell : record-records = shadow
+primitive : record : text text text text record-what record-state
+writes : record : record-records = put 5
+effect : record = state
+cell : record-limit-records = shadow
+primitive : record-limit : record-bytes
+writes : record-limit : record-limit-records = put 1 "limit"
+effect : record-limit = state
+cell : record-chain-records = shadow
+primitive : record-chain : record-sink
+writes : record-chain : record-chain-records = put 1 "chain"
+effect : record-chain = state
+cell : record-path-records = shadow
+primitive : record-path : workplace-path
+writes : record-path : record-path-records = put 1 "path"
+effect : record-path = state
+form : record : <record-what> = <record-state>
+does : record - - - workplace <record-what> <record-state>
+form : record-limit : <record-bytes>
+does : record-limit <record-bytes>
+form : record-chain : <record-sink>
+does : record-chain <record-sink>
+form : record-path : <workplace-path>
+does : record-path <workplace-path>
+end!
+
+declare : OfficeLogs
+version : 1
+file : programs/OFFICE[<office-key>]/LOGS.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : record-what = "pane" | "programs"
+is : record-state = "kept" | "none"
+cell : sessions = shadow
+cell : record-records = shadow
+primitive : record : text text text text record-what record-state
+writes : record : record-records = put 5
+effect : record = state
+ensure : record : office-declared = (bound sessions <office-key>)
+form : record : <record-what> = <record-state>
+does : record <office-key> - - office <record-what> <record-state>
+end!
+
+declare : RoomLogs
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/LOGS.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : record-what = "pane" | "programs"
+is : record-state = "kept" | "none"
+cell : windows = shadow
+cell : record-records = shadow
+primitive : record : text text text text record-what record-state
+writes : record : record-records = put 5
+effect : record = state
+ensure : record : room-declared = (bound windows <office-key> <room-key>)
+form : record : <record-what> = <record-state>
+does : record <office-key> <room-key> - room <record-what> <record-state>
+end!
+
+declare : SeatLogs
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/LOGS.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : record-what = "pane" | "programs"
+is : record-state = "kept" | "none"
+cell : panes = shadow
+cell : record-records = shadow
+primitive : record : text text text text record-what record-state
+writes : record : record-records = put 5
+effect : record = state
+ensure : record : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
+form : record : <record-what> = <record-state>
+does : record <office-key> <room-key> <seat-key> seat <record-what> <record-state>
+end!

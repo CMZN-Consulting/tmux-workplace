@@ -17,6 +17,7 @@ Argument numbers below exclude the constructor name. The plan preserves every pa
 | Kind `home-variable : NAME = SUBPATH` | `home-variable KIND NAME SUBPATH`, argument 3 | Preserve raw relative-or-dot spelling; resolve against that seat's private home, never the workplace root |
 | Workplace `mail : PATH` | `mail PATH`, argument 1 | Join before mailbox placement and protection checks; each seat receives its own fixed mailbox there |
 | Workplace `record-path : PATH` | `record-path PATH`, argument 1 | Join before record exposure and component-wise comparison with the mail path |
+| Workplace `ssh-key : PATH = NAME` | `ssh-key NAME PATH`, argument 2 | Join against the workplace root before private-file visibility checks and build-time loading |
 | Generated `workdir : ROOT` | `configure root ROOT`, argument 2 | ROOT is already absolute canonical and is the root parameter, not a relative resource to rejoin |
 
 The first element of the JSON command array is also a path position. A bare program name uses the seat's PATH. An absolute program path is taken as written. A relative program path containing a slash stands beneath the workplace root. The frame validates this element at plan time, since the language's argv capture is opaque JSON text. Later elements remain literal text; they are not recursively joined.

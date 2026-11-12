@@ -1,0 +1,113 @@
+{
+  "recorded_at": "2026-11-12T21:32:28.139858+00:00",
+  "status": "native source formation and emission matched; frame acceptance pending",
+  "source_parent": "e6347fe9d0c5aaf869e18d94dbc0732279800c47",
+  "reader_commit": "4bb7584a88a4e59bd1295f56f771a3f434e5d7ea",
+  "freeze_sha256": "06d769829c94226007d333dbb2f3692b816baf33591bdecd6ab70a14862f71bc",
+  "calls": {
+    "check": 1,
+    "plan": 8,
+    "frame": 0,
+    "runtime": 0,
+    "model": 0,
+    "key_tool": 0
+  },
+  "results": [
+    {
+      "id": "check",
+      "exit_code": 0,
+      "seconds": 10.849119209000492,
+      "diagnostic_codes": [],
+      "matched": true
+    },
+    {
+      "id": "absent-ssh",
+      "exit_code": 0,
+      "seconds": 11.40231944900006,
+      "diagnostic_codes": [],
+      "matched": true
+    },
+    {
+      "id": "positive",
+      "exit_code": 0,
+      "seconds": 11.241935070996988,
+      "diagnostic_codes": [],
+      "matched": true
+    },
+    {
+      "id": "unknown-name-none",
+      "exit_code": 1,
+      "seconds": 11.318153371990775,
+      "diagnostic_codes": [
+        "E_ENSURE"
+      ],
+      "matched": true
+    },
+    {
+      "id": "unknown-office",
+      "exit_code": 1,
+      "seconds": 11.944035813998198,
+      "diagnostic_codes": [
+        "E_ENSURE"
+      ],
+      "matched": true
+    },
+    {
+      "id": "unknown-room",
+      "exit_code": 1,
+      "seconds": 12.20609862600395,
+      "diagnostic_codes": [
+        "E_ENSURE"
+      ],
+      "matched": true
+    },
+    {
+      "id": "unknown-seat",
+      "exit_code": 1,
+      "seconds": 11.548984790992108,
+      "diagnostic_codes": [
+        "E_ENSURE",
+        "E_ENSURE",
+        "E_ENSURE"
+      ],
+      "matched": true
+    },
+    {
+      "id": "bad-state",
+      "exit_code": 1,
+      "seconds": 11.036174622000544,
+      "diagnostic_codes": [
+        "E_CLASS"
+      ],
+      "matched": true
+    },
+    {
+      "id": "deferred-policy",
+      "exit_code": 0,
+      "seconds": 11.960070686996914,
+      "diagnostic_codes": [],
+      "matched": true
+    }
+  ],
+  "source_and_predictions_unchanged": true,
+  "name_witnesses": [
+    "plain",
+    "İşlem-α",
+    "鍵[#]%+@=",
+    "n:=x",
+    "café"
+  ],
+  "measured": "Exact emitted SSH and Identity terms with origins; duplicate occurrences; declared-name and scoped-structure guards; bad state; optional absence; native acceptance of policy-only contradictions/forbidden names. No executable plan entry ran.",
+  "not_established": [
+    "all legal Unicode names",
+    "frame grant selection or Identity filtering",
+    "private-file masks",
+    "key loading/signing/agent behavior",
+    "live HOUSE readiness"
+  ],
+  "first_edition": {
+    "result": "check failed with five E_CLASS_OVERLAP; no plan invoked",
+    "freeze_sha256": "d550bc85f35d943d79fa212ba3b9da0ab6f2edbb78e85d1652e2f642b2da3eef",
+    "retained_unchanged": true
+  }
+}

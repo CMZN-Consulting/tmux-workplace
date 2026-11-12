@@ -19,15 +19,15 @@
     },
     {
       "path": "layers/Access.typify",
-      "sha256": "a9f1d568d3dd51364e24541dbe48c62f6fd3dd2f678e63584c3a920d66220bb1"
+      "sha256": "a132aa601a373bb9c6581a73b91e4765ead10dd2530113a358c79f5e1133ac84"
     },
     {
       "path": "layers/Agents.typify",
-      "sha256": "724bf85a989fe307bda13fad67389b521b00ef1845736e4a90c307784290b366"
+      "sha256": "4de12232f9273699436c9de0041d18ea4f7eb38b3ce47c0cd9783e21d79f5df4"
     },
     {
       "path": "layers/Host.typify",
-      "sha256": "d288a944c0ae92e5d4c4e90593c7bf4f7515e741f18dcb30491a0521372613a9"
+      "sha256": "8c5407efd600171fe3988b87e70c5306b30c17183805a27b6a3ed61fe0bd994d"
     },
     {
       "path": "programs/ENVIRONMENT.typify",
@@ -125,7 +125,7 @@
   "generated": [
     {
       "path": "LanguageDeclarations.typify",
-      "sha256": "cacc483b4289865b35773f3a4009b6a255d69a1717fe8cbef6b32a2a3af70d0d"
+      "sha256": "58ab601279953682fd37fdce807249a19737be68be660897fdb68058b1ef7c29"
     },
     {
       "path": "tree/ROOT.typify",
@@ -143,25 +143,25 @@
       "source": "layers/Access.typify",
       "source_start_line": 2,
       "assembled_start_line": 48,
-      "line_count": 94
+      "line_count": 98
     },
     {
       "source": "layers/Agents.typify",
       "source_start_line": 2,
-      "assembled_start_line": 142,
-      "line_count": 101
+      "assembled_start_line": 146,
+      "line_count": 102
     },
     {
       "source": "layers/Host.typify",
       "source_start_line": 2,
-      "assembled_start_line": 243,
+      "assembled_start_line": 248,
       "line_count": 57
     }
   ],
   "outputs": [
     {
       "path": "plan.json",
-      "sha256": "c2e88ff3380d0fddd34610196a7be36a726e05331d9fe3f692e38d4ce4717a9c"
+      "sha256": "63418a5f5703441f35ac301202824198921113bfa3d62075b42e9579e98da5a7"
     },
     {
       "path": "view.json",

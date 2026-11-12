@@ -1,0 +1,33 @@
+import base64, os, socket, struct, sys
+
+sock, line, kind = sys.argv[1], sys.argv[2], int(sys.argv[3])
+
+
+def s(b):
+    return struct.pack('>I', len(b)) + b
+
+
+def take(b, i):
+    n = struct.unpack('>I', b[i:i + 4])[0]
+    return b[i + 4:i + 4 + n], i + 4 + n
+
+
+blob = base64.b64decode(line.split()[1])
+name, i = take(blob, 0)
+pub, _ = take(blob, i)
+if name != b'ssh-ed25519':
+    sys.exit('not an ed25519 line')
+msg = bytes([kind]) + s(name) + s(pub) + s(os.urandom(32) + pub) + s(b'forged')
+if kind == 25:
+    msg += bytes([2])
+c = socket.socket(socket.AF_UNIX)
+c.settimeout(10)
+c.connect(sock)
+c.sendall(struct.pack('>I', len(msg)) + msg)
+head = b''
+while len(head) < 5:
+    got = c.recv(5 - len(head))
+    if not got:
+        break
+    head += got
+print({5: 'refused', 6: 'accepted'}.get(head[4] if len(head) == 5 else None, 'no answer'))

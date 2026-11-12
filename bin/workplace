@@ -677,7 +677,7 @@ make_keys() {
       end_key_agent "$home"
       die "build refuses: the key of $who has the usage ${key_usage@Q} and its subkey ${sub_usage@Q}, not signing and authentication alone" 2
     fi
-    printf '%s 0\n' "$sub_grip" > "$home/sshcontrol" && printf '%s\n' no-autostart > "$home/gpg.conf" \
+    printf '%s 0\n' "$sub_grip" > "$home/sshcontrol" && chmod 0444 -- "$home/sshcontrol" && printf '%s\n' no-autostart > "$home/gpg.conf" \
       && rm -rf -- "$home/openpgp-revocs.d" || { end_key_agent "$home"; die "cannot finish the key home $home" 2; }
     pub=$(gpg --homedir "$home" --armor --export -- "$key_fpr" 2> /dev/null) && line=$(gpg --homedir "$home" --export-ssh-key -- "$key_fpr" 2> /dev/null) \
       || { end_key_agent "$home"; die "cannot export the public key of $who" 2; }

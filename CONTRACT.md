@@ -146,7 +146,7 @@
   - For each seat that holds a key, in the order of the panes, `build` makes a home `S/keys/NN`, NN being the seat's place among the panes.
   - In it, under `setsid` with nothing on standard input, it makes an ed25519 key that signs and certifies, with an ed25519 subkey that authenticates. There is no passphrase, no expiry and nothing that encrypts.
   - The user id is `NAME <A.B.C@WORKPLACE>`: the seat's name, and its place at the workplace. A user id that gpg does not make as asked refuses the build by name. The user id is passed after `--`, since gpg reads one that begins with `-` as its options.
-  - The agent of the home has `pinentry-program` set to `false` and `enable-ssh-support`. The home holds the subkey's keygrip in `sshcontrol` and `no-autostart` in `gpg.conf`.
+  - The agent of the home has `pinentry-program` set to `false` and `enable-ssh-support`. The home holds the subkey's keygrip in `sshcontrol`, which is read-only (0444), and `no-autostart` in `gpg.conf`.
 - **C36.** No key outlives its build.
   - Every build removes the old homes of `S/keys`, first removing their runtime socket directories, which ends any agent of them.
   - It removes the revocation certificate that gpg writes unasked, and ends the agent that made the key.
@@ -166,6 +166,7 @@
   - The secret exports give 0 bytes.
   - The agent forbids every command that reads, exports, imports, deletes or changes a key, or reloads or ends the agent.
   - Removing every ssh key changes nothing, and adding one is refused.
+  - An add of a key that already stands in the home, its public half sent with any bytes for its secret, is refused too, and `sshcontrol` stands unchanged. For such a key the agent checks nothing of the secret and would only write the key's grip into `sshcontrol`, and that file is read-only (C35). The seat's own key is still listed alone and signs.
 - **C42.** `down` ends every agent that carries the run's mark, and removes its runtime socket directory once no agent of the home answers.
   - GnuPG makes that directory whenever it is asked about a home, also after its agent has ended. The frame asks only while an agent is expected, and removes the directory wherever it ends an agent: `build` after each key, `up` where it stops before its first term, and `down`. `up` records the directory in the ledger before it starts the agent.
   - No build, run, status or refusal leaves a runtime socket directory of a key home. The tests find a directory by the name GnuPG gives it, the base32 of the home's SHA-1, and never ask GnuPG after an agent has ended.

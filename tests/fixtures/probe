@@ -174,6 +174,13 @@ for argument in "$@"; do
         if ssh-keygen -q -t ed25519 -N '' -f "$place/new" < /dev/null > /dev/null 2>&1 && ssh-add "$place/new" > /dev/null 2>&1; then got=added; else got=refused; fi
         rm -f -- "$place/new" "$place/new.pub"
         say "key ssh add: $got"
+        fpr=$(gpg --with-colons --list-keys 2> /dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+        say "key ssh forged add of the signing key: $(python3 -I "${0%/*}/forge" "$SSH_AUTH_SOCK" "$(gpg --export-ssh-key "$fpr!" 2> /dev/null)" 17 2>&1)"
+        say "key ssh forged add of its own key, confirmed: $(python3 -I "${0%/*}/forge" "$SSH_AUTH_SOCK" "$kind $blob" 25 2>&1)"
+        say "key ssh list after forged adds: $(ssh-add -L 2> /dev/null | cut -d' ' -f1,2 | paste -sd'|')"
+        printf '%s\n' 'a line to sign after' > "$place/msg3"
+        if ssh-keygen -Y sign -f "$place/seat.pub" -n file "$place/msg3" > /dev/null 2>&1; then got=ok; else got=failed; fi
+        say "key ssh sign after forged adds: $got"
       fi
       listing=("/run/user/$EUID/gnupg"/*)
       if [[ -r /run/user/$EUID/gnupg ]] && (( ${#listing[@]} )); then got=seen; else got=unseen; fi

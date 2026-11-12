@@ -9,6 +9,13 @@ loop=$tool/bin/workplace
 fixtures=$here/fixtures
 failures=0
 total=0
+left=()
+for path in /tmp/wpt.* /tmp/wpt-skips.*; do
+  [[ -e $path || -L $path ]] && left+=("$path")
+done
+if (( ${#left[@]} )); then
+  printf '%s\n' "== left by another run, and not touched: ${left[*]}"
+fi
 skips=$(mktemp /tmp/wpt-skips.XXXXXX)
 trap 'rm -f -- "$skips"' EXIT
 declare -a failed_tests=()
@@ -62,7 +69,7 @@ setup() {
   printf '%s\n' page > "$root/harbor/charts/page"
   printf '%s\n' page > "$root/harbor/scratch/page"
   printf '%s\n' page > "$root/orchard/almanac/page"
-  cp -- "$fixtures/probe" "$fixtures/racer" "$root/tools/"
+  cp -- "$fixtures/probe" "$fixtures/racer" "$fixtures/forge" "$root/tools/"
   clone=$root/config
   make_clone "$clone"
   export WORKPLACE_ROOT=$root
@@ -1726,6 +1733,11 @@ t_identity() {
   check "[C37] its fingerprint is the one ssh-keygen gives" \
     test "$(jq -r '.seats[0].ssh_fingerprint' "$keys")" = "$(jq -r '.seats[0].ssh' "$keys" | ssh-keygen -lf - | cut -d' ' -f2)"
   check "[C37] the build's manifest lists keys.json" grep -qE '^[0-9a-f]{64}  keys\.json$' "$clone/BUILD/MANIFEST"
+  check "[C35] sshcontrol holds the subkey's keygrip alone, and is read-only, 0444" \
+    test "$(stat -c %a "$home/sshcontrol") $(grep -cvE '^[[:space:]]*(#|$)' "$home/sshcontrol") $(cut -d' ' -f1 "$home/sshcontrol")" \
+      = "444 1 $(gpg --homedir "$home" --with-colons --with-keygrip --list-keys | awk -F: '$1 == "grp" { g = $10 } END { print g }')"
+  local control
+  control=$(sha256sum < "$home/sshcontrol")
   check "[C35] build leaves no agent running" no_agent_of "$state/keys"
   if [[ -d /run/user/$EUID/gnupg && -r /run/user/$EUID/gnupg ]]; then
     check "[C42] and no runtime socket directory: each key home's, by the name GnuPG gives it, is absent" no_socket_dir_left
@@ -1765,6 +1777,11 @@ t_identity() {
   check "[C40] keeper signs with ssh" r "key ssh sign: ok"
   check "[C41] removing every ssh key changes nothing" r "key ssh after removing all: listed"
   check "[C41] adding a key is refused" r "key ssh add: refused"
+  check "[C41] an add of keeper's signing key, its public half with forged bytes for its secret, is refused" r "key ssh forged add of the signing key: refused"
+  check "[C41] and of its own ssh key so, with a confirmation asked" r "key ssh forged add of its own key, confirmed: refused"
+  check "[C41] sshcontrol stands unchanged" test "$(sha256sum < "$home/sshcontrol")" = "$control"
+  check "[C41] keeper's agent still lists its own ssh key alone" r "key ssh list after forged adds: $(jq -r '.seats[0].ssh' "$keys" | cut -d' ' -f1,2)"
+  check "[C41] and signs with it" r "key ssh sign after forged adds: ok"
   check "[C40] keeper commits with a signature, the committer set to its name and address alone" r "key commit: ok"
   local verify=$scratch/verify
   mkdir -m 0700 -- "$verify"

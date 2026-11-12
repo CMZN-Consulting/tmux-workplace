@@ -998,6 +998,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-v2
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1036,6 +1037,28 @@ t_plan_assembles() {
   check "[C29] build of the plan copied into another clone is refused" exit_is 1 env WORKPLACE_CONFIG="$moved" "$BASH" "$loop" build
   check "[C29] naming both names" said "the manifest names the workplace $label, and the clone assembles it as $(name_of_clone "$moved")"
   rm -rf -- "$moved"
+  cp -- "$manifest" "$scratch/manifest-before"
+  statements_plan '.programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; $root + "/harbor/charts"; "read-only"; 9)]'
+  check "plan a changed plan" exit_is 0 wplan
+  cp -- "$scratch/manifest-before" "$manifest"
+  check "[C29] build refuses a PLAN/ whose plan.json and view.json are new and whose manifest is not" exit_is 1 wp build
+  check "[C29] naming plan.json" said "the plan's file $clone/PLAN/plan.json has changed since the plan was made"
+  check "[C29] and view.json" said "the plan's file $clone/PLAN/view.json has changed since the plan was made"
+  local failing=$scratch/failing-cp
+  mkdir -- "$failing"
+  printf '%s\n' '#!/usr/bin/env bash' '[[ ${!#} != */PLAN/manifest.json ]] || exit 1' "exec $(command -v cp) \"\$@\"" > "$failing/cp"
+  chmod +x -- "$failing/cp"
+  check "[C29] plan that cannot write manifest.json exits 2" exit_is 2 env PATH="$failing:$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C29] saying PLAN/ is incomplete" said "PLAN/ is incomplete, run plan again"
+  check "[C29] it wrote manifest.json last: the outputs are there and the manifest is not" \
+    test "$(ls "$clone/PLAN" | tr '\n' ' ')" = "plan.json view.json "
+  check "[C29] build refuses that PLAN/" exit_is 2 wp build
+  check "[C29] naming the manifest" said "PLAN/manifest.json is missing"
+  check "plan again" exit_is 0 wplan
+  jq '.facts = "none"' "$scratch/plan.json" > "$STUB_DIR/plan.json"
+  check "[C29] plan of a plan with no statement, clearance or label" exit_is 0 wplan
+  check "[C29] removes the view.json that the plan before it wrote" test "$(ls "$clone/PLAN" | tr '\n' ' ')" = "manifest.json plan.json "
+  check "[C29] and lists plan.json alone among the outputs" test "$(jq -r '[.outputs[].path] | join(" ")' "$manifest")" = "plan.json"
   printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify"], "socket": "default"}' > "$clone/workplace.json"
   statements_plan '.programs[0].plan[0][1] = "default"'
   check "[C25] plan with socket default" exit_is 0 wplan
@@ -1061,6 +1084,16 @@ t_plan_refusals() {
   check "[C27] a program with CR line ends is refused with exit 2" exit_is 2 wplan
   check "[C27] naming it" said "the program programs/crlf.typify has CR line ends"
   rm -- "$clone/programs/crlf.typify"
+  mkdir -- "$clone/programs/empty"
+  check "[C27] an empty directory under programs/ is refused with exit 2" exit_is 2 wplan
+  check "[C27] naming it" said "programs/empty is an empty directory; git carries none"
+  check "[C29] build's assembly refuses it with exit 2" exit_is 2 wp build
+  check "[C29] naming it" said "programs/empty is an empty directory; git carries none"
+  rmdir -- "$clone/programs/empty"
+  mkdir -p -- "$clone/programs/nest/inner"
+  check "[C27] an empty directory deeper under programs/ is refused with exit 2" exit_is 2 wplan
+  check "[C27] naming it" said "programs/nest/inner is an empty directory"
+  rm -r -- "$clone/programs/nest"
   printf '%s\n' '{"layers": ["layers/structure.typify", "layers/access.typify", "layers/access.typify"]}' > "$clone/workplace.json"
   check "[C27] a layer listed twice is refused with exit 2" exit_is 2 wplan
   check "[C27] naming it" said "the layer name access is listed 2 times"
@@ -1193,6 +1226,21 @@ t_the_fold() {
   check "[C32] the plan stands, and plan prints the pair" \
     said "label $root/orchard/almanac (1) lies beneath $root/orchard (2), and opens nothing to the seats between: Harbor Pilot, Harbor Watch"
   check "[C32] a statement standing at a labelled path is printed" said "stands at a labelled path: seat harbor/dock/keeper $root/harbor/vault searchable-only"
+
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "keeper"; "seat"; "3"; 9),
+      lb($root + "/harbor/scratch/deep"; "5"; 10), lb($root + "/harbor/scratch/page"; "1"; 11),
+      lb($root + "/harbor/vault/deep"; "5"; 12), lb($root + "/harbor/vault/open"; "1"; 13)]'
+  check "plan with labels beneath a scratch row and a searchable-only row" exit_is 0 wplan
+  check "[C30] rule 5 (5.24): beneath a scratch row, a label above the seat's clearance makes no row" \
+    bash -c '[[ $1 != *"/harbor/scratch/deep "* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5 (5.24): beneath a scratch row, a label at or below the seat's clearance makes no row" \
+    bash -c '[[ $1 != *"/harbor/scratch/page "* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5 (5.24): beneath a searchable-only row, a label above the seat's clearance makes no row" \
+    bash -c '[[ $1 != *"/harbor/vault/deep "* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5: beneath a searchable-only row, a label at or below the seat's clearance makes a read-only row" \
+    bash -c '[[ $1 == *"/harbor/vault/open read-only,"* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5: and the seat's rows are those and no more" \
+    test "$(rows_of keeper)" = "/ read-only,$root/harbor/berth read-write,$root/harbor/hold hidden,$root/harbor/holdall read-write,$root/harbor/ledger hidden,$root/harbor/scratch scratch,$root/harbor/vault searchable-only,$root/harbor/vault/open read-only,$root/harbor/vault/shelf read-write,"
 
   statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
                                               st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10)]'

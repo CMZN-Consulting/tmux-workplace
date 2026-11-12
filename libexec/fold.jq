@@ -102,12 +102,12 @@ def statement_object: {term, origins};
                    if .rows | has($l.path) then
                      (if .rows[$l.path].source == "statement" then .at += [{statement: (.rows[$l.path] | statement_object), label: {value: $l.value, origins: $l.origins}}] else . end)
                    else
-                     ([.rows | keys[] | select(beneath($l.path; .))] | max_by(depth)) as $above
+                     (.rows[[.rows | keys[] | select(beneath($l.path; .))] | max_by(depth)].value[0]) as $above
                      | if $f.clearance.value < $l.value then
-                         .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["hidden"], origins: $l.origins, source: "label"}
-                       elif .rows[$above].value[0] != "hidden" then
-                         .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["read-only"], origins: $l.origins, source: "label"}
-                       else . end
+                         if $above | IN("searchable-only", "scratch") then .
+                         else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["hidden"], origins: $l.origins, source: "label"} end
+                       elif $above | IN("hidden", "scratch") then .
+                       else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["read-only"], origins: $l.origins, source: "label"} end
                    end)) as $made
                | [$made.rows | keys[] as $p | $made.rows[$p]] as $rows
                | $f + {rows: $rows, at: ($made.at | sort_by(.statement.term[5]))}]

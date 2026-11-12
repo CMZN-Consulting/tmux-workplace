@@ -267,10 +267,16 @@ assemble() {
   done
   [[ -d $clone/programs && ! -L $clone/programs ]] || die "$clone/programs is missing; the clone holds its programs there" 2
   [[ -f $clone/tmux.conf && ! -L $clone/tmux.conf ]] || die "$clone/tmux.conf is missing" 2
-  local -a programs=()
+  local -a programs=() inside
   for path in "$clone"/programs/**; do
     [[ -L $path ]] && die "${path#"$clone"/} is a symbolic link; the assembler copies files only" 2
-    [[ -d $path ]] && continue
+    if [[ -d $path ]]; then
+      [[ -r $path && -x $path ]] || die "the directory ${path#"$clone"/} cannot be read" 2
+      inside=("$path"/*)
+      [[ $path == "$clone/programs/" ]] || (( ${#inside[@]} )) \
+        || die "${path#"$clone"/} is an empty directory; git carries none, so a plan made with it could not be made again from the clone" 2
+      continue
+    fi
     [[ -f $path ]] || die "${path#"$clone"/} is not a file" 2
     content=""
     IFS= read -r -d '' content < "$path" || :
@@ -430,7 +436,7 @@ cmd_plan() {
     --argjson map "$assembled_map" --argjson outputs "$out_json" '
     {root: $root, name: $name, reader: $reader,
      derivations: {assembly: "whole-bodies-v1", "root-program": "root-two-lines-v1",
-                   "workplace-name": "sha256-path-prefix12-v1", fold: "frame-5.17-5.18-v1"},
+                   "workplace-name": "sha256-path-prefix12-v1", fold: "frame-5.17-5.18-5.24-v2"},
      inputs: $inputs, generated: $generated, source_map: $map, outputs: $outputs}' > "$work/manifest.json" \
     || die "cannot write the manifest"
   trap '' INT TERM

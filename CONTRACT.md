@@ -81,6 +81,7 @@
   - It refuses, with exit 2:
     - a layer with a byte-order mark, CR line ends, a NUL byte, no `#lang typify` header or no final newline;
     - a program with a byte-order mark or CR line ends;
+    - an empty directory under `programs/`, which git does not carry, so the plan could not be made again from a clone;
     - a layer name listed twice, or a language declared twice;
     - a member of `workplace.json` that it does not read.
 - **C28.** The reader is the program `typify` on the path.
@@ -91,16 +92,21 @@
   - `plan` exits 0 when `PLAN/` is written, 1 when the reader or the fold refuses, and 2 on a fault of its inputs. On a refusal, `PLAN/` stays as it was, and `plan` never touches `BUILD`.
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
-  - `view.json`, when the plan holds statements, clearances or labels, all of which the fold reads;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs.
-  - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
+  - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-v2`.
+  - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
+  - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats.
 - **C30.** The fold reads the plan's `statement A B C SCOPE PATH STATE`, `clearance A B C SCOPE NUMBER` and `label PATH NUMBER` terms from the programs' `recorded` lists, in the plan's order. It takes the seats from the `pane` terms and each seat's kind from the `seat-kinds` cell. For each seat:
   - its statements are the workplace's, its kind's, its office's, its room's and its own;
   - equal statements, clearances and labels count once, and carry the origin of each;
   - a statement is replaced by a narrower one at its path or at a directory above it, by components, and those that remain are the seat's rows;
   - its clearance is its own, else its room's, else its office's, else 0;
-  - labels are taken from the shallowest. Where the seat has no row at a labelled path, the label makes one: hidden below the label; read-only when the nearest row above is not hidden; else none. That row replaces nothing;
+  - labels are taken from the shallowest. Where the seat has no row at a labelled path, the label is read against the nearest row above it:
+    - when the seat's clearance is below the label, it makes a hidden row, and none when that row is searchable-only or scratch;
+    - otherwise it makes a read-only row, and none when that row is hidden or scratch.
+
+    The row a label makes replaces nothing;
   - the rows stand in the byte order of their paths, each with the origins of the statement or label that made it.
 - **C31.** The fold refuses the plan, naming the seat, the paths and the origins, for:
   - a term of the wrong shape, an unknown scope or state, a path that is not canonical, or a number that is not whole;

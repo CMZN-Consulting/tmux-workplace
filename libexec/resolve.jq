@@ -75,7 +75,10 @@ $b[0] as $binding
            emit($root[0])[],
            $spec["after-root"][],
            ($rest[] | emit(.)[]),
-           (after_rows($spec; $st)[] | resolve_all(.args; $st)[] | .v),
+           (after_rows($spec; $st)[]
+            | (resolve_all(.args; $st)[] | .v),
+              (if has("ro-bind-pairs") then (one(.["ro-bind-pairs"]; $st) | fromjson[] | "--ro-bind", .[0], .[1]) else empty end),
+              (resolve_all(.["args-after"] // []; $st)[] | .v)),
            ($spec.tail[] | if type == "object" and has("seat") then $directory else . end)]
       end;
   def seat_record($s; $st):

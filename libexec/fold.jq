@@ -34,7 +34,7 @@ joined($b[0]; $root) as $plan
 | ($seats | map(.[0:2]) | unique) as $rooms
 | [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path")))] as $records
 | def known($scope; $n):
     if $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
@@ -95,12 +95,33 @@ joined($b[0]; $root) as $plan
         elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a reach"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) reach cannot name \($t[1:4] | join(" "))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the reach names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
-        elif $t[5] == "record" then "\($where): record is the action of the Logs layer, which this frame does not build yet; a reach's action is mail, grab or write"
-        elif ($t[5] | IN("mail", "grab", "write") | not) then "\($where): \($t[5]) is not mail, grab or write"
+        elif ($t[5] | IN("mail", "grab", "write", "record") | not) then "\($where): \($t[5]) is not mail, grab, write or record"
         elif ($t[9] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[9]) is not a scope of a reach's target"
         elif places($t[9]; $t[6:9]) | not then "\($where): a \($t[9]) target cannot name \($t[6:9] | join(" "))"
         elif known($t[9]; $t[6:9]) | not then "\($where): the reach's target names \(scope_text($t; $t[9]; $t[6:9])), which the plan does not make"
         elif $t[10] | IN("allowed", "banned") | not then "\($where): \($t[10]) is not allowed or banned"
+        else empty end
+      elif $t[0] == "record" then
+        if ($t | length) != 7 then "\($where): a record has the words record A B C SCOPE WHAT STATE, not \($t | length)"
+        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a record"
+        elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) record cannot name \($t[1:4] | join(" "))"
+        elif known($t[4]; $t[1:4]) | not then "\($where): the record names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
+        elif ($t[5] | IN("pane", "programs") | not) then "\($where): \($t[5]) is not pane or programs"
+        elif ($t[6] | IN("kept", "none") | not) then "\($where): \($t[6]) is not kept or none"
+        elif $t[5] == "programs" and $t[6] == "kept" then "\($where): the record of the programs a seat starts is built after the cutover, and no plan keeps it yet"
+        else empty end
+      elif $t[0] == "record-limit" then
+        if ($t | length) != 2 then "\($where): a record-limit has the words record-limit BYTES, not \($t | length)"
+        elif ($t[1] | test("^[1-9][0-9]{0,15}$") | not) then "\($where): \($t[1]) is not a whole number of bytes above 0"
+        else empty end
+      elif $t[0] == "record-chain" then
+        if ($t | length) != 2 then "\($where): a record-chain has the words record-chain SINK, not \($t | length)"
+        elif ($t[1] | IN("journal", "file") | not) then "\($where): \($t[1]) is not a sink the frame knows: journal or file"
+        else empty end
+      elif $t[0] == "record-path" then
+        if ($t | length) != 2 then "\($where): a record-path has the words record-path PATH, not \($t | length)"
+        elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
+        elif $t[1] == "/" then "\($where): a record path of / would cover each seat's whole view"
         else empty end
       else
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"
@@ -123,6 +144,12 @@ joined($b[0]; $root) as $plan
       | [$records[] | select(.term[0] == "mail")] as $mailed
       | [$records[] | select(.term[0] == "reach")] as $reached
       | ($mailed | map(.term[1]) | unique) as $mail_paths
+      | [$records[] | select(.term[0] == "record")] as $recs
+      | [$records[] | select(.term[0] == "record-limit")] as $limits
+      | [$records[] | select(.term[0] == "record-chain")] as $chains
+      | [$records[] | select(.term[0] == "record-path")] as $rpaths
+      | ($rpaths | map(.term[1]) | unique) as $record_paths
+      | ([$recs, $limits, $chains, $rpaths] | add | length > 0) as $logs
       | [($said | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two statements of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
          ($cleared | group_by(.term[1:5])[] | select((map(.term[5] | tonumber) | unique | length) > 1)
@@ -151,8 +178,24 @@ joined($b[0]; $root) as $plan
           then "two mail terms differ: \([$mail_paths[] as $p | "\($p) from \(ats([$mailed[] | select(.term[1] == $p) | .origin]))"] | join(", "))" else empty end),
          ($reached | group_by(.term[1:10])[] | select((map(.term[10]) | unique | length) > 1)
           | "two reach terms of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) to \(scope_text(.[0].term; .[0].term[9]; .[0].term[6:9])) differ: \(map("\(.term[10]) from \(at(.origin))") | join(", "))"),
-         (if ($reached | length) > 0 and ($mailed | length) == 0
-          then "the plan holds reach terms and no mail term, so no seat has a mailbox to ask in (the reach at \(ats([$reached[].origin])))" else empty end),
+         ([$reached[] | select(.term[5] != "record")] as $asks
+          | if ($asks | length) > 0 and ($mailed | length) == 0
+            then "the plan holds reach terms and no mail term, so no seat has a mailbox to ask in (the reach at \(ats([$asks[].origin])))" else empty end),
+         ([$reached[] | select(.term[5] == "record")] as $reads
+          | if ($reads | length) > 0 and ($rpaths | length) == 0
+            then "the plan holds reach terms for records and no record-path term, so no seat is shown a record (the reach at \(ats([$reads[].origin])))" else empty end),
+         ($recs | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
+          | "two records of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about its \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
+         (["record-limit", $limits], ["record-chain", $chains], ["record-path", $rpaths] | . as [$word, $terms]
+          | select(($terms | map(.term[1]) | unique | length) > 1)
+          | "two \($word) terms differ: \([$terms | map(.term[1]) | unique | .[] as $v | "\($v) from \(ats([$terms[] | select(.term[1] == $v) | .origin]))"] | join(", "))"),
+         ($record_paths[] as $r | $mail_paths[] as $m | select(at_or_beneath($r; $m) or at_or_beneath($m; $r))
+          | "the record path \($r) and the mail path \($m) lie one in the other (the record-path at \(ats([$rpaths[] | select(.term[1] == $r) | .origin])); the mail at \(ats([$mailed[] | select(.term[1] == $m) | .origin])))"),
+         ($record_paths[] as $m
+          | ($said[] | select(at_or_beneath(.term[5]; $m))
+             | "\(at(.origin)): the statement speaks of \(.term[5]), which lies at or beneath the record path \($m), where the frame shows a seat the records it may read (the record-path at \(ats([$rpaths[] | select(.term[1] == $m) | .origin])))"),
+            ($labelled[] | select(at_or_beneath(.term[1]; $m))
+             | "\(at(.origin)): the label speaks of \(.term[1]), which lies at or beneath the record path \($m), where the frame shows a seat the records it may read (the record-path at \(ats([$rpaths[] | select(.term[1] == $m) | .origin])))")),
          ($mail_paths[] as $m
           | ($said[] | select(at_or_beneath(.term[5]; $m))
              | "\(at(.origin)): the statement speaks of \(.term[5]), which lies at or beneath the mail path \($m), where the frame shows each seat its mailbox (the mail at \(ats([$mailed[] | select(.term[1] == $m) | .origin])))"),
@@ -168,6 +211,8 @@ joined($b[0]; $root) as $plan
           | entities($seeded) as $seeds
           | entities($expected) as $expects
           | entities($reached) as $reaches
+          | entities($recs) as $record_terms
+          | (if ($rpaths | length) == 0 then null else $record_paths[0] end) as $record_path
           | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
           | def holds($scope; $n; $k):
               $scope == "workplace" or ($scope == "office" and $n[0] == $k[0]) or ($scope == "room" and $n[0:2] == $k[0:2]) or ($scope == "seat" and $n == $k);
@@ -214,11 +259,19 @@ joined($b[0]; $root) as $plan
                 | map({name: .[0].term[5], scopes: (map(.term[4]) | unique | sort_by(rank)), origins: [.[].origins[]]})) as $expecting
              | ([$remaining[] | {key: .term[5], value: {key: ($k + [.term[5]]), value: [.term[6]], origins, source: "statement", term}}]
                 | from_entries) as $stated
-             | (if $mail == null then null
-                else [["mail", "grab", "write"][] as $action
+             | ((if $mail == null then [] else ["mail", "grab", "write"] end) + (if $record_path == null then [] else ["record"] end)) as $actions
+             | (if ($actions | length) == 0 then null
+                else [$actions[] as $action
                       | {key: $action, value: [$panes[] | . as $tp | decide($action; $k; $tp[1:4]) | select(.state == "allowed") | {name: $tp[4], origins}]}]
                      | from_entries end) as $reach
-             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach}]
+             | ([$record_terms[] | select(.term[5] == "pane" and .term[4] == "seat" and .term[1:4] == $k)]
+                + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "room" and .term[1:3] == $k[0:2])]
+                + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "office" and .term[1] == $k[0])]
+                + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "workplace")]) as $spoke
+             | (if $logs | not then null
+                elif ($spoke | length) == 0 then {pane: "none", scope: null, origins: []}
+                else {pane: $spoke[0].term[6], scope: $spoke[0].term[4], origins: $spoke[0].origins} end) as $record
+             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record}]
           as $folds
           | [$folds[] | select(.home != null) | . as $f
              | ([$f.home.variable] + [$f.home.variables[].name]) as $given
@@ -226,8 +279,11 @@ joined($b[0]; $root) as $plan
              | "seat \($f.name) (\($f.seat | join("/"))): it expects the value \(.name), which the home of its kind \($f.home.kind) gives it (the expect at \(ats(.origins)); the home at \(ats($f.home.origins + [$f.home.variables[] | select(.name == $n) | .origins[]])))"] as $clashes
           | [$folds[] | select(.stated | has("/") | not)
              | "seat \(.name) (\(.seat | join("/"))): no row for /"
-               + (if $mail != null or ($reached | length) > 0
-                  then ": it has no view, and a seat with no view could write as any seat, which the plan's \(if $mail != null then "mail" else "reach" end) terms do not allow (at \(ats(if $mail != null then $mail.origins else [$reached[].origin] end)))"
+               + ([$reached[] | select(.term[5] != "record")] as $asks
+                  | if $mail != null or ($asks | length) > 0
+                  then ": it has no view, and a seat with no view could write as any seat, which the plan's \(if $mail != null then "mail" else "reach" end) terms do not allow (at \(ats(if $mail != null then $mail.origins else [$asks[].origin] end)))"
+                  elif .record.pane? == "kept"
+                  then ": it has no view, and a seat with no view could reach its own record, which the plan keeps (the record at \(ats(.record.origins)))"
                   else "" end)] as $rootless
           | if ($clashes | length) > 0 then {errors: $clashes}
             elif ($rootless | length) > 0 then {errors: $rootless}
@@ -256,7 +312,10 @@ joined($b[0]; $root) as $plan
                      | "seat \($f.name) (\($f.seat | join("/"))): \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) lies at or beneath \(.path), labelled \(.value) (from \(ats(.origins))), above the seat's clearance \($f.clearance.value)")),
                  (if $mail == null then empty
                   else $f.rows[] | select(.value[0] == "hidden" and beneath($mail.path; .key[3]))
-                    | "seat \($f.name) (\($f.seat | join("/"))): its mailbox at \($mail.path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the mail at \(ats($mail.origins)))" end)]
+                    | "seat \($f.name) (\($f.seat | join("/"))): its mailbox at \($mail.path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the mail at \(ats($mail.origins)))" end),
+                 (if $record_path == null then empty
+                  else $f.rows[] | select(.value[0] == "hidden" and beneath($record_path; .key[3]))
+                    | "seat \($f.name) (\($f.seat | join("/"))): its record path \($record_path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the record-path at \(ats([$rpaths[].origin])))" end)]
             as $refused
             | if ($refused | length) > 0 then {errors: $refused}
               else
@@ -276,13 +335,18 @@ joined($b[0]; $root) as $plan
                      + (if .home == null then {} else {home} end)
                      + (if (.expects | length) == 0 then {} else {expects} end)
                      + (if .reach == null then {} else {reach: (.reach | map_values(map(.name)))} end)
+                     + (if .record == null then {} else {record} end)
                      + {
                       rows: (.rows | length),
                       replacement_statements: .replacing,
                       exception_count: (.replacing | length),
                       distinct_replaced_statement_count: .distinct,
                       statements_at_labelled_paths: .at}]}
-                    + (if $mail == null then {} else {mail: $mail} end)),
+                    + (if $mail == null then {} else {mail: $mail} end)
+                    + (if $logs | not then {}
+                       else {records: {path: $record_path, limit: ((($limits | map(.term[1]) | unique)[0] // "268435456") | tonumber),
+                                       chain: (($chains | map(.term[1]) | unique)[0] // null),
+                                       origins: [$limits[].origin, $chains[].origin, $rpaths[].origin]}} end)),
                    report: {
                      names: [$done[] | {key: (.seat | tojson), value: .name}] | from_entries,
                      reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,

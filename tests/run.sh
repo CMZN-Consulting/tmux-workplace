@@ -27,8 +27,8 @@ check() {
   if "$@"; then note "  ok: $message"; else fail "$message"; fi
 }
 
-T() { setpriv --no-new-privs tmux -L "$label" -u "$@"; }
-start_a_server_without_no_new_privileges() { tmux -L "$label" -u -f /dev/null new-session -d -s "$1"; }
+T() { setpriv --no-new-privs tmux -S "$run/$label" -u "$@"; }
+B() { setpriv --no-new-privs tmux -L bystander -u "$@"; }
 wp() { "$BASH" "$loop" "$@"; }
 
 name_of_clone() {
@@ -176,15 +176,21 @@ cleanup() {
       gpgconf --homedir "$home" --remove-socketdir > /dev/null 2>&1
     done < <(key_homes)
   fi
+  [[ -S ${run-}/$label ]] && tmux -S "$run/$label" kill-server 2> /dev/null
+  if [[ -n ${label-} ]] && command -v systemctl > /dev/null; then
+    timeout 30 systemctl --user stop -- "workplace-carrier-$label.service" > /dev/null 2>&1
+  fi
+  [[ -n ${label2-} && -S $root/config2/BUILD/RUN/$label2 ]] && tmux -S "$root/config2/BUILD/RUN/$label2" kill-server 2> /dev/null
   if [[ $TMUX_TMPDIR == "$scratch"/* ]]; then
-    tmux -S "$TMUX_TMPDIR/tmux-$UID/$label" kill-server 2> /dev/null
-    [[ -n ${label2-} ]] && tmux -S "$TMUX_TMPDIR/tmux-$UID/$label2" kill-server 2> /dev/null
+    for home in "$TMUX_TMPDIR/tmux-$UID"/*; do
+      [[ -S $home ]] && tmux -S "$home" kill-server 2> /dev/null
+    done
   fi
   rm -rf -- "$scratch"
 }
 
 pane_by_title() {
-  T list-panes -a -F '#{pane_title}	#{pane_id}' | while IFS=$'\t' read -r title id; do
+  T list-panes -a -F '#{pane_title}	#{pane_id}' 2> /dev/null | while IFS=$'\t' read -r title id; do
     [[ $title == "$1" ]] && printf '%s\n' "$id"
   done
 }
@@ -417,21 +423,21 @@ t_structure_and_order() {
 }
 
 t_a_foreign_tmux_in_the_environment() {
-  T -f /dev/null new-session -d -s bystander
-  T select-pane -t =bystander: -T Bystander
-  T set-option -g @workplace-clone "$clone"
+  B -f /dev/null new-session -d -s bystander
+  B select-pane -t =bystander: -T Bystander
   local socket pane
-  socket=$(T display -p -t =bystander: '#{socket_path},#{pid},#{session_id}')
-  pane=$(T display -p -t =bystander: '#{pane_id}')
+  socket=$(B display -p -t =bystander: '#{socket_path},#{pid},#{session_id}')
+  pane=$(B display -p -t =bystander: '#{pane_id}')
   make_plan
   check "build" exit_is 0 wp build
   check "[C10] up with TMUX and TMUX_PANE naming the bystander's pane" \
     exit_is 0 env TMUX="$socket" TMUX_PANE="$pane" "$BASH" "$loop" up
-  check "[C10] every title landed on its own seat" \
-    test "$(T list-panes -a -F '#{pane_title}' | sort | tr '\n' ',')" = "Bystander,Harbor Keeper,Harbor Pilot,Harbor Watch,Orchard Grower,Orchard Picker,"
-  check "[C11] no run mark reached the bystander" test -z "$(T show-options -qv -t =bystander: @workplace)"
+  check "[C10] every title landed on its own seat, in the workplace's own server" \
+    test "$(T list-panes -a -F '#{pane_title}' | sort | tr '\n' ',')" = "Harbor Keeper,Harbor Pilot,Harbor Watch,Orchard Grower,Orchard Picker,"
+  check "[C11] no run mark reached the bystander's server, nor any pane" \
+    test "$(B show-options -qv -t =bystander: @workplace)$(B list-panes -a -F '#{pane_title}')" = Bystander
   check "[C10] down with the same environment" exit_is 0 env TMUX="$socket" TMUX_PANE="$pane" "$BASH" "$loop" down
-  check "[C18] the bystander survives" sessions_are "bystander "
+  check "[C18] the bystander survives" test "$(B list-sessions -F '#{session_name}')" = bystander
 }
 
 t_programs_out_of_order() {
@@ -505,9 +511,11 @@ tmpfs $root/harbor/scratch
 tmpfs $root/harbor/vault
 bind $root/harbor/vault/shelf
 tmpfs $clone"
+  [[ -d $TMUX_TMPDIR/tmux-$UID ]] && expected+=$'\n'"tmpfs $TMUX_TMPDIR/tmux-$UID"
+  [[ -d /tmp/tmux-$UID && /tmp/tmux-$UID != "$TMUX_TMPDIR/tmux-$UID" ]] && expected+=$'\n'"tmpfs /tmp/tmux-$UID"
   [[ -d /run/user/$EUID/gnupg ]] && expected+=$'\n'"tmpfs /run/user/$EUID/gnupg"
   expected+=$'\n'"tmpfs $HOME/.local/state/workplace"
-  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order, then the frame's masks (C39, C52)" \
+  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order, then the frame's masks (C39, C52, C68)" \
     test "$(view_ops "$(seat_command 'Harbor Keeper')" | sed 's/^ro-bind /bind /')" = "$expected"
   check "[C12] bwrap is named by its absolute path" \
     test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Keeper')")" = "$(command -v bwrap)"
@@ -628,17 +636,18 @@ t_fixed_part() {
 }
 
 t_server_privilege() {
-  if [[ $(nnp_of $$) == NoNewPrivs:1 ]]; then
-    skip "[C10] this shell already runs under no-new-privileges, so no server it starts can lack it; measured where the shell does not"
-    return 0
-  fi
-  make_plan
-  check "build" exit_is 0 wp build
-  start_a_server_without_no_new_privileges bystander
-  T set-option -g @workplace-clone "$clone"
-  check "[C10] up refuses a running server without no-new-privileges" exit_is 1 wp up
-  check "[C10] the refusal says why" said "runs without no-new-privileges; it is refused"
-  check "[C10] no session was built, and the bystander survives" sessions_are "bystander "
+  local long=$root/a-directory-whose-name-is-long-enough-to-carry-the-clone-past-the-length-of-a-socket
+  make_clone "$long/config"
+  local second=$long/config label_long
+  label_long=$(name_of_clone "$second")
+  cp -- "$scratch/plan.json" "$scratch/plan-first.json"
+  render "$label_long" "$second/tmux.conf" > "$scratch/plan.json"
+  PLAN_CLONE=$second make_plan
+  cp -- "$scratch/plan-first.json" "$scratch/plan.json"
+  check "build a clone whose path is long" exit_is 0 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" build
+  check "[C68] up refuses, with exit 2, a server whose socket's path would be too long for a socket" exit_is 2 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" up
+  check "[C68] naming the path and its length" said "the server's socket would be $second/BUILD/RUN/$label_long, $(( ${#second} + 11 + ${#label_long} )) bytes, and a socket's path holds at most 107"
+  check "[C68] and starts nothing" test ! -e "$second/BUILD/RUN"
 }
 
 t_a_server_that_ends_before_its_check() {
@@ -671,12 +680,10 @@ t_failure_leaves_nothing() {
   make_plan --arg root "$root" '.programs[10].plan[1].term[4] = ($root + "/orchard/gone")'
   check "build of a plan whose last seat starts in a directory that will be removed" exit_is 0 wp build
   rmdir -- "$root/orchard/gone"
-  T -f /dev/null new-session -d -s bystander
-  T set-option -g @workplace-clone "$clone"
   check "[C19] up exits 1 at the last start" exit_is 1 wp up
   check "[C19] the failure names the directory" said "$root/orchard/gone is not a directory"
   check "[C19] every session it made is torn down, by its captured id" said "undo session/harbor: done"
-  check "[C19] the test's own session survives" sessions_are "bystander "
+  check "[C19] and no server is left" no_server
   check "[C19] no RUN is left" test ! -e "$run"
 }
 
@@ -711,9 +718,10 @@ t_unattached_options() {
     check "[C11] the refusal comes from the server's check" said "where the binding requires"
     check "[C11] no session was built" test -z "$(T list-sessions -F x 2> /dev/null)"
     if [[ $conf == tmux-exit-empty-off.conf ]]; then
-      local socket=$TMUX_TMPDIR/tmux-$UID/$label
-      check "[C11] the refusal names the empty server it leaves and the command that ends it" \
-        said "the tmux server at $socket is left running with no session, and the loop never ends a server; to end it: tmux -S ${socket@Q} kill-server"
+      local socket=$run/$label
+      check "[C11] the refusal names the empty server it leaves and the command that ends it, and keeps RUN, which holds its socket" \
+        said "the tmux server at $socket is left running with no session, and the loop never ends a server; $run, which holds its socket, is kept while it stands. To end it: tmux -S ${socket@Q} kill-server, and then remove $run"
+      check "[C11] RUN is kept" test -d "$run"
       check "[C11] that command ends it" tmux -S "$socket" kill-server
       check "[C11] and no server is left" no_server
     else
@@ -730,6 +738,10 @@ t_down_removes_only_its_own() {
   check "[C18] down undid the sessions newest first" \
     test "$(grep -o 'undo session/[a-z]*' "$scratch/out" | tr '\n' ' ')" = "undo session/orchard undo session/harbor "
   check "[C18] down removed the workplace and left the test's sessions" sessions_are "Harbor-annex bystander "
+  check "[C18] it keeps RUN, which holds the server's socket, while the server holds them" test -d "$run"
+  check "[C18] saying so" said "still holds sessions that this run did not make (2)"
+  T kill-server
+  check "[C18] down again, once the server has ended" exit_is 0 wp down
   check "[C18] down removed RUN" test ! -e "$run"
   check "[C18] down kept BUILD" test -f "$clone/BUILD/MANIFEST"
   check "[C22] status says down" exit_is 0 wp status
@@ -747,10 +759,8 @@ t_status_and_down_on_a_damaged_run() {
   check "[C22] and the others ok" said "ok      seat/Harbor Pilot"
   local elsewhere=$scratch/other-tmp
   mkdir -p -- "$elsewhere"
-  check "[C18] down from a shell that reaches another socket refuses" exit_is 2 env TMUX_TMPDIR="$elsewhere" "$BASH" "$loop" down
-  check "[C18] the refusal names both sockets" said "tmux from this shell would reach $elsewhere"
-  check "[C18] and RUN is kept" test -d "$run"
-  check "[C18] down from the right shell" exit_is 0 wp down
+  check "[C18] down from a shell whose TMUX_TMPDIR differs reaches the run's server by its socket's path" exit_is 0 env TMUX_TMPDIR="$elsewhere" "$BASH" "$loop" down
+  check "[C18] and removes RUN" test ! -e "$run"
 }
 
 t_down_after_the_server_restarted() {
@@ -758,7 +768,7 @@ t_down_after_the_server_restarted() {
   local first i
   first=$(T display -p -t =Harbor: '#{session_id}')
   T kill-server
-  for (( i = 0; i < 100; i++ )); do [[ -S $TMUX_TMPDIR/tmux-$UID/$label ]] || break; sleep 0.05; done
+  for (( i = 0; i < 100; i++ )); do [[ -S $run/$label ]] || break; sleep 0.05; done
   T -f /dev/null new-session -d -s stranger
   check "the stranger now holds the id the workplace's first session had" \
     test "$(T display -p -t =stranger: '#{session_id}')" = "$first"
@@ -780,10 +790,10 @@ t_two_workplaces() {
   PLAN_CLONE=$second make_plan
   check "[C25] build and up the second" exit_is 0 bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" build && WORKPLACE_CONFIG=$1 "$BASH" "$2" up' _ "$second" "$loop"
   check "[C25] each has its own server" \
-    test "$(tmux -L "$label2" list-sessions -F '#{session_name}' | sort | tr '\n' ' ')" = "Harbor Orchard "
+    test "$(tmux -S "$second/BUILD/RUN/$label2" list-sessions -F '#{session_name}' | sort | tr '\n' ' ')" = "Harbor Orchard "
   check "[C25] down the first" exit_is 0 wp down
   check "[C25] the first is gone" no_server
-  check "[C25] the second stands" test "$(tmux -L "$label2" list-panes -a -F x | wc -l)" = 5
+  check "[C25] the second stands" test "$(tmux -S "$second/BUILD/RUN/$label2" list-panes -a -F x | wc -l)" = 5
   check "[C25] down the second" exit_is 0 bash -c 'WORKPLACE_CONFIG=$1 "$BASH" "$2" down' _ "$second" "$loop"
 }
 
@@ -794,7 +804,7 @@ t_the_default_name() {
   jq 'del(.derivations)' "$clone/PLAN/manifest.json" > "$scratch/manifest" && cp -- "$scratch/manifest" "$clone/PLAN/manifest.json"
   check "[C25] a plan whose server term says default builds, with no rule for the name" exit_is 0 wp build
   check "[C25] and comes up" exit_is 0 wp up
-  check "[C25] its server is tmux's default socket under this test's own TMUX_TMPDIR" test -S "$TMUX_TMPDIR/tmux-$UID/default"
+  check "[C25] its server is named default, and its socket stands in the clone's run directory" test -S "$run/default"
   check "[C25] the seats run there" wait_for_probe "Harbor Watch" watch
   check "[C25] down" exit_is 0 wp down
 }
@@ -907,9 +917,9 @@ t_the_callers_locale() {
   check "[C26] down under $other" exit_is 0 "${in_locale[@]}" down
   export TMUX_TMPDIR=$scratch/sockets-ü
   mkdir -p -- "$TMUX_TMPDIR"
-  check "[C26] up under C, where tmux's socket lies in a directory whose name is not ASCII" exit_is 0 wp up
+  check "[C26] up under C, with a TMUX_TMPDIR whose name is not ASCII, and the run's socket where it always stands" exit_is 0 wp up
   check "[C26] the run records the socket as it is" \
-    test "$(jq -r '.slots[(["socket"] | tojson)]' "$run/state.json")" = "$TMUX_TMPDIR/tmux-$UID/$label"
+    test "$(jq -r '.slots[(["socket"] | tojson)]' "$run/state.json")" = "$run/$label"
   check "[C26] status finds it" exit_is 0 wp status
   check "[C26] down finds it" exit_is 0 wp down
 }
@@ -1151,7 +1161,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-v5
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1580,7 +1590,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-v5
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -1600,7 +1610,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-v5; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -1609,7 +1619,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-v5; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -1839,7 +1849,7 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-v5
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
   check "[C32] plan prints each seat's home and the names it expects" \
     bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; clearance 0, by default; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; clearance 0, by default; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
@@ -2216,43 +2226,66 @@ t_a_server_belongs_to_one_clone() {
   label=default
   render default > "$scratch/plan.json"
   check "build and up a workplace whose server is named default, as any clone's may be" up_fixture
+  check "[C53] its server's socket stands in the clone's run directory" test -S "$run/default"
   check "[C53] up marks its server with its clone" test "$(T show-options -gqv @workplace-clone)" = "$clone"
   wp status > "$scratch/out" 2>&1
   check "[C53] status reads the mark" said "ok      the server, process $(T display -p '#{pid}'), carries this clone's mark"
-  local second=$root/config2 socket=$TMUX_TMPDIR/tmux-$UID/default
+  check "[C53] and prints the line that attaches to the server" said "attach  tmux -S '$run/default' attach"
+  local second=$root/config2
   make_clone "$second"
   cp -- "$scratch/plan.json" "$scratch/plan-first.json"
   render default "$second/tmux.conf" > "$scratch/plan.json"
   PLAN_CLONE=$second make_plan
   cp -- "$scratch/plan-first.json" "$scratch/plan.json"
   check "build another clone that names the same server" exit_is 0 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" build
-  check "[C53] its up refuses the server that carries the first clone's mark, with exit 1" exit_is 1 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" up
-  check "[C53] naming both clones" said "the tmux server default at $socket carries the mark of the clone $clone, not this one's ($second); up leaves it alone"
-  check "[C53] before any term: the other clone has no run" test ! -e "$second/BUILD/RUN"
-  check "[C53] and the first's sessions stand as they were" sessions_are "Harbor Orchard "
-  check "down" exit_is 0 wp down
-  T -f /dev/null new-session -d -s foreign
-  check "[C53] up refuses a server that holds sessions and carries no mark, with exit 1" exit_is 1 wp up
-  check "[C53] naming it" said "the tmux server default at $socket holds sessions (1) and carries no clone's mark; up leaves it alone"
-  check "[C53] and leaves its session alone" sessions_are "foreign "
-  T kill-server
-  check "up" exit_is 0 wp up
-  T new-session -d -s extra
-  check "down, while another session keeps the server" exit_is 0 wp down
-  check "the server stands, with its mark" test "$(T show-options -gqv @workplace-clone)" = "$clone"
-  check "[C53] up again takes the workplace's own server, which carries its mark" exit_is 0 wp up
-  check "[C53] and stands in it" sessions_are "Harbor Orchard extra "
+  check "[C53] it comes up beside the first, on a server of its own, since each run's socket stands in its own clone" \
+    exit_is 0 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" up
+  check "[C53] each server carries its own clone's mark" \
+    test "$(T show-options -gqv @workplace-clone) $(tmux -S "$second/BUILD/RUN/default" show-options -gqv @workplace-clone)" = "$clone $second"
+  check "down the second" exit_is 0 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" down
+  check "[C53] and the first stands as it was" sessions_are "Harbor Orchard "
   T set-option -g @workplace-clone /elsewhere
   check "[C53] status exits 1 when the server carries another clone's mark" exit_is 1 wp status
-  check "[C53] naming it" said "refused the server at $socket carries the mark of the clone /elsewhere, not this one's"
+  check "[C53] naming it" said "refused the server at $run/default carries the mark of the clone /elsewhere, not this one's"
   check "[C53] down refuses it, with exit 2" exit_is 2 wp down
   check "[C53] and keeps RUN" test -d "$run"
   T set-option -gu @workplace-clone
   check "[C53] status exits 1 when the run's own server has lost its mark" exit_is 1 wp status
   check "[C53] telling it from another server by the process the run recorded" said "missing the server, process $(T display -p '#{pid}'), is the run's own and has lost its mark"
+  T new-session -d -s extra
   check "[C53] down goes on, each undo checking its own mark" exit_is 0 wp down
-  check "[C53] and leaves the other session" sessions_are "extra "
+  check "[C53] and leaves the session it did not make" sessions_are "extra "
+  check "[C53] keeping RUN, which holds the server's socket, while that server stands" said "down: the server at $run/default still holds sessions that this run did not make (1); $run, which holds its socket, is kept while it stands"
   T kill-server
+}
+
+t_no_seat_reaches_a_tmux_server() {
+  local default_dir=$TMUX_TMPDIR/tmux-$UID
+  B -f /dev/null new-session -d -s outside
+  local outside=$default_dir/bystander
+  check "a second tmux server stands in the user's default directory" test -S "$outside"
+  make_plan --arg root "$root" --arg label "$label" --arg outside "$outside" --arg dd "$default_dir" \
+    '(.programs[] | select(.path == "harbor/dock/keeper/seat.typify") | .plan[1].term[5]) |= (fromjson
+      + ["report=" + $root + "/harbor/berth/keeper", "socket=" + $root + "/config/BUILD/RUN/" + $label, "socket=" + $outside, "list=" + $dd] | tojson)'
+  check "[C68] keeper's only row above the run directory and the user's tmux directory is / read-only" \
+    test "$(jq -r --arg a "$run" --arg b "$default_dir" '[.state.view[] | select(.key[2] == "keeper") | .key[3] as $p
+      | select($p == "/" or ($a | startswith($p + "/")) or ($b | startswith($p + "/"))) | "\($p) \(.value[0])"] | join(",")' "$clone/PLAN/plan.json")" = "/ read-only"
+  check "build" exit_is 0 wp build
+  check "up" exit_is 0 wp up
+  check "[C68] the workplace's server listens in the run directory, in the clone" test -S "$run/$label"
+  check "keeper ran" eventually_long grep -qx "probe keeper done" "$root/harbor/berth/keeper"
+  check "[C68] from inside a seat's view the workplace's server, tried by its real path, is refused" \
+    grep -qxF "socket $run/$label: refused" "$root/harbor/berth/keeper"
+  check "[C68] and so is a second server of the user's, in the user's default tmux directory" \
+    grep -qxF "socket $outside: refused" "$root/harbor/berth/keeper"
+  check "[C68] the user's tmux directory cannot be listed there" grep -qxF "list $default_dir: refused" "$root/harbor/berth/keeper"
+  check "[C68] while outside every view the workplace's server answers" exit_is 0 T list-sessions
+  check "[C68] and so does the second" exit_is 0 B list-sessions
+  check "[C68] keeper's view masks the user's tmux directory after its rows, closed" \
+    test "$(jq -r --arg d "$default_dir" '. as $a | [range(0; length) | select($a[.] == "--tmpfs" and $a[. + 1] == $d) | $a[. - 1]] | join(",")' <<< "$(seat_command 'Harbor Keeper')")" = 0000
+  wp why "Harbor Keeper" "$default_dir/bystander" > "$scratch/out" 2>&1
+  check "[C68] why names the mask" said "masked by the frame after the rows: $default_dir, where the user's tmux servers keep their sockets, is shown to no seat"
+  check "down" exit_is 0 wp down
 }
 
 t_source_and_contract() {
@@ -2267,7 +2300,7 @@ t_source_and_contract() {
   check "[C17] respawn-pane -k is followed by clear-history in start" \
     test "$(jq -r '.primitives.start.call | map(strings) | (index("respawn-pane") < index("clear-history"))' "$tool/host/binding.json")" = true
   check "[C10] every tmux call runs under setpriv --no-new-privs and names its server" \
-    test "$(jq -c '.programs.tmux.argv[0:5]' "$tool/host/binding.json")" = '[{"slot":["program","setpriv"]},"--no-new-privs",{"slot":["program","tmux"]},"-L",{"slot":["server"]}]'
+    test "$(jq -c '.programs.tmux.argv[0:5]' "$tool/host/binding.json")" = '[{"slot":["program","setpriv"]},"--no-new-privs",{"slot":["program","tmux"]},"-S",{"slot":["socket-path"]}]'
   check "[C10] the loop removes TMUX and TMUX_PANE before any program runs" \
     test "$(sed -n 6p "$tool/bin/workplace")" = "unset TMUX TMUX_PANE"
   check "[C26] the loop sets LC_ALL=C before anything else, once it has kept the caller's" \
@@ -2364,7 +2397,7 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-v5
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
   check "[C54] with no reach term every seat mails every seat, and grabs and writes none; no clearance is read" \
@@ -2378,17 +2411,17 @@ t_comms_fold() {
   planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
   local refusals=(
     "$comms_terms $comms_reach"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "-", "-", "office", "banned"]; 9)]|two reach terms of the workplace about grab to the office harbor differ: allowed from programs/COMMS.typify:2, allowed from programs/COMMS.typify:8, banned from programs/COMMS.typify:9'
-    "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "record", "-", "-", "-", "workplace", "allowed"]; 9)]|programs/COMMS.typify:9: record is the action of the Logs layer, which this frame does not build yet; a reach'"'"'s action is mail, grab or write'
+    "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "record", "-", "-", "-", "workplace", "allowed"]; 9)]|the plan holds reach terms for records and no record-path term, so no seat is shown a record (the reach at programs/COMMS.typify:9)'
     "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab"]; 9)]|programs/COMMS.typify:9: a reach has the words reach A B C SCOPE ACTION TA TB TC TSCOPE STATE, not 6'
     "$comms_terms"' | .programs[-1].recorded += [m(["reach", "navigator", "-", "-", "kind", "grab", "-", "-", "-", "workplace", "allowed"]; 9)]|programs/COMMS.typify:9: kind is not a scope of a reach'
     "$comms_terms"' | .programs[-1].recorded += [m(["reach", "harbor", "-", "-", "room", "grab", "-", "-", "-", "workplace", "allowed"]; 9)]|programs/COMMS.typify:9: a room reach cannot name harbor - -'
     "$comms_terms"' | .programs[-1].recorded += [m(["reach", "harbor", "dock", "ghost", "seat", "grab", "-", "-", "-", "workplace", "allowed"]; 9)]|programs/COMMS.typify:9: the reach names the seat harbor/dock/ghost, which the plan does not make'
     "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "attic", "-", "room", "allowed"]; 9)]|programs/COMMS.typify:9: the reach'"'"'s target names the room harbor/attic, which the plan does not make'
-    "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "type", "-", "-", "-", "workplace", "allowed"]; 9)]|programs/COMMS.typify:9: type is not mail, grab or write'
+    "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "type", "-", "-", "-", "workplace", "allowed"]; 9)]|programs/COMMS.typify:9: type is not mail, grab, write or record'
     "$comms_terms"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "-", "-", "-", "workplace", "maybe"]; 9)]|programs/COMMS.typify:9: maybe is not allowed or banned'
     "$comms_terms"' | .programs[-1].recorded += [m(["mail", "elsewhere"]; 9)]|two mail terms differ: '"$root"'/elsewhere from programs/COMMS.typify:9, '"$root"'/mailbox from programs/COMMS.typify:1'
     "$comms_terms"' | .programs[-1].recorded += [m(["mail", "a", "b"]; 9)]|programs/COMMS.typify:9: a mail has the words mail PATH, not 3'
-    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "/"|the mail path / would cover each seat'"'"'s whole view with its mailbox'
+    "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "/"|the mail path / would cover each seat'"'"'s whole view'
     'def m($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/COMMS.typify"}}; .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "-", "-", "-", "workplace", "allowed"]; 2)]|the plan holds reach terms and no mail term, so no seat has a mailbox to ask in (the reach at programs/COMMS.typify:2)'
     "$comms_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; $root + "/mailbox/inner"; "read-only"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/mailbox/inner, which lies at or beneath the mail path '"$root"'/mailbox, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | .programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/mailbox"; "hidden"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/mailbox, which lies at or beneath the mail path'
@@ -2568,12 +2601,12 @@ t_comms_carrier() {
   check "[C22] status exits 0" exit_is 0 wp status
   check "[C57] status names the carrier" said "ok      the carrier, pid $pid"
   check "[C57] one carrier for a store: another that starts beside it ends, with exit 2" exit_is 2 timeout 10 "$BASH" "$clone/BUILD/bin/workplace" carry
-  check "[C57] naming the store" said "another carrier serves the store $s/mail; this one ends"
+  check "[C57] naming the workplace's state" said "another carrier serves the workplace whose state is $s; this one ends"
   kill -KILL "$pid"
   eventually bash -c '! stat -L "/proc/$1/cwd" > /dev/null 2>&1' _ "$pid"
   check "[C57] status exits 1 when the carrier is gone" exit_is 1 wp status
   check "[C57] naming it, and saying that requests wait" \
-    bash -c 'grep -qxF "gone    the carrier, pid $1" "$2" && grep -qxF "        requests wait in the seats'"'"' out, and none is lost, until the workplace is brought down and up again" "$2"' _ "$pid" "$scratch/out"
+    bash -c 'grep -qxF "gone    the carrier, pid $1" "$2" && grep -qxF "        requests wait in the seats'"'"' out, and none is lost, and the chain waits, until the workplace is brought down and up again" "$2"' _ "$pid" "$scratch/out"
   request watch "late.md" "to: Harbor Keeper" "subject: late" --- "while the carrier was gone"
   sleep 2
   check "[C57] while it is gone a request waits in out" test -f "$s/comms/harbor tower watch/out/late.md"
@@ -2793,7 +2826,7 @@ t_comms_mail() {
   check "[C60] the key C-c is sent" answered_ok keeper wz.write
   check "[C60] and interrupts the pane's program, which ends" eventually_long no_pane "Orchard Grower"
   check "[C64] nothing a text named ran: no file was made, and the server stands" \
-    bash -c 'test ! -e "$1/pwned" && test ! -e "$1/pwned2" && "${@:2}" list-sessions > /dev/null' _ "$root" setpriv --no-new-privs tmux -L "$label" -u
+    bash -c 'test ! -e "$1/pwned" && test ! -e "$1/pwned2" && "${@:2}" list-sessions > /dev/null' _ "$root" setpriv --no-new-privs tmux -S "$run/$label" -u
   sum=$(printf '%s' hello | sha256sum)
   check "[C66] a write's line holds the length and the hash of its text" \
     test "$(jq -c 'select(.request == "w01.write") | [.action, .target, .outcome, .length, .sha256]' "$s/comms/record")" = "[\"write\",[\"Orchard Grower\"],\"ok\",5,\"${sum%% *}\"]"
@@ -2834,7 +2867,7 @@ t_comms_from_a_pane() {
   printf '%s\n' "seat: Orchard Grower" --- "--" > "$q/t2.write"
   local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "box=" + $root + "/mailbox", "hidden=" + $s,
         "reach=" + $s + "/comms/harbor dock keeper/out", "link=a.md:" + $root + "/harbor/ledger/letter-keeper",
-        "node=d.md:dir", "node=f.md:fifo", "node=s.md:socket", "second=c.md:" + $q + "/c.md", "slow=w.md:Harbor Keeper",
+        "node=d.md:dir", "node=f.md:fifo", "node=s.md:socket", "second=c.md:" + $q + "/c.md",
         "answer=a.md", "answer=d.md", "answer=f.md", "answer=s.md"])
     | add("harbor/dock/pilot/seat.typify"; ["report=" + $root + "/harbor/berth/pilot", "box=" + $root + "/mailbox",
         "race=r.md:" + $root + "/harbor/ledger/letter-pilot:" + $q + "/r.md:12", "lease=l.md:" + $q + "/l.md", "answer=l.md"])
@@ -2847,7 +2880,8 @@ t_comms_from_a_pane() {
         "answer=-rf.md", "answer=--help.grab", "answer=*.md", "answer=$(touch pwned3).md", "answer=%s%n.md",
         "answer=s1.grab", "answer=s2.grab", "answer=s3.grab", "answer=s4.grab", "answer=h1.md", "answer=h2.md", "answer=h3.md",
         "answer=t1.write", "answer=t2.write"])
-    | add("orchard/barn/grower/seat.typify"; ["typed=" + $root + "/orchard/almanac/typed"])'
+    | add("orchard/barn/grower/seat.typify"; ["typed=" + $root + "/orchard/almanac/typed"])
+    | add("orchard/barn/picker/seat.typify"; ["report=" + $root + "/orchard/almanac/picker", "box=" + $root + "/mailbox", "slow=w.md:Orchard Picker"])'
   args=${args//\$q/\"$q\"}
   statements_plan "$comms_terms $comms_reach | $probe_args ${args//\$s/\"$s\"}"
   check "plan" exit_is 0 wplan
@@ -2881,7 +2915,7 @@ t_comms_from_a_pane() {
   check "[C63] the carrier opened the file a seat wrote once, through no name of the seat's, and the seat's change through its second name afterwards changed nothing" \
     bash -c 'grep -qxF "second c.md: answered=yes opened=1 written=ok" "$1" && ! grep -rqF "changed through a second name" "$2/harbor dock keeper/in" "$2/harbor dock keeper/sent" && grep -rqF "as first written" "$2/harbor dock keeper/in"' _ "$report" "$s/mail"
   check "[C57] a request written under its own name, a line every 300 ms for three seconds, rests until it is whole and is delivered whole" \
-    bash -c 'grep -qxF "slow w.md: answered=yes" "$1" && f=$(grep -rlx "subject: slow" "$2/harbor dock keeper/in") && [[ $(sed "1,/^---\$/d" "$f" | tr "\n" ,) == "line 1,line 2,line 3,line 4,line 5,line 6,line 7,line 8,line 9,line 10," ]]' _ "$report" "$s/mail"
+    bash -c 'grep -qxF "slow w.md: answered=yes" "$1" && f=$(grep -rlx "subject: slow" "$2/orchard barn picker/in") && [[ $(sed "1,/^---\$/d" "$f" | tr "\n" ,) == "line 1,line 2,line 3,line 4,line 5,line 6,line 7,line 8,line 9,line 10," ]]' _ "$root/orchard/almanac/picker" "$s/mail"
   report=$root/harbor/berth/pilot
   check "[C61] racing the carrier, the seat held its entry still for 2.5 s and then swapped it between a file and a link for 0.3 s, over and over for 12 s, and nothing opened it while it stood in out" \
     bash -c '[[ $(grep "^race r.md: " "$1") =~ ^race\ r\.md:\ swaps=([0-9]+)\ opened=0$ ]] && (( BASH_REMATCH[1] >= 100 ))' _ "$report"
@@ -2925,11 +2959,268 @@ t_comms_from_a_pane() {
     file_comes_to "$root/orchard/almanac/typed" "$(printf '%s\n' "#(touch $root/pwned7) \$(touch $root/pwned8) %n%s #{session_name} -t ; kill-server" --)"
   check "[C64] nothing a request named ran: no file was made, and the server stands" \
     bash -c 'for n in 3 4 5 6 7 8; do test ! -e "$1/pwned$n" || exit 1; done; test ! -e "$2/carrier/pwned3" && test ! -e "$3/pwned3" && "${@:4}" list-sessions > /dev/null' _ \
-    "$root" "$run" "$s" setpriv --no-new-privs tmux -L "$label" -u
+    "$root" "$run" "$s" setpriv --no-new-privs tmux -S "$run/$label" -u
   check "[C62] [C63] what the carrier took, and its own copies, are removed once each request is answered" test -z "$(find "$s/comms/taken" -mindepth 1 -print -quit)"
   check "[C65] the store runs no hook: not its own, not the user's hooksPath, fsmonitor or filter; the user's signing is not asked" \
     bash -c 'test ! -e "$1/hook-ran" && test "$(jq -r "select(.request == \"h2.md\") | .outcome" "$2")" = ok' _ "$scratch" "$s/comms/record"
   check "down" exit_is 0 wp down
+}
+
+
+records_terms='def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}};
+  .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1), r(["record-path", "records"]; 2), r(["record-chain", "file"]; 3),
+    r(["reach", "harbor", "dock", "keeper", "seat", "record", "harbor", "dock", "pilot", "seat", "allowed"]; 4)]'
+record_of() { printf '%s\n' "$(state_of)/records/$(box_of "$1")"; }
+hex_of() { od -An -v -tx1 | tr -d ' \n'; }
+
+t_records_fold() {
+  scoped_clone
+  mkdir -p -- "$root/records"
+  statements_plan "$records_terms"' | .programs[-1].recorded += [r(["record", "orchard", "barn", "-", "room", "pane", "none"]; 5)]'
+  check "plan with records" exit_is 0 wplan
+  check "[C69] view.json gives the record path, joined, the day's limit, 256 MiB by default, and the sink" \
+    test "$(jq -c '.records | [.path, .limit, .chain]' "$clone/PLAN/view.json")" = "[\"$root/records\",268435456,\"file\"]"
+  check "[C69] each seat's pane is kept or not by the narrowest scope that speaks" \
+    test "$(jq -c '[.seats[] | [.seat[2], .record.pane, .record.scope]]' "$clone/PLAN/view.json")" = '[["keeper","kept","workplace"],["pilot","kept","workplace"],["watch","kept","workplace"],["grower","none","room"],["picker","none","room"]]'
+  check "[C69] reach.record gives the seats whose record a seat may read; a seat reads its own only by a term" \
+    test "$(jq -c '[.seats[] | [.seat[2], .reach.record]]' "$clone/PLAN/view.json")" = '[["keeper",["Harbor Pilot"]],["pilot",[]],["watch",[]],["grower",[]],["picker",[]]]'
+  check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
+  check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
+  check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; clearance 0, by default; its pane not kept; 1 rows"
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
+  statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
+  check "plan with a record and no chain" exit_is 0 wplan
+  check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"
+  local planned entry
+  statements_plan "$records_terms"
+  check "plan" exit_is 0 wplan
+  planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
+  local refusals=(
+    "$records_terms"' | .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "programs", "kept"]; 9)]|programs/LOGS.typify:9: the record of the programs a seat starts is built after the cutover, and no plan keeps it yet'
+    "$records_terms"' | .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "none"]; 9)]|two records of the workplace about its pane differ: kept from programs/LOGS.typify:1, none from programs/LOGS.typify:9'
+    "$records_terms"' | .programs[-1].recorded += [r(["record-limit", "1000"]; 8), r(["record-limit", "2000"]; 9)]|two record-limit terms differ: 1000 from programs/LOGS.typify:8, 2000 from programs/LOGS.typify:9'
+    "$records_terms"' | .programs[-1].recorded += [r(["record-limit", "12k"]; 9)]|programs/LOGS.typify:9: 12k is not a whole number of bytes above 0'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-chain") | .term[1]) = "syslog"|programs/LOGS.typify:3: syslog is not a sink the frame knows: journal or file'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record") | .term[5]) = "screen"|programs/LOGS.typify:1: screen is not pane or programs'
+    "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "record-path"))|the plan holds reach terms for records and no record-path term, so no seat is shown a record (the reach at programs/LOGS.typify:4)'
+    "$records_terms"' | .programs[-1].recorded += [r(["mail", "records/mail"]; 9)]|the record path '"$root"'/records and the mail path '"$root"'/records/mail lie one in the other (the record-path at programs/LOGS.typify:2; the mail at programs/LOGS.typify:9)'
+    "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; $root + "/records/inner"; "read-only"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/records/inner, which lies at or beneath the record path '"$root"'/records, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "harbor/ledger/rec"|seat Harbor Keeper (harbor/dock/keeper): its record path '"$root"'/harbor/ledger/rec lies beneath '"$root"'/harbor/ledger (hidden, from programs/policy.typify:2), and the seat could not reach it (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "config/rec"|the record path '"$clone"'/rec lies at or beneath the clone '"$clone"', which the frame masks in every view'
+    "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "harbor"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/harbor lies at or beneath the record path '"$root"'/harbor, where the frame shows a seat the records it may read'
+    "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "statement" or .term[4] != "workplace")) | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; "/"; "read-only"; 25), st("orchard"; "-"; "-"; "office"; "/"; "read-only"; 26)]|seat Harbor Watch (harbor/tower/watch): no row for /: it has no view, and a seat with no view could reach its own record, which the plan keeps (the record at programs/LOGS.typify:1)'
+    "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/systemd/journal"; "read-only"; 22)]|seat Harbor Keeper (harbor/dock/keeper): /run/systemd/journal (read-only, from programs/policy.typify:22) lies at or beneath /run/systemd/journal, which the frame hides in every view of a workplace that keeps a chain, as a hidden row would'
+    "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/user/'"$EUID"'/systemd/private"; "read-only"; 22)]|/run/user/'"$EUID"'/systemd/private (read-only, from programs/policy.typify:22) lies at or beneath /run/user/'"$EUID"'/systemd, which the frame hides in every view of a workplace that keeps a chain'
+  )
+  for entry in "${refusals[@]}"; do
+    statements_plan "${entry%|*}"
+    check "[C69] plan refuses, with exit 1: ${entry##*|}" exit_is 1 wplan
+    check "[C69] naming it" said "${entry##*|}"
+  done
+  check "[C69] and after every refusal PLAN/ is as it was" test "$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)" = "$planned"
+  statements_plan "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "record-chain")) | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/systemd/journal"; "read-only"; 22)]'
+  check "[C73] a workplace that keeps no chain masks no journal, so a row there is taken" exit_is 0 wplan
+}
+
+records_up() {
+  scoped_clone
+  mkdir -p -- "$root/records"
+  statements_plan "$records_terms $1"
+  exit_is 0 wplan && exit_is 0 wp build && exit_is 0 wp up
+}
+
+t_records_in_panes() {
+  local s day hostile
+  s=$(state_of)
+  day=$(date -u +%F)
+  hostile=$root/tools/hostile
+  { printf 'BEGIN-HOSTILE'; printf '\0\xff\xfe'; printf '%s' "#{pane_id}#(touch $root/pwned1)\$(touch $root/pwned2)%n%s%x" "\`touch $root/pwned3\`"; printf '\033[31m'; printf 'END-HOSTILE'; } > "$hostile"
+  check "up with records" records_up '| def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
+    add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "print=" + $root + "/tools/hostile",
+      "wait=" + $root + "/records/Harbor Pilot/'"$day"'.pane", "entries=" + $root + "/records", "entries=" + $root + "/records/Harbor Pilot", "tamper=" + $root + "/records/Harbor Pilot/'"$day"'.pane",
+      "list=" + $root + "/records/Harbor Pilot/../Harbor Watch", "hidden='"$s"'/records"])
+    | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; $root + "/harbor/berth"; "read-write"; 3)]'
+  check "keeper ran" eventually_long grep -qx "probe keeper done" "$root/harbor/berth/keeper"
+  check "pilot ran" wait_for_probe "Harbor Pilot" pilot
+  check "[C70] build made S/records, and in it a directory for each seat, named by its keys joined by a space, all 0700" \
+    test "$(cd "$s/records" && find . -maxdepth 1 -type d -printf '%P %m\n' | LC_ALL=C sort | tr '\n' ',')" = " 700,harbor dock keeper 700,harbor dock pilot 700,harbor tower watch 700,orchard barn grower 700,orchard barn picker 700,"
+  check "[C70] and BUILD/records.json, listed in the MANIFEST, with each seat's directory, pane and reading" \
+    bash -c 'grep -q "  records.json$" "$1/MANIFEST" && [[ $(jq -c "[.seats[0] | .name, .pane, .reads]" "$1/records.json") == "[\"Harbor Keeper\",\"kept\",[\"Harbor Pilot\"]]" ]]' _ "$clone/BUILD"
+  check "[C70] a day's file is named by its UTC day, and only its owner reads it" test "$(stat -c %a "$(record_of keeper)/$day.pane")" = 600
+  local report=$root/harbor/berth/keeper
+  check "[C76] at the record path a seat is shown one directory for each seat whose record it may read, under that seat's name, and no other" \
+    grep -qxF "entries $root/records: Harbor Pilot " "$report"
+  check "[C76] holding that seat's day" bash -c 'grep -qF "entries $1/records/Harbor Pilot: " "$2" && grep "entries $1/records/Harbor Pilot: " "$2" | grep -qF "$3.pane"' _ "$root" "$report" "$day"
+  check "[C77] a seat neither appends to, cuts short, renames nor removes a record it reads, nor makes a file beside it" \
+    grep -qxF "tamper $root/records/Harbor Pilot/$day.pane: append=refused truncate=refused rename=refused remove=refused make=refused" "$report"
+  check "[C78] through the record it may read a seat reaches no third seat's" grep -qxF "list $root/records/Harbor Pilot/../Harbor Watch: refused" "$report"
+  check "[C77] [C78] and the records' store, in the state directory, is unseen" grep -qxF "hidden $s/records: unseen" "$report"
+  check "[C79] the pane's bytes are kept as the pane's program wrote them: NUL, bytes that are not UTF-8, formats, commands and escapes" \
+    eventually_long bash -c '[[ $(od -An -v -tx1 < "$1" | tr -d " \n") == *"$(od -An -v -tx1 < "$2" | tr -d " \n")"* ]]' _ "$(record_of keeper)/$day.pane" "$hostile"
+  check "[C79] and nothing they name ran" bash -c 'for n in 1 2 3; do test ! -e "$1/pwned$n" || exit 1; done' _ "$root"
+  check "[C71] the keeper runs outside every view: in this shell's mount and user namespaces" \
+    bash -c 'for p in $(pgrep -f "workplace keep $1"); do [[ $(stat -L -c %i "/proc/$p/ns/mnt") == $(stat -L -c %i /proc/self/ns/mnt) ]] || exit 1; done; [[ -n $(pgrep -f "workplace keep $1") ]]' _ "$(record_of keeper)"
+  wp status > "$scratch/out" 2>&1
+  check "[C75] status names each kept seat's file and its size against the limit" \
+    bash -c 'grep -qE "^record  Harbor Keeper \(harbor/dock/keeper\): $1\.pane, [0-9]+ of 268435456 bytes, chained to byte [0-9]+$" "$2"' _ "$day" "$scratch/out"
+  check "[C75] and its pipe" said "ok      the pipe of Harbor Keeper (harbor/dock/keeper)'s pane"
+  T pipe-pane -t "$(pane_by_title 'Harbor Keeper')"
+  check "[C74] when a pane's pipe is gone the carrier sets it again" \
+    eventually_long bash -c '[[ $("$@" display -p -t "$("$@" list-panes -a -F "#{pane_title} #{pane_id}" | sed -n "s/^Harbor Keeper //p")" "#{pane_pipe}") == 1 ]]' _ setpriv --no-new-privs tmux -S "$run/$label" -u
+  check "[C74] and records the gap with its time" eventually_long bash -c 'grep -qE "^[0-9-]+T[0-9:]+Z the pipe of the pane was gone, and the carrier set it again$" "$1/gaps"' _ "$(record_of keeper)"
+  wp why "Harbor Keeper" "$root/records/Harbor Pilot" > "$scratch/out" 2>&1
+  check "[C76] why names the records a seat is shown" \
+    said "the seat's records: shown by the frame after the rows (Logs) at $root/records, read-only: one directory for each seat whose record it may read, under that seat's name: Harbor Pilot"
+  check "[C73] keeper's view masks the journal's places, the closed masks after its rows" \
+    bash -c 'for m in "${@:2}"; do [[ -d $m ]] || continue; [[ $(jq -r --arg d "$m" ". as \$a | [range(0; length) | select(\$a[.] == \"--tmpfs\" and \$a[. + 1] == \$d) | \$a[. - 1]] | join(\",\")" <<< "$1") == 0000 ]] || exit 1; done' _ \
+    "$(seat_command 'Harbor Keeper')" /var/log/journal /run/log/journal /run/systemd/journal "/run/user/$EUID/systemd"
+  local carrier
+  carrier=$(carrier_pid)
+  kill -STOP "$carrier"
+  T pipe-pane -t "$(pane_by_title 'Harbor Keeper')"
+  check "[C75] with the carrier standing but held still, a pane whose pipe is gone stays so, and status exits 1 for it alone" exit_is 1 wp status
+  check "[C75] the carrier itself is ok" said "ok      the carrier, pid $carrier"
+  check "[C75] naming the pane" said "gone    the pipe of Harbor Keeper (harbor/dock/keeper)'s pane: what it shows is not kept until the carrier sets it again"
+  kill -CONT "$carrier"
+  check "down" exit_is 0 wp down
+  check "[C71] the keepers end with their panes" eventually_long bash -c '[[ -z $(pgrep -f "workplace keep $1") ]]' _ "$(state_of)/records"
+}
+
+t_records_day_and_limit() {
+  local fake=$scratch/fake-date printer=$root/tools/printer
+  mkdir -p -- "$fake"
+  printf '%s\n' 2030-01-01 > "$scratch/day"
+  printf '%s\n' '#!/usr/bin/env bash' "if [[ \$# == 2 && \$1 == -u && \$2 == +%F ]]; then cat '$scratch/day'; else exec '$(command -v date)' \"\$@\"; fi" > "$fake/date"
+  chmod +x -- "$fake/date"
+  printf '%s\n' '#!/usr/bin/env bash' 'exec {fd}<> <(:)' 'for (( i = 0; i < 3000; i++ )); do printf "%d\n" "$i"; read -r -t 0.001 -u "$fd" _; done' 'printf "%s\n" printed' 'read -r _' > "$printer"
+  chmod +x -- "$printer"
+  scoped_clone
+  mkdir -p -- "$root/records"
+  statements_plan "$records_terms"' | (.programs[] | select(.path == "harbor/tower/watch/seat.typify") | .plan[1].term[5]) = ([$root + "/tools/printer"] | tojson)'
+  check "plan" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "up, with a clock whose day the test changes" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" up
+  sleep 1.5
+  printf '%s\n' 2030-01-02 > "$scratch/day"
+  check "watch printed 3,000 numbered lines, one a millisecond" eventually_long bash -c 'grep -q "^printed" "$1"/2030-01-0*.pane' _ "$(record_of watch)"
+  check "down" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" down
+  local d=$(record_of watch)
+  check "[C81] the keeper changed the file itself at the change of day: both days hold lines" test -s "$d/2030-01-01.pane" -a -s "$d/2030-01-02.pane"
+  local lines
+  lines=$(cat "$d/2030-01-01.pane" "$d/2030-01-02.pane" | tr -d '\r' | grep -E '^[0-9]+$' | tr '\n' ' ')
+  check "[C81] a change of day loses nothing and doubles nothing: 0 to 2999, each once and in order (first day $(tr -d '\r' < "$d/2030-01-01.pane" | grep -cE '^[0-9]+$') lines, second $(tr -d '\r' < "$d/2030-01-02.pane" | grep -cE '^[0-9]+$'))" \
+    test "$lines" = "$(seq -s ' ' 0 2999) "
+  rm -rf -- "$clone/BUILD"
+  statements_plan "$records_terms"' | .programs[-1].recorded += [r(["record-limit", "2000"]; 9)] | (.programs[] | select(.path == "harbor/tower/watch/seat.typify") | .plan[1].term[5]) = (["/usr/bin/head", "-c", "5000", "/dev/zero"] | tojson)'
+  check "plan with a limit of 2,000 bytes a day" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "up" exit_is 0 wp up
+  check "watch's program wrote 5,000 bytes and ended" eventually_long no_pane "Harbor Watch"
+  check "[C82] at the limit nothing more is stored: the day holds 2,000 bytes" eventually_long bash -c '[[ $(stat -c %s "$1") == 2000 ]]' _ "$(record_of watch)/$(date -u +%F).pane"
+  check "[C82] and what was not stored is counted exactly, when the day's file ends: 3,000" \
+    eventually_long bash -c '[[ $(awk -v d="$2" "\$1 == d { n += \$2 } END { print n + 0 }" "$1/unstored" 2> /dev/null) == 3000 ]]' _ "$(record_of watch)" "$(date -u +%F)"
+  check "down" exit_is 0 wp down
+}
+
+t_records_keys_that_tmux_expands() {
+  local day
+  day=$(date -u +%F)
+  scoped_clone
+  mkdir -p -- "$root/records"
+  statements_plan "$records_terms"' | terms_of("orchard/barn/picker/seat.typify"; .[3] = "p%s#{pane_id}")
+    | .state.environment |= map(if .key[0:3] == ["orchard", "barn", "picker"] then .key[2] = "p%s#{pane_id}" else . end)'
+  check "plan with a seat whose key holds % and #" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "up" exit_is 0 wp up
+  check "picker ran" wait_for_probe "Orchard Picker" picker
+  check "down" exit_is 0 wp down
+  check "[C71] the seat's pane is kept in its own directory, since the pipe's command doubles the % and # that tmux would expand" \
+    grep -qa "probe picker done" "$(state_of)/records/orchard barn p%s#{pane_id}/$day.pane"
+}
+
+t_records_verify() {
+  local d day file entries
+  day=$(date -u +%F)
+  mkdir -p -- "$root/mailbox"
+  check "up, with mail" records_up '| def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
+    add("harbor/dock/keeper/seat.typify"; ["print=" + $root + "/tools/probe"]) | '"$comms_terms"
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  request pilot note.md "to: Harbor Keeper" "subject: a note" --- "body"
+  check "a mail is served" answered_ok pilot note.md
+  check "down: the carrier chains what is left as it ends" exit_is 0 wp down
+  check "[C72] the frame's own record of requests is chained among the kept files" \
+    test "$(jq -c 'select(.file == "comms/record") | [.seat, .offset]' "$(state_of)/records/chain" | head -n 1)" = '["the frame",0]'
+  check "up again, the same day" exit_is 0 wp up
+  check "keeper ran again" wait_for_probe "Harbor Keeper" keeper
+  check "down" exit_is 0 wp down
+  d=$(record_of keeper)
+  file=$d/$day.pane
+  mapfile -t entries < <(jq -c --arg f "harbor dock keeper/$day.pane" 'select(.file == $f) | [.offset, .length, .at]' "$(state_of)/records/chain")
+  check "[C72] the chain holds an entry for each run's bytes, the file sink a line of JSON each" test "${#entries[@]}" -ge 2
+  check "[C72] each entry names the workplace, the seat, the file, the offset, the length, and the hash of the bytes with the hash sent before" \
+    test "$(jq -c --arg f "harbor dock keeper/$day.pane" 'select(.file == $f) | [.workplace, .seat, (.previous | length), (.hash | length)]' "$(state_of)/records/chain" | head -n 1)" = "[\"$label\",\"Harbor Keeper\",64,64]"
+  local first second o l
+  first=$(jq -r --arg f "harbor dock keeper/$day.pane" 'select(.file == $f) | .hash' "$(state_of)/records/chain" | head -n 1)
+  check "[C72] the first hash is SHA-256 over 64 zeros and the bytes it covers" \
+    test "$({ printf '%064d' 0; head -c "$(jq -r '.[1]' <<< "${entries[0]}")" "$file"; } | sha256sum | cut -d' ' -f1)" = "$first"
+  check "[C75] record verify says that the file agrees with its chain" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C75] up to its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file"), its whole length"
+  cp -- "$file" "$scratch/kept"
+  o=$(jq -r '.[0]' <<< "${entries[1]}") l=$(jq -r '.[1]' <<< "${entries[1]}")
+  printf 'Z' | dd of="$file" bs=1 seek=$(( o + l / 2 )) conv=notrunc status=none
+  check "[C80] a byte changed is named, with exit 1" exit_is 1 wp record verify "Harbor Keeper" "$day"
+  check "[C80] at the first place it shows: the entry that covers it" said "differs from its chain in the $l bytes from byte $o, which its entry of $(jq -r '.[2]' <<< "${entries[1]}") covers"
+  cp -- "$scratch/kept" "$file"
+  truncate -s $(( o + 5 )) "$file"
+  check "[C80] a file cut short is named" exit_is 1 wp record verify "Harbor Keeper" "$day"
+  check "[C80] at the byte where it ends, with the entry that covers that byte" said "is cut short at byte $(( o + 5 )): its chain's entry of $(jq -r '.[2]' <<< "${entries[1]}") covers the $l bytes from byte $o"
+  cp -- "$scratch/kept" "$file"
+  { head -c 1 "$scratch/kept"; printf 'a line added\n'; tail -c +2 "$scratch/kept"; } > "$file"
+  check "[C80] a line added in the middle is named" exit_is 1 wp record verify "Harbor Keeper" "$day"
+  check "[C80] at the first entry it shows in" said "differs from its chain in the $(jq -r '.[1]' <<< "${entries[0]}") bytes from byte 0"
+  rm -f -- "$file"
+  check "[C80] a file removed is named" exit_is 1 wp record verify "Harbor Keeper" "$day"
+  check "[C80] saying how much its chain covers" said "harbor dock keeper/$day.pane is gone; its chain covers"
+  cp -- "$scratch/kept" "$file"
+  check "[C80] and with the file as it was, it agrees again" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C75] record verify refuses a seat the workplace does not make, with exit 2" exit_is 2 wp record verify "Ghost" "$day"
+  check "up" exit_is 0 wp up
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  rm -f -- "$(state_of)/records/chain"
+  mkdir -- "$(state_of)/records/chain"
+  check "down, with the file sink made unwritable" exit_is 0 wp down
+  check "[C75] status exits 1 for a sink that did not take an entry" exit_is 1 wp status
+  check "[C75] naming the sink and when" bash -c 'grep -qE "^gone    the chain'"'"'s sink, the file, did not take an entry at [0-9-]+T[0-9:]+Z$" "$1"' _ "$scratch/out"
+}
+
+t_records_journal() {
+  if ! systemctl --user show-environment > /dev/null 2>&1; then
+    skip "[C83] no user manager answers here, so the chain is not sent to the journal; tried where one answers"
+    return 0
+  fi
+  local day unit forged
+  day=$(date -u +%F)
+  unit=workplace-carrier-$label.service
+  check "up with the chain going to the journal" records_up '| (.programs[-1].recorded[] | select(.term[0] == "record-chain") | .term[1]) = "journal"'
+  check "[C72] up starts the carrier as a unit of the user's manager" systemctl --user is-active --quiet "$unit"
+  check "[C72] the ledger records the unit by its invocation, which down checks before it stops it" \
+    test "$(jq -r 'select(.what | startswith("the carrier")) | .is' "$run/ledger")" = "$(systemctl --user show -p InvocationID --value "$unit")"
+  check "[C72] the unit runs under no-new-privileges" test "$(systemctl --user show -p NoNewPrivileges --value "$unit")" = yes
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  check "down" exit_is 0 wp down
+  check "[C72] down ends the unit" eventually_long bash -c '! systemctl --user is-active --quiet "$1"' _ "$unit"
+  check "[C83] record verify reads the chain from the journal, and the file agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  local ident size
+  ident=$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o json --no-pager | jq -r 'select(.MESSAGE | strings | test("workplace-record")) | .SYSLOG_IDENTIFIER' | head -n 1)
+  size=$(stat -c %s "$(record_of keeper)/$day.pane")
+  forged=$(jq -n -c --arg w "$label" --arg f "harbor dock keeper/$day.pane" --argjson o "$size" \
+    '{chain: "workplace-record", at: "2030-01-01T00:00:00Z", workplace: $w, seat: "Harbor Keeper", file: $f, offset: $o, length: 1, hash: ("f" * 64), previous: ("0" * 64)}')
+  printf '%s\n' "$forged" | systemd-cat -t "$ident"
+  check "[C83] an entry that another process sends under the carrier's words reaches the journal" \
+    eventually_long bash -c 'journalctl --user -t "$1" -o cat --no-pager | grep -qF "2030-01-01T00:00:00Z"' _ "$ident"
+  check "[C83] and is not taken as the carrier's: the file still agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C83] the run wrote $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c .) lines of the carrier's to the journal, $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record) of them entries of the chain, beside the manager's own lines of the unit and the one forged" \
+    test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record)" -ge 1
 }
 
 tests=(
@@ -2976,12 +3267,19 @@ tests=(
   t_values
   t_the_clone_is_masked
   t_a_server_belongs_to_one_clone
+  t_no_seat_reaches_a_tmux_server
   t_keys_and_names
   t_comms_fold
   t_comms_store
   t_comms_carrier
   t_comms_mail
   t_comms_from_a_pane
+  t_records_fold
+  t_records_in_panes
+  t_records_day_and_limit
+  t_records_keys_that_tmux_expands
+  t_records_verify
+  t_records_journal
   t_source_and_contract
 )
 (( $# )) && tests=("$@")

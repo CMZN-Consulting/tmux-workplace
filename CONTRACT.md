@@ -4,7 +4,7 @@
 
 ## Inputs and the build
 
-- **C1.** The loop reads two variables of its own and no other setting: `WORKPLACE_ROOT`, the absolute path of a directory, and `WORKPLACE_CONFIG`, the absolute path of a directory at or below it. Anything else is refused with exit 2. For the workplaces' state directory it reads the platform's `XDG_STATE_HOME`, else `HOME` (C35). tmux itself reads `TMUX_TMPDIR` to find its socket; the loop records the socket it used, and `down` and `status` refuse to act from a shell that would reach another (C18).
+- **C1.** The loop reads two variables of its own and no other setting: `WORKPLACE_ROOT`, the absolute path of a directory, and `WORKPLACE_CONFIG`, the absolute path of a directory at or below it. Anything else is refused with exit 2. For the workplaces' state directory it reads the platform's `XDG_STATE_HOME`, else `HOME` (C35). Every tmux call of the loop names the run's socket by its path (C68), so `TMUX_TMPDIR` plays no part in which server it reaches.
 - **C2.** `build` reads `PLAN/` in `WORKPLACE_CONFIG` and nothing else:
   - `plan.json` is the reader's output as printed;
   - `facts.json` is the facts it was planned on;
@@ -39,8 +39,8 @@
 - **C7.** Every value the plan or a slot gives a tmux command is encoded: a backslash before a trailing `;`, and where tmux expands formats, every run of `#` not followed by `[` doubled. The program's own options (`-L`, `-f`) are not encoded, since tmux's command parser never sees them. No text of the plan is evaluated by a shell.
 - **C8.** Terms are applied in the binding's order of primitives (`server`, `session`, `window`, `pane`, `arrange`, `start`), and in plan order within one primitive, whatever the order of the plan's programs. Each office gives a session, each room a window and a layout, each seat a pane and a start in its first directory. A pane is made by splitting its room's window, which is then re-spaced with tmux's `tiled` so that the next split has room. The room's declared layout is applied once, by `arrange`, after all its panes exist, and the room ends in that layout.
 - **C9.** tmux's first window of a session and first pane of a window are claimed by the first `window` and `pane` terms that ask for them. No term says which seat is first, and `up` refuses when a window or pane that is not a seat would stand. Every target is a captured id.
-- **C10.** Every tmux call runs under `setpriv --no-new-privs` with `TMUX` and `TMUX_PANE` removed, so the server and every seat run without privilege gain. A running server without no-new-privileges is refused. The check names the process it checked: the tmux server, an agent or the carrier. A process that has ended by the time its status is read is a refusal of its own, which says so.
-- **C11.** `server` checks, before any session exists, that `destroy-unattached` and `exit-unattached` are off and `exit-empty` is on. With `exit-empty` off, the empty server its check started stays and nothing else is made: the loop never ends a server, and the refusal names the server's socket and the command that ends it. Every session carries the run's mark, `@workplace`.
+- **C10.** Every tmux call runs under `setpriv --no-new-privs` with `TMUX` and `TMUX_PANE` removed, so the server and every seat run without privilege gain. A running server without no-new-privileges is refused. The check names the process it checked: the tmux server, an agent or the carrier. A process that has ended by the time its status is read is a refusal of its own, which says so. The server's socket stands in `RUN` (C68), so no server that `up` did not start stands there when `up` starts.
+- **C11.** `server` checks, before any session exists, that `destroy-unattached` and `exit-unattached` are off and `exit-empty` is on. With `exit-empty` off, the empty server its check started stays and nothing else is made: the loop never ends a server, and the refusal names the server's socket and the command that ends it, and keeps `RUN`, which holds the socket, while the server stands. Every session carries the run's mark, `@workplace`.
 
 ## A seat's view
 
@@ -58,7 +58,7 @@
 ## exec, down and the run
 
 - **C17.** A pane's command is `workplace exec -- SEAT` and nothing else. `exec` checks `BUILD` first. It starts the seat's program with the view, the environment's rows and the inherited names that `up` recorded in the seat's own record, from any terminal and any directory. `--print` prints the call that `exec` makes, word for word, and an unknown seat, a changed build or a workplace that is not up is refused with exit 2. A pane holds a silent tmux client until its start replaces it with `respawn-pane -k`, which is followed by clearing its history. No key is sent to a pane but by the carrier, which types a seat's write request where the plan allows it (C60).
-- **C18.** `down` undoes, newest first, what `up` recorded and nothing else. It acts only on a session that still carries the run's mark, removes `RUN` and keeps `BUILD`, and with nothing up it does nothing. It refuses, keeping `RUN`, when this shell would reach another tmux socket than the run's, and it keeps `RUN` and exits 1 when an undo fails.
+- **C18.** `down` undoes, newest first, what `up` recorded and nothing else. It acts only on a session that still carries the run's mark, removes `RUN` and keeps `BUILD`, and with nothing up it does nothing. It reaches the run's server by its socket's path, whatever the shell's `TMUX_TMPDIR`. When the server still holds sessions that the run did not make, it leaves them, says so, and keeps `RUN`, which holds the socket, while the server stands. It keeps `RUN` and exits 1 when an undo fails.
 - **C19.** A failed term stops `up`. Everything made in that run is torn down by its captured id, whether or not its mark was set yet, `RUN` is removed, and the failure names the term.
 - **C20.** `up` refuses while `RUN` exists.
 - **C21.** `RUN` holds:
@@ -68,9 +68,10 @@
   - each seat's recorded start;
   - the tables;
   - the learned slots;
-  - the carrier's directory, which is its working directory and its mark, and its log (C57).
+  - the carrier's directory, which is its working directory and its mark, and its log (C57);
+  - the server's socket (C68).
   It is the loop's record and no input of the reader.
-- **C22.** `status` reports the build, the run and every check as ok or gone, and exits 1 when the build has changed or a check fails.
+- **C22.** `status` reports the build, the run and every check as ok or gone, and exits 1 when the build has changed or a check fails. With the run up, it prints the line that attaches to the server.
 
 ## Questions and the host
 
@@ -78,8 +79,8 @@
   - For a path with no row it says what the nearest row above means for the path: beneath a read-only or read-write row the path is as the machine has it, with that access; beneath a hidden row the seat cannot reach it; beneath a scratch row it is not there until the seat makes it; beneath a searchable-only row it is not there and the seat cannot make it.
   - Where a row lies beneath the path, beneath a searchable-only row the path is a directory the seat passes through to that row and nothing more, and beneath a scratch row it is a directory of the seat's scratch made to hold that row.
   - Where a mask of the frame covers the path, it says that the mask decides and the row does not. The mailbox is such a mask (C55).
-- **C24.** `doctor` reports each program with its version, whether no-new-privileges can be set, whether bubblewrap can make a user namespace, whether the kernel lets a program push input into its terminal (TIOCSTI), and git and the programs that a plan that holds mail needs (C56). When the host refuses the namespaces, it names the host's one root step and never takes it.
-- **C25.** A workplace's tmux server is named by the plan's `server` term, and `default` means tmux's default socket. For any other name, `build` derives the name again by the rule that the manifest names as `derivations.workplace-name`, and refuses another name, a missing rule or a rule it does not know. The rule it knows, `sha256-path-prefix12-v1`, is the clone's directory name, a dash, and the first twelve hex digits of the SHA-256 of the clone's absolute physical path. Two workplaces whose plans name different servers do not meet.
+- **C24.** `doctor` reports each program with its version, whether no-new-privileges can be set, whether bubblewrap can make a user namespace, whether the kernel lets a program push input into its terminal (TIOCSTI), git and the programs that a plan that holds mail needs (C56), and the programs a chain to the journal needs and whether a user manager answers (C72). When the host refuses the namespaces, it names the host's one root step and never takes it.
+- **C25.** A workplace's tmux server is named by the plan's `server` term. The name names the workplace's state directory, its carrier's unit and its socket in `RUN`, and `default` is a name like any other. For any other name, `build` derives the name again by the rule that the manifest names as `derivations.workplace-name`, and refuses another name, a missing rule or a rule it does not know. The rule it knows, `sha256-path-prefix12-v1`, is the clone's directory name, a dash, and the first twelve hex digits of the SHA-256 of the clone's absolute physical path. Two workplaces never meet, since each run's socket stands in its own clone.
 - **C26.** The loop sets the C locale before anything else, so that no result follows its caller's locale: the names `stat` gives a file's type and the messages of the programs it calls are C's. tmux runs with the caller's `LC_ALL` as it was, so that the server's environment is the caller's, and with `-u`, so that what tmux prints is never rewritten for a terminal without UTF-8. The test file sets the C locale too.
 
 ## The plan and the fold
@@ -103,11 +104,11 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-v5`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
-- **C30.** The fold reads the plan's `statement A B C SCOPE PATH STATE`, `clearance A B C SCOPE NUMBER`, `label PATH NUMBER`, `key A B C SCOPE STATE`, the four terms of C45, and `mail` and `reach` (C54) from the programs' `recorded` lists, in the plan's order. It takes the seats from the `pane` terms and each seat's kind from the `seat-kinds` cell. For each seat:
+- **C30.** The fold reads the plan's `statement A B C SCOPE PATH STATE`, `clearance A B C SCOPE NUMBER`, `label PATH NUMBER`, `key A B C SCOPE STATE`, the four terms of C45, `mail` and `reach` (C54), and the four terms of C69 from the programs' `recorded` lists, in the plan's order. It takes the seats from the `pane` terms and each seat's kind from the `seat-kinds` cell. For each seat:
   - its statements are the workplace's, its kind's, its office's, its room's and its own;
   - equal statements, clearances and labels count once, and carry the origin of each;
   - a statement is replaced by a narrower one at its path or at a directory above it, by components, and those that remain are the seat's rows;
@@ -216,8 +217,8 @@
 ## A server belongs to one clone
 
 - **C53.** The `session` term marks its server with the clone, as the global user option `@workplace-clone`. The mark lives in the server's memory and nowhere else, so it ends with the server.
-  - Before any term, `up` reads the server that the plan names. It refuses, with exit 1 and naming the server, a server that carries another clone's mark, and a server that holds sessions and carries no mark, and it starts nothing. It takes the workplace's own server, and a server with no session.
-  - `status` reads the mark, and exits 1 for another clone's mark or for none. A server that lost its mark is told from one that never had it by the process id, which the run records: the run's own process with no mark is reported as such, and another process as another.
+  - The server's socket stands in the clone's `RUN` (C68). So when `up` starts, no other clone's server and no earlier run's stands there, and two clones that name the same server each have one of their own.
+  - `status` reads the mark, and exits 1 for another clone's mark or for none. A server that lost its mark is told from one that never had it by the process id that `up` records once its terms are applied: the run's own process with no mark is reported as such, and another process as another.
   - `down` refuses, keeping `RUN`, a server that carries another clone's mark. For a server with no mark it says so and goes on, since each undo checks its own mark.
   - The mark is the clone's resolved path, so a clone is moved only while its workplace is down.
 
@@ -270,7 +271,65 @@
 
 - **C67.** A key of an office, a room or a seat, and a kind's name, is not empty, is not `-`, `.` or `..`, does not begin with `-`, and holds no `/`, no white space and no control character. `plan` and `build` refuse one that is, with exit 1, naming the term or the row. A name is one seat's alone: `plan` and `build` refuse two seats of one name, naming both terms. A seat's name, in every plan, is not empty, is not `.` or `..`, and holds no `/`, no comma and no control character, and neither begins nor ends with white space: `plan` and `build` refuse one that is, naming the term. The Logs layer uses a name as a directory's name, and a mail's head separates its readers by commas.
 
+
+## No seat reaches a tmux server
+
+- **C68.** The workplace's tmux server listens at `RUN/NAME`, in the clone, which no view holds (C52), and every tmux call of the frame names that socket by its path. `up` refuses, with exit 2 and before it starts anything, a socket path of more than 107 bytes, naming the path and its length.
+  - After the rows, in every view, the binding's fixed part masks the user's own tmux socket directories, `${TMUX_TMPDIR:-/tmp}/tmux-UID` and `/tmp/tmux-UID`, closed (0000), where they exist.
+  - So from a seat's view neither the workplace's server, tried by its real path, nor another tmux server of the user answers, though a row shows the places above them read-only.
+  - `why` names the mask. `down` removes `RUN`, and the socket with it: tmux leaves its socket file however its server ends.
+
+## The Logs layer: what a pane showed, kept and chained
+
+- **C69.** The fold reads `record A B C SCOPE WHAT STATE`, `record-limit BYTES`, `record-chain SINK` and `record-path PATH`, and `reach`'s fourth action, `record`.
+  - WHAT is `pane` or `programs`, STATE `kept` or `none`, and the scopes are a key's: the narrowest that speaks decides, and with no term nothing is kept. The limit is a whole number of bytes a seat's pane may fill in a day, 268,435,456 (256 MiB) by default. The sink is `journal` or `file`.
+  - `view.json` gives `records`: the path, the limit and the sink. Each seat gets `record`, with whether its pane is kept, and `reach.record`, with the seats whose record it may read. With no term a seat reads no record, its own included.
+  - `plan` refuses, with exit 1, leaving `PLAN/` as it was and naming the origins:
+    - a term of the wrong form, scope, WHAT or state, a limit that is not a whole number above 0, or a sink the frame does not know;
+    - `record … programs kept`, since the record of programs is built after the cutover;
+    - two `record` terms of one scope and one WHAT with different states, and two `record-limit`, `record-chain` or `record-path` terms that differ;
+    - `reach … record` with no `record-path`;
+    - for the record path, everything it refuses for the mail path (C55), and a record path at, above or beneath the mail path;
+    - a kept record of a seat with no view, since such a seat could reach its own record.
+  - `plan` prints the records, whether each seat's pane is kept, and whose records it may read.
+- **C70.** `build` makes `S/records`, and in it one directory for each seat, named by its keys joined by a space, each the user's with mode 0700.
+  - A seat's directory holds one file for each day by UTC, `DAY.pane`, and `unstored` and `gaps`, which only grow. `S/records` holds the carrier's `chain.state` and the file sink's `chain`.
+  - `BUILD/records.json`, listed in the MANIFEST, holds the path, the limit, the sink, the carrier's unit, and each seat's directory, its pane's state and whose records it reads.
+  - `build` refuses a record path that is not a directory on the machine, or that lies in the state directory R or holds it.
+  - A plan that keeps a record needs `dd`, `date`, `tail` and `head`. One whose chain goes to the journal needs `systemd-run`, `systemctl` and `journalctl`.
+- **C71.** `up` sets each kept pane's pipe after the pane terms and before the first start, so nothing the pane's program writes is missed. The pipe is `pipe-pane -O` into a keeper of the frame's, `workplace keep DIR LIMIT`.
+  - The keeper runs outside every view, as a child of the server and under its no-new-privileges, and it ends with its pane. The pipe outlives the start's `respawn-pane`.
+  - The pipe's command quotes each word for the shell, and doubles its `%` and `#`, since tmux expands both in it.
+  - The keeper stores what the pane's program wrote, byte for byte, with `dd`, a chunk at each read. It takes the day from `date -u` whenever the second changes, and changes the file itself at a change of day, so the pipe is set once. Setting it again loses lines: 2 in 20, measured.
+  - At the limit it stores nothing more that day and counts what it does not store. When that day's file ends, at a change of day or at the pane's end, it appends `DAY COUNT` to `unstored`.
+- **C72.** With a sink, the carrier sends one entry for each kept file, every ten seconds and twice as it ends: for what was appended since that file's last entry. The kept files are each seat's day files, `unstored` and `gaps`, and the frame's record of requests (C66).
+  - An entry is `{chain: "workplace-record", at, workplace, seat, file, offset, length, hash, previous}`.
+  - Its hash is the SHA-256 of `previous`, written as 64 lowercase hex digits, followed by the bytes from `offset` for `length`. Before a file's first entry, `previous` is 64 zeros.
+  - The carrier keeps each file's offset and last hash in `chain.state`, across runs.
+  - **The file sink:** appends each entry, one line of JSON, to `S/records/chain`.
+  - **The journal sink:** `up` starts the carrier as a transient unit of the user's manager, `workplace-carrier-NAME.service`, under `NoNewPrivileges` and `setpriv`, and refuses where no manager answers.
+    - The ledger marks the unit by its invocation id, and `down` stops it through its manager.
+    - The carrier writes each entry on its standard output, which the manager hands to the journal stamped with the unit.
+    - A run of the tests' own leaves about five lines of the carrier's in the journal, beside the manager's own lines about the unit.
+- **C73.** In every view of a workplace that keeps a chain, the fixed part masks, after the rows and closed, `/var/log/journal`, `/run/log/journal`, `/run/systemd/journal` and `/run/user/UID/systemd`, where they exist. `plan` and `build` refuse a row other than hidden at or beneath one of them, naming the seat, the row and its origin, as at the clone.
+- **C74.** On each pass the carrier reads every kept pane's pipe. Where one is gone, it sets it again and writes the time to the seat's `gaps`. It does not end the seat.
+- **C75.** `status` names, for each kept seat, its day file, its size against the limit and the byte the chain has reached, and, with the run up, its pane's pipe. It exits 1 for a pane without its pipe and for a sink that did not take an entry.
+  - `record verify NAME [DAY]` reads the seat's day file, today's by UTC by default, against its chain, taken from the plan's sink. From the journal, it takes only the entries whose `_SYSTEMD_USER_UNIT` is the carrier's unit.
+  - It names the first place where file and chain differ, or says that they agree and up to which byte.
+  - It exits 1 where they differ, and 2 for a seat it does not know, a day not written YYYY-MM-DD, or a workplace with no chain.
+- **C76.** After the rows, the fixed part shows a seat, at the record path, a file system holding one read-only directory for each seat whose record it may read, under that seat's name. That file system is itself read-only. A seat that may read none is shown nothing there. `why` names it.
+- **C77.** No seat writes, cuts short, renames or removes a record, its own or another's, or makes a file beside one. A record stands in S, which no view holds, and the record path shows it read-only.
+- **C78.** A seat that may read one seat's record reaches no third seat's through it, by a link, by `..` or by a name built for it. The record path holds only the directories the seat may read, each bound alone, and S is masked.
+- **C79.** A pane's bytes are stored as they came: NUL bytes, bytes that are not UTF-8, formats, commands and escapes. None is read as a pattern, a format or a command by the keeper, the carrier or `record verify`: the keeper copies bytes, and the chain and `record verify` hash them.
+- **C80.** `record verify` names a byte changed, a file cut short, a file removed and a line added in the middle, each at the first place it shows: the entry whose bytes no longer hash as sent, the byte where the file ends, or the file's absence.
+- **C81.** A change of day loses nothing and doubles nothing. Measured: 3,000 lines, one a millisecond, across a forced change of day, each kept once and in order.
+- **C82.** At the limit nothing more is stored that day, and the count of what was not stored is exact.
+- **C83.** With the journal as the sink, an entry that another process sends under the carrier's words is not taken as the carrier's. `record verify` reads only the entries the journal itself stamps with the carrier's unit.
+
 ## Limits, stated and not checked
 
 - A mail's body is carried byte for byte, since mail carries captures and logs, which hold control characters. The head is the frame's, and it ends at the first line of three dashes; a reader takes `from` from the head alone. A mail shown raw on a terminal can draw over its own head, so a mail is read through a program that does not obey control characters, as a seat's file tool does.
 - A C-c typed into a pane whose program is plain ends the view with it, before the program's own handler runs: it reaches the whole foreground process group, the view's bubblewrap included, which ends and takes the program with it. This was observed while building the Comms layer and has not been measured apart. A shell with job control and a full-screen program are not touched. A measure is owed before a plain program becomes a seat's command.
+- A read-only row does not close a socket. The fold knows files: a socket that any row shows, read-only included, gives the seat whatever its listener does for the user, and an abstract socket, which has no file, is reached by every seat that shares the machine's network. The frame closes its own: the server's (C68), each agent's (C39), and the journal's and the user manager's where a chain is kept (C73). For the rest, a workplace's text hides the places where the machine keeps sockets: `/tmp`, `/run` and the user's runtime directory.
+- A process of the user outside every view can stop the carrier or its unit, edit or remove a record, or move a process of its own into the carrier's unit and send under its name. An edit shows to `record verify`, and a stop as a gap in the chain. What the carrier had not sent when it was stopped without warning is the part that no entry covers.
+- The keeper takes the day from `date -u` on the path that `up` was given, and the carrier sends its entries every ten seconds and as it ends.

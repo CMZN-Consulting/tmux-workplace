@@ -144,36 +144,55 @@ def structure_problems($binding):
      | keyed($p; $pos) | group_by(.k)[] | select(.[0].k as $k | $have | index([$k]) | not)
      | "the \($p) term for \(.[0].k | join("/")) has no \($q) term (\(map(term_at) | join("; ")))");
 
-def mail_paths: [(.programs // [])[] | select(type == "object") | (.recorded // [])[] | select(type == "object" and (.term | type) == "array" and .term[0] == "mail" and (.term | length) == 2) | .term[1] | strings] | unique;
+def term_paths($word): [(.programs // [])[] | select(type == "object") | (.recorded // [])[] | select(type == "object" and (.term | type) == "array" and .term[0] == $word and (.term | length) == 2) | .term[1] | strings] | unique;
 
-def mail_problems($binding; $clone):
+def mail_paths: term_paths("mail");
+
+def shown_path_problems($binding; $clone; $word; $what; $where):
   . as $plan
-  | mail_paths as $mails
-  | if ($mails | length) == 0 then empty
+  | term_paths($word) as $paths
+  | if ($paths | length) == 0 then empty
     else
       def under($p; $q): $q == "/" or $p == $q or ($p | startswith($q + "/"));
       def at($o; $file): "\($o.path // $file):\($o.line // "?")";
       ($binding.directories // {}) as $d
-      | ($mails[] | select(under(.; $clone))
-         | "the mail path \(.) lies at or beneath the clone \($clone), which the frame masks in every view"),
-        ($mails[] | select(. == "/") | "the mail path / would cover each seat's whole view with its mailbox"),
-        ($mails[] | select(. != "/") as $m
+      | ($paths[] | select(under(.; $clone))
+         | "the \($what) \(.) lies at or beneath the clone \($clone), which the frame masks in every view"),
+        ($paths[] | select(. == "/") | "the \($what) / would cover each seat's whole view"),
+        ($paths[] | select(. != "/") as $m
          | ($plan | plan_terms[] | . as $r | ($binding.primitives[$r.term[0]].seat // null) as $seat | select($seat != null)
             | (($seat.directory.path? // empty) | select(. < ($r.term | length)) | $r.term[.] | select(type == "string" and under(.; $m))
-               | "\($r | term_at) (\($r.term[0])): the seat's directory \(.) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox"),
+               | "\($r | term_at) (\($r.term[0])): the seat's directory \(.) lies at or beneath the \($what) \($m), \($where)"),
               (($seat.argv // empty) | select(. < ($r.term | length)) | ($r.term[.] | try fromjson catch null)
                | select(type == "array") | .[0] | select(type == "string" and startswith("/") and under(.; $m))
-               | "\($r | term_at) (\($r.term[0])): the seat's program \(.) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox")),
+               | "\($r | term_at) (\($r.term[0])): the seat's program \(.) lies at or beneath the \($what) \($m), \($where)")),
            (($plan.programs // [])[] | select(type == "object") | (.path // "a program") as $file | (.recorded // [])[]
             | select(type == "object" and (.term | type) == "array" and .term[0] == $d.recorded and (.term | length) > $d.path)
             | .term[$d.path] as $p | select(($p | type) == "string" and under($p; $m))
-            | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies at or beneath the mail path \($m), where the frame shows each seat its mailbox"))
+            | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies at or beneath the \($what) \($m), \($where)"))
     end;
+
+def mail_problems($binding; $clone):
+  shown_path_problems($binding; $clone; "mail"; "mail path"; "where the frame shows each seat its mailbox"),
+  shown_path_problems($binding; $clone; "record-path"; "record path"; "where the frame shows a seat the records it may read");
 
 def seat_names($plan):
   [($plan | if type == "object" then .programs[]? else empty end) | select(type == "object") | (.plan // [])[]
    | (if type == "object" and has("term") then .term else . end)
    | select(type == "array" and length > 4 and .[0] == "pane") | {key: (.[1:4] | tojson), value: .[4]}] | from_entries;
+
+def chain_mask_problems($binding; $plan; $view; $masks):
+  def inside($m): type == "string" and (. == $m or startswith(if $m == "/" then "/" else $m + "/" end));
+  def at($o): "\($o.path // "?"):\($o.line // "?")";
+  if ($masks | length) == 0 then empty
+  else
+    seat_names($plan) as $names
+    | $binding.tables.view as $spec
+    | table_rows($plan; $view; $spec)[]
+    | select(type == "object" and (.key | type) == "array" and (.value[0]? != "hidden")) | . as $row
+    | $masks[] as $m | select($row.key[3] | inside($m)) | $m
+    | "seat \($names[$row.key[0:3] | tojson] // "?") (\($row.key[0:3] | join("/"))): \($row.key[3]) (\($row.value[0]?), from \([($row.origins // [$row.origin // {}])[] | at(.)] | join(", "))) lies at or beneath \(.), which the frame hides in every view of a workplace that keeps a chain, as a hidden row would"
+  end;
 
 def clone_row_problems($binding; $plan; $view; $clone):
   def inside: type == "string" and (. == $clone or startswith(if $clone == "/" then "/" else $clone + "/" end));

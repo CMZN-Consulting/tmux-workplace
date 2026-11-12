@@ -15,9 +15,12 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-v5
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-v6
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
+LOG_PROGRAMS=(dd date tail head)
+JOURNAL_PROGRAMS=(systemd-run systemctl journalctl)
+CHAIN_PERIOD=10
 MAIL_LIMIT=256000
 TEXT_LIMIT=4096
 
@@ -323,14 +326,19 @@ refuse_clone() {
   return 1
 }
 
+chain_masks() {
+  printf '%s\n' /var/log/journal /run/log/journal /run/systemd/journal "/run/user/$EUID/systemd"
+}
+
 refuse_rows() {
   local plan=$1 view=$2 given=$3 found
   local -a faults
   found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --arg given "$given" \
-    --slurpfile b "$tool/host/binding.json" --slurpfile v "$view" '
+    --argjson masks "$(json_list $(chain_masks))" --slurpfile b "$tool/host/binding.json" --slurpfile v "$view" '
     include "table";
     joined($b[0]; $root) as $plan
-    | clone_row_problems($b[0]; $plan; $v[0]; $clone), (if $given == "yes" then given_problems($b[0]; $plan; $v[0]) else empty end)' "$plan") \
+    | clone_row_problems($b[0]; $plan; $v[0]; $clone), (if $given == "yes" then given_problems($b[0]; $plan; $v[0]) else empty end),
+      (if ($v[0].records.chain? // null) != null then chain_mask_problems($b[0]; $plan; $v[0]; $masks) else empty end)' "$plan") \
     || { warn "cannot read $plan for the rows at the clone"; return 1; }
   [[ -z $found ]] && return 0
   mapfile -t faults <<< "$found"
@@ -399,15 +407,18 @@ print_fold_report() {
     .report.names as $names
     | (.report.reach // {}) as $reach
     | (if .view.mail == null then empty else "mail: \(.view.mail.path), where each seat is shown its own mailbox (\(ats(.view.mail.origins)))" end),
+      (if .view.records == null then empty
+       else "records: \(if .view.records.path == null then "shown to no seat" else "shown at \(.view.records.path)" end); \(.view.records.limit) bytes a day for a pane; \(if .view.records.chain == null then "no chain is made, and the files are kept" else "chained to the \(.view.records.chain)" end)" end),
       (.view.seats[]
        | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); clearance \(.clearance.value)"
          + (if .clearance.scope == null then ", by default" else ", the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)
          + (if .home == null then "" else "; home \(.home.state), by \(.home.variable)" end)
          + (if .expects == null then "" else "; expects \([.expects[].name] | join(", "))" end)
+         + (if .record == null then "" else "; its pane \(if .record.pane == "kept" then "kept" else "not kept" end)" end)
          + "; \(.rows) rows",
          (if $reach[.seat | tojson] == null then empty
           else $reach[.seat | tojson] as $r
-            | ["mail", "grab", "write"][] as $a
+            | (["mail", "grab", "write", "record"][] | select(. as $a | $r | has($a))) as $a
             | "  \($a): \(if ($r[$a] | length) == 0 then "no seat" else [$r[$a][] | .name + (if (.origins | length) > 0 then " (\(ats(.origins)))" else "" end)] | join(", ") end)"
           end),
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
@@ -883,6 +894,49 @@ make_mail() {
   say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path"
 }
 
+need_programs_for() {
+  local why=$1 program
+  shift
+  for program in "$@"; do
+    command -v "$program" > /dev/null || { warn "$why needs $program, and $program is not on PATH"; return 2; }
+  done
+}
+
+carrier_unit() { printf 'workplace-carrier-%s.service\n' "$1"; }
+
+make_records() {
+  local workplace=$1 path state_dir dir entries='[]' seat box rel chain
+  [[ $(jq -r '.view.records // empty | type' <<< "$folded") == object ]] || return 0
+  path=$(jq -r '.view.records.path // empty' <<< "$folded")
+  chain=$(jq -r '.view.records.chain // empty' <<< "$folded")
+  need_programs_for "a plan that keeps a record" "${LOG_PROGRAMS[@]}" || exit 2
+  [[ $chain == journal ]] && { need_programs_for "a plan whose chain goes to the journal" "${JOURNAL_PROGRAMS[@]}" || exit 2; }
+  state_dir=$(state_root) || die "build needs the workplaces' state directory for the records, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
+  if [[ -n $path ]]; then
+    [[ -d $path ]] || die "build refuses: the record path $path is not a directory on the machine, and the frame shows a seat the records it may read there"
+    if [[ $path == "$state_dir" || $path == "$state_dir"/* || $state_dir == "$path"/* ]]; then
+      die "build refuses: the record path $path and the workplaces' state directory $state_dir lie one in the other; it would cover the seats' homes and keys, or stand where the frame keeps its state"
+    fi
+  fi
+  state_dir=$state_dir/$workplace
+  [[ -d $state_dir && ! -L $state_dir ]] || die "the state directory $state_dir is missing" 2
+  dir=$state_dir/records
+  [[ -e $dir || -L $dir ]] || mkdir -m 0700 -- "$dir" || die "cannot make $dir" 2
+  [[ -d $dir && ! -L $dir && $(stat -c %a -- "$dir") == 700 && $(stat -c %u -- "$dir") == "$EUID" ]] \
+    || die "build refuses: $dir is not a directory of this user's with mode 700, where the frame keeps the records"
+  while IFS= read -r seat; do
+    box=$(jq -r '.seat | join(" ")' <<< "$seat")
+    make_dirs "$state_dir" "records/$box" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the record of $(jq -r '.name' <<< "$seat") stands"
+    entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg dir "$dir" '. + [$s + {box: $box, dir: "\($dir)/\($box)"}]' <<< "$entries")
+  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], pane: .record.pane, reads: (.reach.record // [])}' <<< "$folded")
+  jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --arg c "$chain" --arg u "$(carrier_unit "$workplace")" \
+    --argjson limit "$(jq '.view.records.limit' <<< "$folded")" --argjson seats "$entries" \
+    '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), limit: $limit,
+      chain: (if $c == "" then null else $c end), unit: $u, seats: $seats}' > "$build_dir/records.json" \
+    || die "cannot write $build_dir/records.json" 2
+  say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
+}
+
 manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
 
 cmd_build() {
@@ -1044,7 +1098,8 @@ cmd_build() {
   fi
   make_homes "$holders" "$(jq -r '.name // "default"' <<< "$report")"
   [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
-  for name in keys.json homes.json mail.json; do
+  [[ -n $folded ]] && make_records "$(jq -r '.name // "default"' <<< "$report")"
+  for name in keys.json homes.json mail.json records.json; do
     if [[ -f $build_dir/$name ]]; then
       copy_sums+=("$(cd -- "$build_dir" && sha256sum -- "$name")") || die "cannot hash $build_dir/$name"
     fi
@@ -1255,51 +1310,35 @@ apply_term() {
 }
 
 name_an_empty_server() {
-  local setpriv tmux server out
+  local setpriv tmux socket out
   local -a lines
   setpriv=$(jq -r '.slots[(["program", "setpriv"] | tojson)] // ""' <<< "$state")
   tmux=$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' <<< "$state")
-  server=$(jq -r '.slots[(["server"] | tojson)] // ""' <<< "$state")
-  [[ -n $setpriv && -n $tmux && -n $server ]] || return 0
-  run_call out "$setpriv" --no-new-privs "$tmux" -L "$server" -u \
-    list-sessions -F x \; show-options -sv exit-empty \; display-message -p '#{socket_path}' || return 0
+  socket=$(jq -r '.slots[(["socket-path"] | tojson)] // ""' <<< "$state")
+  [[ -n $setpriv && -n $tmux && -n $socket ]] || return 1
+  run_call out "$setpriv" --no-new-privs "$tmux" -S "$socket" -u \
+    list-sessions -F x \; show-options -sv exit-empty \; display-message -p '#{socket_path}' || return 1
   mapfile -t lines <<< "$out"
-  (( ${#lines[@]} == 2 )) && [[ ${lines[0]} == off && -n ${lines[1]} ]] || return 0
-  warn "the tmux server at ${lines[1]} is left running with no session, and the loop never ends a server; to end it: tmux -S ${lines[1]@Q} kill-server"
+  (( ${#lines[@]} == 2 )) && [[ ${lines[0]} == off && -n ${lines[1]} ]] || return 1
+  warn "the tmux server at ${lines[1]} is left running with no session, and the loop never ends a server; $run_dir, which holds its socket, is kept while it stands. To end it: tmux -S ${lines[1]@Q} kill-server, and then remove $run_dir"
+  return 0
 }
 
 read_server() {
-  local setpriv=$1 tmux=$2 label=$3 out
+  local setpriv=$1 tmux=$2 socket=$3 out
   local -a lines
   server_up=0 server_sessions=0 server_pid="" server_mark="" server_socket=""
-  run_call out "$setpriv" --no-new-privs "$tmux" -L "$label" -u \
+  run_call out "$setpriv" --no-new-privs "$tmux" -S "$socket" -u \
     display-message -p '#{server_sessions} #{pid} #{@workplace-clone}' \; display-message -p '#{socket_path}' || return 0
   mapfile -t lines <<< "$out"
   [[ ${#lines[@]} == 2 && ${lines[0]} =~ ^([0-9]+)\ ([0-9]+)\ (.*)$ ]] || return 0
   server_up=1 server_sessions=${BASH_REMATCH[1]} server_pid=${BASH_REMATCH[2]} server_mark=${BASH_REMATCH[3]} server_socket=${lines[1]}
 }
 
-server_free() {
-  local label
-  label=$(jq -r '.name // "default"' <<< "$report")
-  read_server "$(jq -r '.[(["program", "setpriv"] | tojson)]' <<< "$program_slots")" "$(jq -r '.[(["program", "tmux"] | tojson)]' <<< "$program_slots")" "$label"
-  (( server_up )) || return 0
-  [[ $server_mark == "$clone" ]] && return 0
-  if [[ -n $server_mark ]]; then
-    warn "the tmux server $label at $server_socket carries the mark of the clone $server_mark, not this one's ($clone); up leaves it alone"
-    return 1
-  fi
-  if (( server_sessions > 0 )); then
-    warn "the tmux server $label at $server_socket holds sessions ($server_sessions) and carries no clone's mark; up leaves it alone"
-    return 1
-  fi
-  return 0
-}
-
 run_server() {
   local slots=$run_dir/state.json recorded
   read_server "$(jq -r '.slots[(["program", "setpriv"] | tojson)] // ""' "$slots")" "$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' "$slots")" \
-    "$(jq -r '.slots[(["server"] | tojson)] // ""' "$slots")"
+    "$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$slots")"
   recorded=$(jq -r '.slots[(["server-pid"] | tojson)] // ""' "$slots")
   if (( ! server_up )); then
     server_verdict="gone    the server: none answers"
@@ -1524,14 +1563,119 @@ set_mail() {
   done < <(jq -c '.seats[]' "$mail")
 }
 
+set_records() {
+  local records=$build_dir/records.json made_in state_dir path chain entry binds key slot place
+  [[ -f $records ]] || return 0
+  made_in=$(jq -r '.state' "$records")
+  state_dir=$(workplace_state "$(jq -r '.workplace' "$records")") || state_dir=""
+  if [[ $made_in != "$state_dir" ]]; then
+    warn "the records were made in $made_in, and this shell's state directory is ${state_dir:-unknown}; build again from this shell"
+    return 1
+  fi
+  need_programs_for "a plan that keeps a record" "${LOG_PROGRAMS[@]}" || return 1
+  path=$(jq -r '.path // empty' "$records")
+  chain=$(jq -r '.chain // empty' "$records")
+  if [[ -n $path ]]; then
+    [[ -d $path ]] || { warn "the record path $path is not a directory on the machine"; return 1; }
+    state=$(jq -c --arg p "$path" '.slots[(["record-path"] | tojson)] = $p' <<< "$state")
+  fi
+  while IFS= read -r entry; do
+    [[ -d $(jq -r '.dir' <<< "$entry") ]] || { warn "the record of $(jq -r '.name' <<< "$entry") is missing; build again"; return 1; }
+    binds=$(jq -c --slurpfile r "$records" --arg p "$path" '[.reads[] as $n | $r[0].seats[] | select(.name == $n) | [.dir, "\($p)/\($n)"]]' <<< "$entry")
+    [[ $binds == '[]' ]] && continue
+    state=$(jq -c --argjson k "$(jq -c '.seat' <<< "$entry")" --arg b "$binds" '.slots[(["record-binds"] + $k | tojson)] = $b' <<< "$state")
+  done < <(jq -c '.seats[]' "$records")
+  if [[ -n $chain ]]; then
+    for place in "mask-journal-var /var/log/journal" "mask-journal-run /run/log/journal" "mask-journal-sockets /run/systemd/journal" "mask-manager /run/user/$EUID/systemd"; do
+      slot=${place%% *} key=${place#* }
+      [[ -d $key ]] && state=$(jq -c --arg s "$slot" --arg p "$key" '.slots[([$s] | tojson)] = $p' <<< "$state")
+    done
+  fi
+  if [[ $chain == journal ]]; then
+    need_programs_for "a plan whose chain goes to the journal" "${JOURNAL_PROGRAMS[@]}" || return 1
+    systemctl --user show-environment > /dev/null 2>&1 \
+      || { warn "the plan's chain goes to the journal, and no user manager answers here to start the carrier as its unit"; return 1; }
+  fi
+  return 0
+}
+
+set_pipes() {
+  local records=$build_dir/records.json entry pane cmd out setpriv tmux socket
+  [[ -f $records ]] || return 0
+  setpriv=$(jq -r '.slots[(["program", "setpriv"] | tojson)]' <<< "$state")
+  tmux=$(jq -r '.slots[(["program", "tmux"] | tojson)]' <<< "$state")
+  socket=$(jq -r '.slots[(["socket-path"] | tojson)]' <<< "$state")
+  while IFS= read -r entry; do
+    pane=$(jq -r --argjson k "$(jq -c '.seat' <<< "$entry")" '.slots[(["pane"] + $k | tojson)] // ""' <<< "$state")
+    [[ -n $pane ]] || { warn "the pane of $(jq -r '.name' <<< "$entry") was not made, and its record has no pipe"; return 1; }
+    cmd=$(pipe_command "$(jq -r '.dir' <<< "$entry")" "$(jq -r '.limit' "$records")")
+    log_call "$setpriv" --no-new-privs "$tmux" -S "$socket" -u pipe-pane -O -t "$pane" "$cmd"
+    if ! run_call out "$setpriv" --no-new-privs "$tmux" -S "$socket" -u pipe-pane -O -t "$pane" "$cmd" \; display-message -p -t "$pane" '#{pane_pipe}' \
+      || [[ $out != 1 ]]; then
+      warn "the pipe of $(jq -r '.name' <<< "$entry")'s pane was not set: $(jq_message "$run_dir/call.err")"
+      return 1
+    fi
+  done < <(jq -c '.seats[] | select(.pane == "kept")' "$records")
+  return 0
+}
+
 start_carrier() {
-  [[ -f $build_dir/mail.json ]] || return 0
-  local setpriv_program stat_program pid ident i fd now
+  [[ -f $build_dir/mail.json || -f $build_dir/records.json ]] || return 0
+  local setpriv_program stat_program systemctl_program pid="" ident i fd now chain="" unit="" invocation
   setpriv_program=$(command -v setpriv) && stat_program=$(command -v stat) || { warn "up needs setpriv and stat for the carrier"; return 1; }
   mkdir -- "$run_dir/carrier" && ident=$(stat -c %d:%i -- "$run_dir/carrier") || { warn "cannot make $run_dir/carrier"; return 1; }
+  [[ -f $build_dir/records.json ]] && chain=$(jq -r '.chain // empty' "$build_dir/records.json")
+  exec {fd}<> <(:)
+  if [[ $chain == journal ]]; then
+    unit=$(jq -r '.unit' "$build_dir/records.json")
+    systemctl_program=$(command -v systemctl)
+    if systemctl --user is-active --quiet "$unit" 2> /dev/null; then
+      warn "the carrier's unit $unit is running already; another run of this workplace may be up"
+      return 1
+    fi
+    systemctl --user reset-failed "$unit" > /dev/null 2>&1
+    local -a environment=(--setenv=WORKPLACE_ROOT="$WORKPLACE_ROOT" --setenv=WORKPLACE_CONFIG="$WORKPLACE_CONFIG" --setenv=PATH="$PATH")
+    [[ -n ${HOME-} ]] && environment+=(--setenv=HOME="$HOME")
+    [[ -n ${XDG_STATE_HOME-} ]] && environment+=(--setenv=XDG_STATE_HOME="$XDG_STATE_HOME")
+    if ! systemd-run --user --quiet --collect --unit="$unit" -p WorkingDirectory=/ -p NoNewPrivileges=yes "${environment[@]}" \
+      -- "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry > "$run_dir/carrier.log" 2>&1; then
+      warn "the user manager did not start the carrier's unit $unit: $(tail -n 1 "$run_dir/carrier.log")"
+      return 1
+    fi
+    for (( i = 0; i < 100; i++ )); do
+      [[ -e $run_dir/carrier/ready ]] && break
+      systemctl --user is-active --quiet "$unit" 2> /dev/null || break
+      read -r -t 0.1 -u "$fd" _
+    done
+    exec {fd}<&-
+    invocation=$(systemctl --user show -p InvocationID --value "$unit" 2> /dev/null)
+    if [[ ! -e $run_dir/carrier/ready || -z $invocation ]] || ! systemctl --user is-active --quiet "$unit" 2> /dev/null; then
+      systemctl --user stop "$unit" > /dev/null 2>&1
+      warn "the carrier did not start: $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -n 1 -o cat --no-pager 2> /dev/null)"
+      return 1
+    fi
+    jq -c -n --arg what "the carrier, unit $unit" --arg is "$invocation" \
+      --argjson when "$(json_list "$systemctl_program" --user show -p InvocationID --value "$unit")" \
+      --argjson call "$(json_list "$systemctl_program" --user stop "$unit")" \
+      '{what: $what, when: $when, is: $is, call: $call}' >> "$run_dir/ledger"
+    jq -c -n --arg what "the carrier, unit $unit" --arg is "$invocation" \
+      --arg note "requests wait in the seats' out, and none is lost, and the chain waits, until the workplace is brought down and up again" \
+      --argjson call "$(json_list "$systemctl_program" --user show -p InvocationID --value "$unit")" \
+      '{what: $what, is: $is, note: $note, call: $call}' >> "$run_dir/checks"
+    where=up
+    if [[ $(systemctl --user show -p NoNewPrivileges --value "$unit" 2> /dev/null) != yes ]]; then
+      warn "up: the carrier's unit $unit does not run under no-new-privileges; it is refused"
+      return 1
+    fi
+    pid=$(systemctl --user show -p MainPID --value "$unit" 2> /dev/null)
+    if [[ $pid =~ ^[1-9][0-9]*$ && -e /proc/$pid ]]; then
+      meets no-new-privs "$pid" "the carrier" || return 1
+    fi
+    say "up: the carrier, unit $unit, invocation $invocation"
+    return 0
+  fi
   ( cd / && exec "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry < /dev/null > "$run_dir/carrier.log" 2>&1 ) &
   pid=$!
-  exec {fd}<> <(:)
   for (( i = 0; i < 100; i++ )); do
     [[ -e $run_dir/carrier/ready ]] && break
     now=$(stat -L -c %d:%i -- "/proc/$pid/cwd" 2> /dev/null) || break
@@ -1549,7 +1693,7 @@ start_carrier() {
     --argjson call "$(json_list "$BASH" "$build_dir/bin/workplace" carrier-end "$pid" "$ident")" \
     '{what: $what, when: $when, is: $is, call: $call}' >> "$run_dir/ledger"
   jq -c -n --arg what "the carrier, pid $pid" --arg is "$ident" \
-    --arg note "requests wait in the seats' out, and none is lost, until the workplace is brought down and up again" \
+    --arg note "requests wait in the seats' out, and none is lost, and the chain waits, until the workplace is brought down and up again" \
     --argjson call "$(json_list "$stat_program" -L -c %d:%i -- "/proc/$pid/cwd")" \
     '{what: $what, is: $is, note: $note, call: $call}' >> "$run_dir/checks"
   where=up
@@ -1570,27 +1714,29 @@ cmd_up() {
   if [[ -f $build_dir/plan-view.json ]] && jq -e 'any(.seats[]?; has("expects"))' "$build_dir/plan-view.json" > /dev/null 2>&1; then
     need_version env --version "$ENV_FLOOR"
   fi
+  local socket=$run_dir/$(jq -r '.name // "default"' <<< "$report") tmux_dir=${TMUX_TMPDIR:-/tmp}/tmux-$EUID tmux_default=/tmp/tmux-$EUID
+  (( ${#socket} <= 107 )) \
+    || die "the server's socket would be $socket, ${#socket} bytes, and a socket's path holds at most 107; give the clone a shorter path" 2
+  [[ -d $tmux_dir ]] || tmux_dir=""
+  [[ -d $tmux_default && $tmux_default != "$tmux_dir" ]] || tmux_default=""
   mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
   local run
   printf -v run 'workplace-%08x%08x' "$SRANDOM" "$SRANDOM"
   jq -c '.tables' <<< "$report" > "$run_dir/tables.json"
   mkdir -- "$run_dir/seats" || die "cannot make $run_dir/seats"
   state=$(jq -n -c --arg root "$root" --arg clone "$clone" --arg build "$build_dir" --arg run "$run" --arg bash "$BASH" \
-    --argjson programs "$program_slots" \
+    --arg socket "$socket" --arg tmuxdir "$tmux_dir" --arg tmuxdefault "$tmux_default" --argjson programs "$program_slots" \
     '{slots: ({(["root"] | tojson): $root, (["clone"] | tojson): $clone, (["build"] | tojson): $build,
-               (["run"] | tojson): $run, (["bash"] | tojson): $bash} + $programs)}')
+               (["run"] | tojson): $run, (["bash"] | tojson): $bash, (["socket-path"] | tojson): $socket,
+               (["tmux-dir"] | tojson): $tmuxdir, (["tmux-default-dir"] | tojson): $tmuxdefault} + $programs)}')
   : > "$run_dir/ledger"
   : > "$run_dir/checks"
   : > "$run_dir/calls.jsonl"
-  if ! server_free; then
-    rm -rf -- "$run_dir"
-    die "up refuses before its first term, and starts nothing"
-  fi
   if ! check_values "$(jq -r '.name // "default"' <<< "$report")"; then
     rm -rf -- "$run_dir"
     die "up refuses before its first term, and starts nothing"
   fi
-  if ! set_homes || ! start_agents || ! set_mail || ! start_carrier; then
+  if ! set_homes || ! start_agents || ! set_mail || ! set_records || ! start_carrier; then
     teardown failed
     rm -rf -- "$run_dir"
     die "up stopped before its first term; every agent and carrier it started is ended"
@@ -1610,12 +1756,19 @@ cmd_up() {
     rm -rf -- "$run_dir"
     die "the plan holds $plan_terms terms, and ${#records[@]} were ordered"
   fi
-  local record applied=0
+  local record applied=0 piped=0
   for record in "${records[@]}"; do
+    if (( ! piped )) && [[ $(jq -r '.term[0]' <<< "$record") == start ]]; then
+      piped=1
+      if ! set_pipes; then
+        teardown failed
+        name_an_empty_server || rm -rf -- "$run_dir"
+        die "up stopped after $applied of ${#records[@]} terms, before the first start, when a record's pipe was not set; everything it made is torn down"
+      fi
+    fi
     if ! apply_term "$record"; then
       teardown failed
-      name_an_empty_server
-      rm -rf -- "$run_dir"
+      name_an_empty_server || rm -rf -- "$run_dir"
       die "up stopped after $applied of ${#records[@]} terms; everything it made is torn down"
     fi
     applied=$(( applied + 1 ))
@@ -1626,10 +1779,12 @@ cmd_up() {
   if [[ -n $leftover ]]; then
     warn "a pane would stand that is not a seat: nothing claimed $leftover"
     teardown failed
-    name_an_empty_server
-    rm -rf -- "$run_dir"
+    name_an_empty_server || rm -rf -- "$run_dir"
     die "up stopped after $applied terms; everything it made is torn down"
   fi
+  read_server "$(jq -r '.slots[(["program", "setpriv"] | tojson)]' <<< "$state")" "$(jq -r '.slots[(["program", "tmux"] | tojson)]' <<< "$state")" \
+    "$(jq -r '.slots[(["socket-path"] | tojson)]' <<< "$state")"
+  (( server_up )) && state=$(jq -c --arg p "$server_pid" '.slots[(["server-pid"] | tojson)] = $p' <<< "$state")
   printf '%s\n' "$state" > "$run_dir/state.json"
   jq -n --argjson st "$state" \
     '[$st.slots | to_entries[] | {slot: (.key | fromjson), value: .value}]' > "$run_dir/slots.json"
@@ -1698,6 +1853,56 @@ cmd_exec() {
   exec "${argv[@]}"
 }
 
+cmd_keep() {
+  (( $# == 2 )) && [[ $2 =~ ^[1-9][0-9]*$ && $1 == /* ]] || die "keep takes the absolute path of a seat's record and the day's limit; a pane's pipe starts it" 2
+  local dir=$1 limit=$2 day="" file="" size=0 unstored=0 last=-1 today stats got chunk fd date_program dd_program
+  [[ -d $dir && ! -L $dir ]] || die "keep: $dir is not a directory" 2
+  umask 077
+  date_program=$(command -v date) && dd_program=$(command -v dd) || die "keep needs date and dd" 2
+  exec {fd}<> <(:)
+  while :; do
+    if ! read -r -t 0 -u 0; then
+      read -r -t 0.1 -u "$fd" _
+      continue
+    fi
+    if (( EPOCHSECONDS != last )); then
+      last=$EPOCHSECONDS
+      today=$("$date_program" -u +%F) && [[ $today =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || today=${day:-unknown-day}
+      if [[ $today != "$day" ]]; then
+        if [[ -n $day ]] && (( unstored > 0 )); then printf '%s %s\n' "$day" "$unstored" >> "$dir/unstored"; fi
+        day=$today file=$dir/$today.pane unstored=0
+        size=$(stat -c %s -- "$file" 2> /dev/null) || size=0
+      fi
+    fi
+    if (( size < limit )); then
+      chunk=$(( limit - size < 65536 ? limit - size : 65536 ))
+      stats=$("$dd_program" of="$file" oflag=append conv=notrunc bs="$chunk" count=1 2>&1)
+    else
+      stats=$("$dd_program" of=/dev/null bs=65536 count=1 2>&1)
+    fi
+    [[ $stats =~ (^|$'\n')([0-9]+)\ bytes?\  ]] || break
+    got=${BASH_REMATCH[2]}
+    (( got == 0 )) && break
+    if (( size < limit )); then size=$(( size + got )); else unstored=$(( unstored + got )); fi
+  done
+  if [[ -n $day ]] && (( unstored > 0 )); then printf '%s %s\n' "$day" "$unstored" >> "$dir/unstored"; fi
+  return 0
+}
+
+sh_quote() {
+  local quoted=${1//"'"/"'\\''"}
+  printf "'%s'" "$quoted"
+}
+
+pipe_command() {
+  local word words=exec
+  for word in "$BASH" "$build_dir/bin/workplace" keep "$1" "$2"; do
+    words+=" $(sh_quote "$word")"
+  done
+  words=${words//%/%%}
+  printf '%s\n' "${words//#/##}"
+}
+
 carrier_pause() { read -r -t "$1" -u "$pause_fd" _ || :; }
 
 carrier_git() {
@@ -1708,7 +1913,7 @@ carrier_git() {
     git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false -c gc.auto=0 -c maintenance.auto=false "$@" 9>&-
 }
 
-carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -L "$carrier_server" -u "$@" 9>&-; }
+carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 9>&-; }
 
 carrier_next_id() {
   local n=0
@@ -1962,58 +2167,220 @@ carrier_recover() {
   rm -f -- "$comms/serving"
 }
 
+chain_load() {
+  local state_file=$records_dir/chain.state line rel
+  declare -gA chain_offset=() chain_hash=()
+  [[ -f $state_file ]] || return 0
+  while IFS=$'\t' read -r rel line; do
+    chain_offset[$rel]=${line%% *}
+    chain_hash[$rel]=${line#* }
+  done < <(jq -r '.files // {} | to_entries[] | "\(.key)\t\(.value.offset) \(.value.hash)"' "$state_file" 2> /dev/null)
+}
+
+chain_save() {
+  local rel state_file=$records_dir/chain.state
+  for rel in "${!chain_offset[@]}"; do
+    printf '%s\t%s\t%s\n' "$rel" "${chain_offset[$rel]}" "${chain_hash[$rel]}"
+  done | jq -R -s --arg failed "$chain_failed" '
+    {files: (split("\n")[:-1] | map(split("\t") | {key: .[0], value: {offset: (.[1] | tonumber), hash: .[2]}}) | from_entries)}
+    + (if $failed == "" then {} else {failed: $failed} end)' > "$state_file.new" && mv -f -- "$state_file.new" "$state_file"
+}
+
+chain_put() {
+  if [[ $chain_sink == file ]]; then
+    printf '%s\n' "$1" >> "$records_dir/chain"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+chain_one() {
+  local file=$1 rel=$2 seat=$3 size offset prev length hash entry
+  size=$(stat -c %s -- "$file" 2> /dev/null) || return 0
+  offset=${chain_offset[$rel]:-0}
+  prev=${chain_hash[$rel]:-0000000000000000000000000000000000000000000000000000000000000000}
+  (( size > offset )) || return 0
+  length=$(( size - offset ))
+  hash=$({ printf '%s' "$prev"; tail -c "+$(( offset + 1 ))" -- "$file" | head -c "$length"; } | sha256sum)
+  hash=${hash%% *}
+  entry=$(jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$chain_workplace" --arg s "$seat" --arg f "$rel" \
+    --argjson o "$offset" --argjson l "$length" --arg h "$hash" --arg p "$prev" \
+    '{chain: "workplace-record", at: $at, workplace: $w, seat: $s, file: $f, offset: $o, length: $l, hash: $h, previous: $p}')
+  if chain_put "$entry"; then
+    chain_offset[$rel]=$size
+    chain_hash[$rel]=$hash
+  else
+    chain_failed=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  fi
+}
+
+carrier_chain() {
+  local i file
+  [[ -n $chain_sink ]] || return 0
+  (( ${1-0} || EPOCHSECONDS - chain_last >= CHAIN_PERIOD )) || return 0
+  chain_last=$EPOCHSECONDS
+  for i in "${!record_names[@]}"; do
+    for file in "${record_dirs[i]}"/*.pane "${record_dirs[i]}/unstored" "${record_dirs[i]}/gaps"; do
+      [[ -f $file && ! -L $file ]] && chain_one "$file" "${record_boxes[i]}/${file##*/}" "${record_names[i]}"
+    done
+  done
+  [[ -n $comms_record && -f $comms_record ]] && chain_one "$comms_record" comms/record "the frame"
+  chain_save
+}
+
+carrier_watch() {
+  local out line i
+  local -A piped=()
+  out=$(carrier_tmux list-panes -a -F '#{pane_id} #{pane_pipe}' 2> /dev/null) || return 0
+  while IFS=' ' read -r line i; do piped[$line]=$i; done <<< "$out"
+  for i in "${!record_names[@]}"; do
+    [[ ${record_kept[i]} == kept && -n ${record_pane[i]} && ${piped[${record_pane[i]}]-} == 0 ]] || continue
+    carrier_tmux pipe-pane -o -O -t "${record_pane[i]}" "$(pipe_command "${record_dirs[i]}" "$record_limit")" > /dev/null 2>&1
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "the pipe of the pane was gone, and the carrier set it again" >> "${record_dirs[i]}/gaps"
+  done
+}
+
 cmd_carry() {
   (( $# == 0 )) || die "carry takes no arguments; up starts it" 2
   need_jq
   locate
   umask 077
   verify_build || die "the carrier serves only a verified build" 2
-  local mail=$build_dir/mail.json entry i dev
-  [[ -f $mail ]] || die "the build holds no mail, and the carrier has nothing to serve" 2
+  local mail=$build_dir/mail.json records=$build_dir/records.json entry i dev state_dir
+  [[ -f $mail || -f $records ]] || die "the build holds no mail and keeps no record, and the carrier has nothing to do" 2
   [[ -d $run_dir/carrier ]] || die "the carrier is started by up, which makes $run_dir/carrier" 2
   cd -- "$run_dir/carrier" || die "cannot enter $run_dir/carrier" 2
-  comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail")
-  taken=$comms/taken
-  exec 9>> "$comms/lock" || die "cannot open $comms/lock" 2
-  flock -n 9 || die "another carrier serves the store $store; this one ends" 2
+  if [[ -f $mail ]]; then state_dir=$(jq -r '.state' "$mail"); else state_dir=$(jq -r '.state' "$records"); fi
+  exec 9>> "$state_dir/carrier.lock" || die "cannot open $state_dir/carrier.lock" 2
+  flock -n 9 || die "another carrier serves the workplace whose state is $state_dir; this one ends" 2
   carrier_stop=0
   trap 'carrier_stop=1' TERM INT
   trap '' HUP
   exec {pause_fd}<> <(:)
   seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=()
-  while IFS= read -r entry; do
-    seat_names+=("$(jq -r '.name' <<< "$entry")")
-    seat_boxes+=("$(jq -r '.box' <<< "$entry")")
-    seat_out+=("$(jq -r '.out' <<< "$entry")")
-    seat_answers+=("$(jq -r '.answers' <<< "$entry")")
-    seat_reach+=("$(jq -c '.reach' <<< "$entry")")
-    seat_keys+=("$(jq -c '.seat' <<< "$entry")")
-  done < <(jq -c '.seats[]' "$mail")
-  carrier_names=$(jq -c '[.seats[].name]' "$mail")
-  dev=$(stat -c %d -- "$taken") || die "cannot read $taken" 2
-  for i in "${!seat_out[@]}"; do
-    [[ -d ${seat_out[i]} && ! -L ${seat_out[i]} && $(stat -c %d -- "${seat_out[i]}") == "$dev" ]] \
-      || die "the out of ${seat_names[i]} is not a directory on the file system of $taken, and the carrier moves by renaming alone" 2
-  done
-  carrier_recover
+  comms_record=""
+  if [[ -f $mail ]]; then
+    while IFS= read -r entry; do
+      seat_names+=("$(jq -r '.name' <<< "$entry")")
+      seat_boxes+=("$(jq -r '.box' <<< "$entry")")
+      seat_out+=("$(jq -r '.out' <<< "$entry")")
+      seat_answers+=("$(jq -r '.answers' <<< "$entry")")
+      seat_reach+=("$(jq -c '.reach' <<< "$entry")")
+      seat_keys+=("$(jq -c '.seat' <<< "$entry")")
+    done < <(jq -c '.seats[]' "$mail")
+    carrier_names=$(jq -c '[.seats[].name]' "$mail")
+    comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail")
+    taken=$comms/taken
+    comms_record=$comms/record
+    dev=$(stat -c %d -- "$taken") || die "cannot read $taken" 2
+    for i in "${!seat_out[@]}"; do
+      [[ -d ${seat_out[i]} && ! -L ${seat_out[i]} && $(stat -c %d -- "${seat_out[i]}") == "$dev" ]] \
+        || die "the out of ${seat_names[i]} is not a directory on the file system of $taken, and the carrier moves by renaming alone" 2
+    done
+    carrier_recover
+  fi
+  record_names=() record_boxes=() record_dirs=() record_keys=() record_kept=() record_pane=()
+  chain_sink="" chain_last=0 chain_failed=""
+  if [[ -f $records ]]; then
+    while IFS= read -r entry; do
+      record_names+=("$(jq -r '.name' <<< "$entry")")
+      record_boxes+=("$(jq -r '.box' <<< "$entry")")
+      record_dirs+=("$(jq -r '.dir' <<< "$entry")")
+      record_keys+=("$(jq -c '.seat' <<< "$entry")")
+      record_kept+=("$(jq -r '.pane // "none"' <<< "$entry")")
+    done < <(jq -c '.seats[]' "$records")
+    records_dir=$(jq -r '.dir' "$records") record_limit=$(jq -r '.limit' "$records")
+    chain_sink=$(jq -r '.chain // empty' "$records") chain_workplace=$(jq -r '.workplace' "$records")
+    [[ -n $chain_sink ]] && chain_load
+  fi
   : > "$run_dir/carrier/ready"
   while (( ! carrier_stop )) && [[ ! -f $run_dir/state.json ]]; do carrier_pause 0.2; done
-  (( carrier_stop )) && exit 0
+  if [[ ! -f $run_dir/state.json ]]; then
+    (( ${#record_names[@]} )) && carrier_chain 1
+    exit 0
+  fi
   carrier_setpriv=$(jq -r '.slots[(["program", "setpriv"] | tojson)] // ""' "$run_dir/state.json")
   carrier_tmux_program=$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' "$run_dir/state.json")
-  carrier_server=$(jq -r '.slots[(["server"] | tojson)] // ""' "$run_dir/state.json")
+  carrier_socket=$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$run_dir/state.json")
   carrier_run=$(jq -r '.slots[(["run"] | tojson)] // ""' "$run_dir/state.json")
   for i in "${!seat_keys[@]}"; do
     seat_pane[i]=$(jq -r --argjson k "${seat_keys[i]}" '.slots[(["pane"] + $k | tojson)] // ""' "$run_dir/state.json")
+  done
+  for i in "${!record_keys[@]}"; do
+    record_pane[i]=$(jq -r --argjson k "${record_keys[i]}" '.slots[(["pane"] + $k | tojson)] // ""' "$run_dir/state.json")
   done
   while (( ! carrier_stop )); do
     for i in "${!seat_names[@]}"; do
       (( carrier_stop )) && break
       carrier_serve "$i"
     done
+    (( ${#record_names[@]} )) && { carrier_watch; carrier_chain; }
     (( carrier_stop )) || carrier_pause 1
   done
+  if (( ${#record_names[@]} )); then
+    carrier_chain 1
+    carrier_pause 0.5
+    carrier_chain 1
+  fi
   exit 0
+}
+
+record_entries() {
+  local records=$1 rel=$2
+  if [[ $(jq -r '.chain' "$records") == file ]]; then
+    [[ -f $(jq -r '.dir' "$records")/chain ]] || return 0
+    jq -c --arg f "$rel" 'select(.chain? == "workplace-record" and .file == $f)' "$(jq -r '.dir' "$records")/chain"
+  else
+    journalctl --user _SYSTEMD_USER_UNIT="$(jq -r '.unit' "$records")" -o json --no-pager 2> /dev/null \
+      | jq -c --arg f "$rel" '.MESSAGE | strings | (try fromjson catch null) | select(type == "object" and .chain == "workplace-record" and .file == $f)'
+  fi
+}
+
+cmd_record() {
+  [[ ${1-} == verify ]] && (( $# == 2 || $# == 3 )) || die "record takes verify, a seat's name, and a day as YYYY-MM-DD, today by default" 2
+  local name=$2 day=${3-} records seat file rel size expected=0 prev=0000000000000000000000000000000000000000000000000000000000000000 entry at offset length hash previous got
+  need_jq
+  locate
+  records=$build_dir/records.json
+  [[ -f $records ]] || die "this workplace keeps no record" 2
+  verify_build || die "record verify reads only a verified build" 2
+  [[ -n $(jq -r '.chain // empty' "$records") ]] || die "this workplace keeps no chain, so its records cannot be verified" 2
+  seat=$(jq -c --arg n "$name" '.seats[] | select(.name == $n)' "$records")
+  [[ -n $seat ]] || die "no seat is named $name in this workplace" 2
+  [[ -n $day ]] || day=$(date -u +%F)
+  [[ $day =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || die "the day $day is not written YYYY-MM-DD" 2
+  rel="$(jq -r '.box' <<< "$seat")/$day.pane"
+  file="$(jq -r '.dir' <<< "$seat")/$day.pane"
+  while IFS= read -r entry; do
+    at=$(jq -r '.at' <<< "$entry") offset=$(jq -r '.offset' <<< "$entry") length=$(jq -r '.length' <<< "$entry")
+    hash=$(jq -r '.hash' <<< "$entry") previous=$(jq -r '.previous' <<< "$entry")
+    [[ $offset =~ ^[0-9]+$ && $length =~ ^[0-9]+$ ]] || { say "$rel: the chain's entry of $at is not one the carrier writes"; return 1; }
+    if [[ $previous != "$prev" ]]; then say "$rel: the chain is broken at its entry of $at: it names another hash before it than the one sent before"; return 1; fi
+    if (( offset != expected )); then say "$rel: the chain skips from byte $expected to byte $offset at its entry of $at"; return 1; fi
+    if [[ ! -f $file ]]; then say "$rel is gone; its chain covers $(( offset + length )) bytes, the first of them from its entry of $at"; return 1; fi
+    size=$(stat -c %s -- "$file")
+    if (( size < offset + length )); then
+      say "$rel is cut short at byte $size: its chain's entry of $at covers the $length bytes from byte $offset"
+      return 1
+    fi
+    got=$({ printf '%s' "$prev"; tail -c "+$(( offset + 1 ))" -- "$file" | head -c "$length"; } | sha256sum)
+    if [[ ${got%% *} != "$hash" ]]; then
+      say "$rel differs from its chain in the $length bytes from byte $offset, which its entry of $at covers"
+      return 1
+    fi
+    prev=$hash expected=$(( offset + length ))
+  done < <(record_entries "$records" "$rel")
+  if [[ ! -f $file ]]; then
+    (( expected == 0 )) && { say "$rel: there is no such file, and no entry of the chain covers it"; return 0; }
+  fi
+  size=$(stat -c %s -- "$file")
+  if (( expected == 0 )); then say "$rel: no entry of the chain covers it yet; it holds $size bytes"; return 0; fi
+  if (( size > expected )); then
+    say "$rel agrees with its chain up to byte $expected; it holds $size bytes, and the last $(( size - expected )) are not covered yet"
+  else
+    say "$rel agrees with its chain up to byte $expected, its whole length"
+  fi
+  return 0
 }
 
 cmd_carrier_end() {
@@ -2072,7 +2439,7 @@ cmd_why() {
     fi
   fi
   jq -r -L "$lib" --arg root "$root" --arg seat "$seat" --arg path "$path" --arg stateroot "$state_dir" --arg rungnupg "$gnupg" \
-    --arg keyview "$key_view" --arg workplace "$workplace" --argjson supplied "$supplied" --arg valuesnote "$values_note" --arg values "$file" --arg clone "$clone" \
+    --arg keyview "$key_view" --argjson tmuxdirs "$(json_list "${TMUX_TMPDIR:-/tmp}/tmux-$EUID" "/tmp/tmux-$EUID")" --argjson chainmasks "$(json_list $(chain_masks))" --arg workplace "$workplace" --argjson supplied "$supplied" --arg valuesnote "$values_note" --arg values "$file" --arg clone "$clone" \
     --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
     include "table";
     . as $raw
@@ -2095,8 +2462,10 @@ cmd_why() {
           | (if $folded_seat.home? == null or $stateroot == "" then null
              else "\($stateroot)/\($workplace)/homes/\($folded_seat.home.kind)/\($k | join("/"))" end) as $home_path
           | ($folded[0].mail.path? // null) as $mailpath
+          | ($folded[0].records.path? // null) as $recordpath
           | def within($p; $q): $q != null and $q != "" and ($p == $q or beneath($p; $q));
-            (within($path; $clone) or within($path; $rungnupg) or within($path; $mailpath)
+            (within($path; $clone) or within($path; $rungnupg) or within($path; $mailpath) or within($path; $recordpath)
+             or any($tmuxdirs[]; within($path; .)) or (($folded[0].records.chain? // null) != null and any($chainmasks[]; within($path; .)))
              or (within($path; $stateroot) and (within($path; $home_path) | not)
                  and ((within($path; $keyview) and $key.state? == "held") | not))) as $masked
           | [$rows[] | select(beneath(.key[3]; $path))] as $below
@@ -2118,6 +2487,14 @@ cmd_why() {
             (if $path == $clone or beneath($path; $clone) then
                "masked by the frame after the rows: \($clone), the clone the workplace is built from, with its PLAN and BUILD, is shown to no seat, whatever its rows say"
              else empty end),
+            (if within($path; $recordpath) then
+               "the seat's records: shown by the frame after the rows (Logs) at \($recordpath), read-only: one directory for each seat whose record it may read, under that seat's name: \(($folded_seat.reach.record? // []) | if length == 0 then "none" else join(", ") end)"
+             else empty end),
+            ($tmuxdirs[] | select(. as $d | within($path; $d))
+             | "masked by the frame after the rows: \(.), where the user's tmux servers keep their sockets, is shown to no seat; the workplace's own server listens in the clone's run directory, which no view holds"),
+            (if ($folded[0].records.chain? // null) == null then empty
+             else $chainmasks[] | select(. as $d | within($path; $d))
+               | "masked by the frame after the rows (Logs): \(.), the journal's or the user manager's, is shown to no seat of a workplace that keeps a chain" end),
             (if within($path; $mailpath) then
                "the seat's mailbox: shown by the frame after the rows (Comms) at \($mailpath), whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat's own, and no other seat's"
              else empty end),
@@ -2273,6 +2650,15 @@ cmd_doctor() {
     if found=$(command -v "$program"); then say "ok      $program $found"
     else say "absent  $program: needed only by a plan that holds mail"; fi
   done
+  for program in "${JOURNAL_PROGRAMS[@]}"; do
+    if found=$(command -v "$program"); then say "ok      $program $found"
+    else say "absent  $program: needed only by a plan whose chain goes to the journal"; fi
+  done
+  if systemctl --user show-environment > /dev/null 2>&1; then
+    say "ok      a user manager answers: a chain may go to the journal"
+  else
+    say "absent  a user manager: a plan whose chain goes to the journal is refused by up"
+  fi
   local state_dir
   if state_dir=$(state_root); then
     say "ok      the workplaces' state directory $state_dir: a workplace whose seats hold keys may have a name of at most $(( 84 - ${#state_dir} - 1 )) bytes"
@@ -2317,21 +2703,6 @@ cmd_doctor() {
   return "$bad"
 }
 
-same_socket() {
-  local recorded label here
-  recorded=$(jq -r '.slots[(["socket"] | tojson)] // empty' "$run_dir/state.json" 2> /dev/null)
-  label=$(jq -r '.slots[(["server"] | tojson)] // empty' "$run_dir/state.json" 2> /dev/null)
-  [[ -n $recorded && -n $label ]] || { warn "the run's record names no server socket"; return 1; }
-  local dir=${TMUX_TMPDIR:-/tmp}/tmux-$UID there
-  here=$(cd -P -- "$dir" 2> /dev/null && pwd -P) || here=$dir
-  here=$here/$label
-  there=$(cd -P -- "${recorded%/*}" 2> /dev/null && pwd -P) || there=${recorded%/*}
-  there=$there/${recorded##*/}
-  [[ $here == "$there" ]] && return 0
-  warn "this run's server listens at $recorded, and tmux from this shell would reach $here; run it with the TMUX_TMPDIR of up"
-  return 1
-}
-
 cmd_down() {
   (( $# == 0 )) || die "down takes no arguments" 2
   need_jq
@@ -2342,7 +2713,6 @@ cmd_down() {
     return 0
   fi
   [[ -f $run_dir/state.json ]] || die "the run under $run_dir did not finish up; remove $run_dir by hand after checking its server" 2
-  same_socket || die "down refuses, and keeps $run_dir" 2
   run_server
   case $? in
     1) die "down refuses: ${server_verdict#refused }; $run_dir is kept" 2 ;;
@@ -2351,6 +2721,12 @@ cmd_down() {
   teardown down
   if (( undo_failed )); then
     die "an undo failed; $run_dir is kept"
+  fi
+  read_server "$(jq -r '.slots[(["program", "setpriv"] | tojson)] // ""' "$run_dir/state.json")" \
+    "$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' "$run_dir/state.json")" "$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$run_dir/state.json")"
+  if (( server_up && server_sessions > 0 )); then
+    say "down: the server at $server_socket still holds sessions that this run did not make ($server_sessions); $run_dir, which holds its socket, is kept while it stands"
+    return 0
   fi
   rm -rf -- "$run_dir"
   say "down: done"
@@ -2416,6 +2792,45 @@ seats_report() {
   return "$bad"
 }
 
+records_status() {
+  local up=$1 records=$build_dir/records.json entry day size chained state_file name failed out line pane
+  local -A piped=()
+  [[ -f $records ]] || return 0
+  day=$(date -u +%F)
+  state_file=$(jq -r '.dir' "$records")/chain.state
+  if (( up )); then
+    out=$(run_call line "$(jq -r '.slots[(["program", "setpriv"] | tojson)]' "$run_dir/state.json")" --no-new-privs \
+      "$(jq -r '.slots[(["program", "tmux"] | tojson)]' "$run_dir/state.json")" -S "$(jq -r '.slots[(["socket-path"] | tojson)]' "$run_dir/state.json")" -u \
+      list-panes -a -F '#{pane_id} #{pane_pipe}'; printf '%s' "$line")
+    while IFS=' ' read -r pane line; do [[ -n $pane ]] && piped[$pane]=$line; done <<< "$out"
+  fi
+  while IFS= read -r entry; do
+    name="$(jq -r '"\(.name) (\(.seat | join("/")))"' <<< "$entry")"
+    size=$(stat -c %s -- "$(jq -r '.dir' <<< "$entry")/$day.pane" 2> /dev/null) || size=0
+    if [[ -n $(jq -r '.chain // empty' "$records") ]]; then
+      chained=$(jq -r --arg f "$(jq -r '.box' <<< "$entry")/$day.pane" '.files[$f].offset // 0' "$state_file" 2> /dev/null) || chained=0
+      say "record  $name: $day.pane, $size of $(jq -r '.limit' "$records") bytes, chained to byte ${chained:-0}"
+    else
+      say "record  $name: $day.pane, $size of $(jq -r '.limit' "$records") bytes, and no chain"
+    fi
+    if (( up )); then
+      pane=$(jq -r --argjson k "$(jq -c '.seat' <<< "$entry")" '.slots[(["pane"] + $k | tojson)] // ""' "$run_dir/state.json")
+      if [[ ${piped[$pane]-} == 1 ]]; then
+        say "ok      the pipe of $name's pane"
+      else
+        say "gone    the pipe of $name's pane: what it shows is not kept until the carrier sets it again"
+        records_bad=1
+      fi
+    fi
+  done < <(jq -c '.seats[] | select(.pane == "kept")' "$records")
+  failed=$(jq -r '.failed // empty' "$state_file" 2> /dev/null)
+  if [[ -n $failed ]]; then
+    say "gone    the chain's sink, the $(jq -r '.chain' "$records"), did not take an entry at $failed"
+    records_bad=1
+  fi
+  return 0
+}
+
 cmd_status() {
   (( $# == 0 )) || die "status takes no arguments" 2
   need_jq
@@ -2431,15 +2846,17 @@ cmd_status() {
     say "build: does not match its manifest"
     bad=1
   fi
+  records_bad=0
   if [[ ! -d $run_dir ]]; then
     say "run: down"
-    return "$bad"
+    [[ -d $build_dir ]] && records_status 0
+    return "$(( bad || records_bad ))"
   fi
   need_tmux
-  same_socket || return 2
   local run
   run=$(jq -r '.slots[(["run"] | tojson)] // "unknown"' "$run_dir/state.json" 2> /dev/null) || run=unknown
   say "run: up, $run"
+  say "attach  tmux -S $(sh_quote "$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$run_dir/state.json")") attach"
   run_server || bad=1
   say "$server_verdict"
   local -a records fields call
@@ -2458,11 +2875,12 @@ cmd_status() {
       bad=1
     fi
   done
-  return "$bad"
+  records_status 1
+  return "$(( bad || records_bad ))"
 }
 
 usage() {
-  say "usage: workplace plan | build | up | exec [--print] SEAT | down | status | why SEAT PATH | doctor"
+  say "usage: workplace plan | build | up | exec [--print] SEAT | down | status | why SEAT PATH | record verify SEAT [DAY] | doctor"
   say "reads WORKPLACE_ROOT and WORKPLACE_CONFIG"
 }
 
@@ -2481,6 +2899,11 @@ case $command in
     ;;
   why) cmd_why "$@" ;;
   carry) cmd_carry "$@" ;;
+  keep) cmd_keep "$@" ;;
+  record)
+    cmd_record "$@"
+    exit $?
+    ;;
   carrier-end)
     cmd_carrier_end "$@"
     exit $?

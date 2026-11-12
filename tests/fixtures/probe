@@ -190,6 +190,24 @@ for argument in "$@"; do
       ;;
     term=*) term_file=${argument#term=} ;;
     typed=*) typed_file=${argument#typed=} ;;
+    print=*) cat -- "${argument#print=}" ;;
+    wait=*)
+      for (( i = 0; i < 200; i++ )); do [[ -e ${argument#wait=} ]] && break; pause 0.05; done
+      ;;
+    tamper=*)
+      place=${argument#tamper=}
+      if { printf x >> "$place"; } 2> /dev/null; then a=done; else a=refused; fi
+      if { : > "$place"; } 2> /dev/null; then t=done; else t=refused; fi
+      if mv -- "$place" "$place.moved" 2> /dev/null; then m=done; else m=refused; fi
+      if rm -f -- "$place" 2> /dev/null && [[ ! -e $place ]]; then r=done; else r=refused; fi
+      if { : > "${place%/*}/made-by-$name"; } 2> /dev/null; then c=done; else c=refused; fi
+      say "tamper $place: append=$a truncate=$t rename=$m remove=$r make=$c"
+      ;;
+    socket=*)
+      place=${argument#socket=}
+      if tmux -S "$place" list-sessions > /dev/null 2>&1; then got=answered; else got=refused; fi
+      say "socket $place: $got"
+      ;;
     entries=*)
       place=${argument#entries=}
       listing=("$place"/*)

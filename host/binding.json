@@ -49,10 +49,10 @@
             "tmux"
           ]
         },
-        "-L",
+        "-S",
         {
           "slot": [
-            "server"
+            "socket-path"
           ]
         },
         "-f",
@@ -79,7 +79,11 @@
         "home-seed",
         "expect",
         "mail",
-        "reach"
+        "reach",
+        "record",
+        "record-limit",
+        "record-chain",
+        "record-path"
       ],
       "programs": [
         "bwrap"
@@ -184,6 +188,96 @@
             {
               "slot": [
                 "clone"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "tmux-dir"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "tmux-dir"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "tmux-default-dir"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "tmux-default-dir"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "mask-journal-var"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "mask-journal-var"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "mask-journal-run"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "mask-journal-run"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "mask-journal-sockets"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "mask-journal-sockets"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "mask-manager"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "mask-manager"
               ]
             }
           ]
@@ -683,6 +777,52 @@
               ]
             }
           ]
+        },
+        {
+          "if-slot": [
+            "record-binds",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--perms",
+            "0755",
+            "--tmpfs",
+            {
+              "slot": [
+                "record-path"
+              ]
+            }
+          ],
+          "ro-bind-pairs": {
+            "slot": [
+              "record-binds",
+              {
+                "arg": 1
+              },
+              {
+                "arg": 2
+              },
+              {
+                "arg": 3
+              }
+            ]
+          },
+          "args-after": [
+            "--remount-ro",
+            {
+              "slot": [
+                "record-path"
+              ]
+            }
+          ]
         }
       ]
     },
@@ -709,6 +849,9 @@
         2
       ],
       "mail": [
+        1
+      ],
+      "record-path": [
         1
       ]
     },
@@ -864,10 +1007,10 @@
             "tmux"
           ]
         },
-        "-L",
+        "-S",
         {
           "slot": [
-            "server"
+            "socket-path"
           ]
         },
         "wait-for",
@@ -1087,10 +1230,10 @@
             "tmux"
           ]
         },
-        "-L",
+        "-S",
         {
           "slot": [
-            "server"
+            "socket-path"
           ]
         },
         "wait-for",
@@ -1205,10 +1348,10 @@
             "tmux"
           ]
         },
-        "-L",
+        "-S",
         {
           "slot": [
-            "server"
+            "socket-path"
           ]
         },
         "wait-for",

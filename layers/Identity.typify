@@ -1,0 +1,64 @@
+#lang typify
+declare : WorkplaceIdentity
+version : 1
+file : programs/IDENTITY.typify
+optional!
+is : key-state = "held" | "none"
+cell : key-records = shadow
+primitive : key : text text text text key-state
+writes : key : key-records = put 4
+effect : key = state
+form : key : <key-state>
+does : key - - - workplace <key-state>
+end!
+
+declare : OfficeIdentity
+version : 1
+file : programs/OFFICE[<office-key>]/IDENTITY.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : key-state = "held" | "none"
+cell : sessions = shadow
+cell : key-records = shadow
+primitive : key : text text text text key-state
+writes : key : key-records = put 4
+effect : key = state
+ensure : key : office-declared = (bound sessions <office-key>)
+form : key : <key-state>
+does : key <office-key> - - office <key-state>
+end!
+
+declare : RoomIdentity
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/IDENTITY.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : key-state = "held" | "none"
+cell : windows = shadow
+cell : key-records = shadow
+primitive : key : text text text text key-state
+writes : key : key-records = put 4
+effect : key = state
+ensure : key : room-declared = (bound windows <office-key> <room-key>)
+form : key : <key-state>
+does : key <office-key> <room-key> - room <key-state>
+end!
+
+declare : SeatIdentity
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/IDENTITY.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : key-state = "held" | "none"
+cell : panes = shadow
+cell : key-records = shadow
+primitive : key : text text text text key-state
+writes : key : key-records = put 4
+effect : key = state
+ensure : key : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
+form : key : <key-state>
+does : key <office-key> <room-key> <seat-key> seat <key-state>
+end!

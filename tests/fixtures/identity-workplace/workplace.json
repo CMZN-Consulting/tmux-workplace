@@ -1,0 +1,9 @@
+{
+  "layers": [
+    "layers/Structure.typify",
+    "layers/Access.typify",
+    "layers/Agents.typify",
+    "layers/Identity.typify",
+    "layers/Host.typify"
+  ]
+}

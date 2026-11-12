@@ -28,6 +28,11 @@
     "PATH",
     "PWD"
   ],
+  "name": {
+    "term": "server",
+    "arg": 1,
+    "default": "default"
+  },
   "programs": {
     "tmux": {
       "argv": [
@@ -55,7 +60,8 @@
           "slot": [
             "config"
           ]
-        }
+        },
+        "-u"
       ],
       "escape-last": ";"
     }

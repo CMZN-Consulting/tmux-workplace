@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export LC_ALL=C
 set -o nounset -o pipefail
 unset TMUX TMUX_PANE
 
@@ -26,7 +27,8 @@ check() {
   if "$@"; then note "  ok: $message"; else fail "$message"; fi
 }
 
-T() { tmux -L "$label" "$@"; }
+T() { setpriv --no-new-privs tmux -L "$label" -u "$@"; }
+start_a_server_without_no_new_privileges() { tmux -L "$label" -u -f /dev/null new-session -d -s "$1"; }
 wp() { "$BASH" "$loop" "$@"; }
 
 name_of_clone() {
@@ -129,7 +131,7 @@ make_plan() {
   access_sum=$(sha256sum < "$into/layers/access.typify")
   jq -n --arg root "$root" --arg p "${plan_sum%% *}" --arg f "${facts_sum%% *}" \
     --arg s "${structure_sum%% *}" --arg a "${access_sum%% *}" '
-    {root: $root, reader: "fixture", derivations: {name: "fixture"},
+    {root: $root, reader: "fixture", derivations: {"workplace-name": "sha256-path-prefix12-v1"},
      inputs: [{path: "layers/structure.typify", sha256: $s}, {path: "layers/access.typify", sha256: $a}],
      outputs: [{path: "plan.json", sha256: $p}, {path: "facts.json", sha256: $f}]}' > "$into/PLAN/manifest.json"
 }
@@ -166,6 +168,14 @@ wait_for_line() {
 wait_for_probe() { wait_for_line "$1" "probe $2 done"; }
 
 screen_has() { screen_of "$1" | grep -qxF -- "$2"; }
+eventually() {
+  local i
+  for (( i = 0; i < 60; i++ )); do
+    "$@" && return 0
+    sleep 0.05
+  done
+  return 1
+}
 no_server() { ! T list-sessions > /dev/null 2>&1; }
 sessions_are() { [[ "$(T list-sessions -F '#{session_name}' 2> /dev/null | sort | tr '\n' ' ')" == "$1" ]]; }
 exit_is() {
@@ -323,7 +333,7 @@ t_structure_and_order() {
       test "$(T display -p -t "$(pane_by_title "$title")" '#{pane_start_command}')" = "$BASH $clone/BUILD/bin/workplace exec -- \"$title\""
   done
   check "[C8] the calls followed the binding's order: server, sessions, windows, panes, arrangements, starts" \
-    test "$(jq -r '.[7]' "$run/calls.jsonl" | tr '\n' ' ')" = \
+    test "$(jq -r --argjson n "$(jq '.programs.tmux.argv | length' "$tool/host/binding.json")" '.[$n]' "$run/calls.jsonl" | tr '\n' ' ')" = \
     "start-server new-session set-option new-session set-option rename-window new-window rename-window display-message select-pane split-window select-pane display-message select-pane display-message select-pane split-window select-pane select-layout select-layout select-layout respawn-pane respawn-pane respawn-pane respawn-pane respawn-pane "
   check "[C8] the dock's seats stand side by side" \
     test "$(for t in "Harbor Pilot" "Harbor Keeper"; do T display -p -t "$(pane_by_title "$t")" '#{pane_top}'; done | sort -u | wc -l)" = 1
@@ -343,7 +353,7 @@ t_structure_and_order() {
   check "[C11] each session carries the run's mark" \
     test "$(T show-options -qv -t =Harbor: @workplace) $(T show-options -qv -t =Orchard: @workplace)" = "$mark $mark"
   check "[C17] every start was followed by clearing its pane's history" \
-    test "$(jq -c 'select(.[7] == "respawn-pane") | [.[] | select(. == "clear-history")] | length' "$run/calls.jsonl" | sort -u)" = 1
+    test "$(jq -c 'select(any(.[]; . == "respawn-pane")) | [.[] | select(. == "clear-history")] | length' "$run/calls.jsonl" | sort -u)" = 1
   check "[C22] status exits 0 with the workplace up" exit_is 0 wp status
   check "[C22] status lists every seat ok" test "$(grep -c '^ok      seat/' "$scratch/out")" = 5
   local name
@@ -380,7 +390,7 @@ t_programs_out_of_order() {
   check "[C8] the same seats" \
     test "$(T list-panes -a -F '#{session_name}/#{window_name}/#{pane_title}' | sort | tr '\n' ',')" = \
     "Harbor/Dock/Harbor Keeper,Harbor/Dock/Harbor Pilot,Harbor/Tower/Harbor Watch,Orchard/Barn/Orchard Grower,Orchard/Barn/Orchard Picker,"
-  check "[C8] the server's term still came first" test "$(jq -r '.[7]' "$run/calls.jsonl" | head -1)" = start-server
+  check "[C8] the server's term still came first" test "$(jq -r --argjson n "$(jq '.programs.tmux.argv | length' "$tool/host/binding.json")" '.[$n]' "$run/calls.jsonl" | head -1)" = start-server
   check "[C8] every seat runs" wait_for_probe "Orchard Picker" picker
 }
 
@@ -407,11 +417,13 @@ t_views() {
   check "[C14] hidden: keeper does not see ledger" screen_has "Harbor Keeper" "hidden ledger: unseen"
   check "[C14] no row: charts has its nearest ancestor's state, / read-only" screen_has "Harbor Keeper" "ro charts: read=ok write=refused"
   check "[C14] read-write: keeper writes berth" screen_has "Harbor Keeper" "rw berth: write=ok"
-  check "[C14] that write is there outside" test -f "$root/harbor/berth/probe-keeper"
+  check "[C14] that write went to the machine's berth: the same device and inode inside and out" \
+    screen_has "Harbor Keeper" "where berth: $(stat -L -c %d:%i -- "$root/harbor/berth")"
   check "[C14] searchable-only: vault cannot be listed" screen_has "Harbor Keeper" "list vault: refused"
   check "[C14] searchable-only: the row beneath it, vault/shelf, is reachable" screen_has "Harbor Keeper" "reach vault/shelf: write=ok"
   check "[C14] scratch: an empty writable directory" screen_has "Harbor Keeper" "scratch scratch: entries=0 write=ok"
-  check "[C14] scratch: nothing written there reaches the machine" test ! -e "$root/harbor/scratch/probe-keeper"
+  check "[C14] scratch: it is not the machine's directory" \
+    bash -c '[[ $1 == *"where scratch: "* && $1 != *"where scratch: $2"* ]]' _ "$(screen_of 'Harbor Keeper')" "$(stat -L -c %d:%i -- "$root/harbor/scratch")"
   check "[C13] /a against /ab: hold is hidden" screen_has "Harbor Keeper" "hidden hold: unseen"
   check "[C13] /a against /ab: holdall is open" screen_has "Harbor Keeper" "rw holdall: write=ok"
   check "[C15] keeper has its own PID namespace" bash -c '[[ $(grep -E "^pid " <<< "$1") =~ ^pid\ [0-9]\ procs\ [0-9]$ ]]' _ "$(screen_of 'Harbor Keeper')"
@@ -447,6 +459,8 @@ bind $root/harbor/vault/shelf"
   check "[C12] bwrap is named by its absolute path" \
     test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Keeper')")" = "$(command -v bwrap)"
   check "[C12] watch's command has no bubblewrap" test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Watch')")" = "$root/tools/probe"
+  check "picker ran" wait_for_probe "Orchard Picker" picker
+  check "the probes removed every file they wrote" test -z "$(find "$root" -name 'probe-*' -print -quit)"
 }
 
 t_environment() {
@@ -480,7 +494,7 @@ t_exec_by_hand() {
   check "[C17] the call starts with env -i" test "$(jq -r '.[0:2] | map(split("/") | last) | join(" ")' "$scratch/out")" = "env -i"
   check "[C17] and runs bubblewrap" test "$(jq -r '[.[] | select(endswith("/bwrap"))] | length' "$scratch/out")" = 1
   local pane_lines hand_lines hand_env
-  pane_lines=$(screen_of "Harbor Keeper" | grep -vE '^(pid |env |ns |$)')
+  pane_lines=$(screen_of "Harbor Keeper" | grep -vE '^(pid |env |ns |where scratch: |$)')
   local -a same=()
   local name value
   for name in TERM COLORTERM LANG HOME USER LOGNAME PATH; do
@@ -490,7 +504,7 @@ t_exec_by_hand() {
   hand_lines=$(cd / && env -i "${same[@]}" WORKPLACE_ROOT="$root" WORKPLACE_CONFIG="$clone" WORKPLACE_LEAK=yes \
     "$BASH" "$loop" exec "Harbor Keeper" < /dev/null 2>&1)
   hand_env=$(grep '^env ' <<< "$hand_lines")
-  hand_lines=$(grep -vE '^(pid |env |ns |$)' <<< "$hand_lines")
+  hand_lines=$(grep -vE '^(pid |env |ns |where scratch: |$)' <<< "$hand_lines")
   check "[C17] exec by hand, from another directory, gives the pane's view" test "$pane_lines" = "$hand_lines"
   [[ $pane_lines == "$hand_lines" ]] || diff <(printf '%s\n' "$pane_lines") <(printf '%s\n' "$hand_lines") | sed 's/^/    | /'
   check "[C17] and, given the pane's inherited names, the pane's environment ($hand_env)" \
@@ -528,7 +542,7 @@ t_server_privilege() {
   fi
   make_plan
   check "build" exit_is 0 wp build
-  T -f /dev/null new-session -d -s bystander
+  start_a_server_without_no_new_privileges bystander
   check "[C10] up refuses a running server without no-new-privileges" exit_is 1 wp up
   check "[C10] the refusal says why" said "runs without no-new-privileges; it is refused"
   check "[C10] no session was built, and the bystander survives" sessions_are "bystander "
@@ -553,6 +567,26 @@ t_failure_leaves_nothing() {
   check "[C19] no RUN is left" test ! -e "$run"
 }
 
+t_failure_between_a_session_and_its_mark() {
+  local wrap=$scratch/wrap real
+  real=$(command -v tmux)
+  mkdir -p -- "$wrap"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'setting=0 marking=0' \
+    'for word in "$@"; do [[ $word == set-option ]] && setting=1; [[ $word == @workplace ]] && marking=1; done' \
+    'if (( setting && marking )); then printf "%s\n" "the test refuses to set the mark" >&2; exit 1; fi' \
+    "exec ${real@Q} \"\$@\"" > "$wrap/tmux"
+  chmod +x -- "$wrap/tmux"
+  make_plan
+  check "build" exit_is 0 wp build
+  check "[C19] up exits 1 when a session is made and its mark cannot be set" exit_is 1 env PATH="$wrap:$PATH" "$BASH" "$loop" up
+  check "[C19] the failure names the term" said "harbor/office.typify, term 1"
+  check "[C19] and the mark's refusal" said "the test refuses to set the mark"
+  check "[C19] the session made before its mark is torn down by its captured id" said "undo session/harbor: done"
+  check "[C19] nothing of the workplace is left, and no server" eventually no_server
+  check "[C19] no RUN is left" test ! -e "$run"
+}
+
 t_unattached_options() {
   local conf
   for conf in tmux-destroy-unattached.conf tmux-exit-unattached.conf tmux-exit-empty-off.conf; do
@@ -563,6 +597,15 @@ t_unattached_options() {
     check "[C11] up refuses with $conf" exit_is 1 wp up
     check "[C11] the refusal comes from the server's check" said "where the binding requires"
     check "[C11] no session was built" test -z "$(T list-sessions -F x 2> /dev/null)"
+    if [[ $conf == tmux-exit-empty-off.conf ]]; then
+      local socket=$TMUX_TMPDIR/tmux-$UID/$label
+      check "[C11] the refusal names the empty server it leaves and the command that ends it" \
+        said "the tmux server at $socket is left running with no session, and the loop never ends a server; to end it: tmux -S ${socket@Q} kill-server"
+      check "[C11] that command ends it" tmux -S "$socket" kill-server
+      check "[C11] and no server is left" no_server
+    else
+      check "[C11] a server that ends itself is not named" bash -c '! grep -q "is left running" "$1"' _ "$scratch/out"
+    fi
   done
 }
 
@@ -573,7 +616,7 @@ t_down_removes_only_its_own() {
   check "[C18] down" exit_is 0 wp down
   check "[C18] down undid the sessions newest first" \
     test "$(grep -o 'undo session/[a-z]*' "$scratch/out" | tr '\n' ' ')" = "undo session/orchard undo session/harbor "
-  check "[C18] down removed the workplace and left the test's sessions" sessions_are "bystander Harbor-annex "
+  check "[C18] down removed the workplace and left the test's sessions" sessions_are "Harbor-annex bystander "
   check "[C18] down removed RUN" test ! -e "$run"
   check "[C18] down kept BUILD" test -f "$clone/BUILD/MANIFEST"
   check "[C22] status says down" exit_is 0 wp status
@@ -632,7 +675,10 @@ t_two_workplaces() {
 t_the_default_name() {
   render default > "$scratch/plan.json"
   label=default
-  check "[C25] a plan whose server term says default builds and comes up" up_fixture
+  make_plan
+  jq 'del(.derivations)' "$clone/PLAN/manifest.json" > "$scratch/manifest" && cp -- "$scratch/manifest" "$clone/PLAN/manifest.json"
+  check "[C25] a plan whose server term says default builds, with no rule for the name" exit_is 0 wp build
+  check "[C25] and comes up" exit_is 0 wp up
   check "[C25] its server is tmux's default socket under this test's own TMUX_TMPDIR" test -S "$TMUX_TMPDIR/tmux-$UID/default"
   check "[C25] the seats run there" wait_for_probe "Harbor Watch" watch
   check "[C25] down" exit_is 0 wp down
@@ -693,6 +739,62 @@ t_structure_and_form_refusals() {
   check "[C2] a path the facts record that is gone is refused" exit_is 1 wp build
   check "[C2] the refusal names the fact" said "fact exists of $root/harbor/hold: the plan says true, the machine has no such fact"
   mv -- "$root/harbor/hold.away" "$root/harbor/hold"
+}
+
+t_the_name_by_its_rule() {
+  make_plan '.programs[0].plan[0][1] = "elsewhere-000000000000"'
+  check "[C25] a plan whose server is not the name its clone gives is refused" exit_is 1 wp build
+  check "[C25] the refusal names both names and the rule" \
+    said "the plan names the workplace elsewhere-000000000000; by the rule sha256-path-prefix12-v1 its clone $clone gives $label"
+  check "[C25] and no BUILD is left" test ! -e "$clone/BUILD"
+  make_plan
+  jq 'del(.derivations["workplace-name"])' "$clone/PLAN/manifest.json" > "$scratch/manifest" && cp -- "$scratch/manifest" "$clone/PLAN/manifest.json"
+  check "[C25] a manifest that names no rule for the name is refused" exit_is 1 wp build
+  check "[C25] the refusal says so" said "the manifest names no rule for the workplace's name"
+  make_plan
+  jq '.derivations["workplace-name"] = "md5-path-v0"' "$clone/PLAN/manifest.json" > "$scratch/manifest" && cp -- "$scratch/manifest" "$clone/PLAN/manifest.json"
+  check "[C25] a rule the loop does not know is refused" exit_is 1 wp build
+  check "[C25] the refusal names the rule" said "the manifest names the rule md5-path-v0 for the workplace's name, and this loop does not know it"
+  make_plan
+  check "[C25] the name by the rule builds" exit_is 0 wp build
+  check "[C25] build reads the rule from the manifest" said "workplace-name sha256-path-prefix12-v1"
+}
+
+t_the_callers_locale() {
+  local candidate other="" kind
+  for candidate in de_DE.UTF-8 tr_TR.UTF-8 fr_FR.UTF-8 en_US.UTF-8 C.UTF-8; do
+    [[ -z $(env LC_ALL="$candidate" "$BASH" -c : 2>&1) ]] || continue
+    other=$candidate
+    break
+  done
+  if [[ -z $other ]]; then
+    skip "[C26] no locale but C is installed on this machine, so no other caller's locale can be tried"
+    return 0
+  fi
+  kind=$(env LC_ALL="$other" stat --printf '%F' -- "$root")
+  local in_locale=(env LC_ALL="$other" LANG="$other" "$BASH" "$loop")
+  make_plan
+  check "build under C" exit_is 0 wp build
+  cp -- "$scratch/out" "$scratch/build-c"
+  rm -rf -- "$clone/BUILD"
+  check "[C26] build under the caller's locale $other, in which stat calls a directory a '$kind', with the facts compared" \
+    exit_is 0 "${in_locale[@]}" build
+  check "[C26] it prints what it prints under C, byte for byte" cmp -s "$scratch/build-c" "$scratch/out"
+  check "why under C" exit_is 0 wp why "Harbor Keeper" "$root/harbor/charts/page"
+  cp -- "$scratch/out" "$scratch/why-c"
+  check "[C26] why under $other" exit_is 0 "${in_locale[@]}" why "Harbor Keeper" "$root/harbor/charts/page"
+  check "[C26] prints what it prints under C" cmp -s "$scratch/why-c" "$scratch/out"
+  check "[C26] up under $other" exit_is 0 "${in_locale[@]}" up
+  check "[C26] the server's environment keeps the caller's locale" test "$(T show-environment -g LC_ALL)" = "LC_ALL=$other"
+  check "[C26] status under $other" exit_is 0 "${in_locale[@]}" status
+  check "[C26] down under $other" exit_is 0 "${in_locale[@]}" down
+  export TMUX_TMPDIR=$scratch/sockets-ü
+  mkdir -p -- "$TMUX_TMPDIR"
+  check "[C26] up under C, where tmux's socket lies in a directory whose name is not ASCII" exit_is 0 wp up
+  check "[C26] the run records the socket as it is" \
+    test "$(jq -r '.slots[(["socket"] | tojson)]' "$run/state.json")" = "$TMUX_TMPDIR/tmux-$UID/$label"
+  check "[C26] status finds it" exit_is 0 wp status
+  check "[C26] down finds it" exit_is 0 wp down
 }
 
 t_without_bubblewrap() {
@@ -768,6 +870,14 @@ t_doctor() {
   check "[C24] it says bubblewrap is needed only for a view" said "absent  bwrap: needed only by a plan in which a seat has a view"
 }
 
+shape_of() { find "$1" -path "$1/config/BUILD" -prune -o -printf '%y %m %s %P\n' | sort; }
+tidy_reference() {
+  local path
+  while IFS= read -r path; do
+    [[ ${path##*/} == probe-* && -f $path && ! -L $path ]] && rm -f -- "$path"
+  done < <(comm -13 <(printf '%s\n' "$reference_paths") <(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort))
+}
+
 t_the_reference_plan_as_printed() {
   local reference=/tmp/workplace-reference-a4 pinned=fa8d54f683c2e4a80c24e3f7120f76fb42b51d720d7c5cb53c05f4a66d463cee sum
   if [[ ! -f $reference/config/PLAN/plan.json ]]; then
@@ -788,7 +898,10 @@ t_the_reference_plan_as_printed() {
   run=$clone/BUILD/RUN
   label=$(jq -r '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "server")][0][1]' "$clone/PLAN/plan.json")
   reference_build=$reference/config/BUILD
-  trap 'cleanup; rm -rf -- "$reference_build"' EXIT
+  reference_paths=$(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort)
+  local shape
+  shape=$(shape_of "$reference")
+  trap 'cleanup; tidy_reference; rm -rf -- "$reference_build"' EXIT
   check "[C2] the reader's plan, as printed, builds" exit_is 0 wp build
   check "[C8] and comes up" exit_is 0 wp up
   check "[C9] its five seats stand, and no other pane" \
@@ -809,6 +922,9 @@ t_the_reference_plan_as_printed() {
   check "[C23] the losing claim, hidden, with its origin as written" said "hidden  from programs/ACCESS.typify:7"
   check "[C18] down" exit_is 0 wp down
   check "[C18] nothing of the workplace is left" no_server
+  tidy_reference
+  rm -rf -- "$reference_build"
+  check "[C8] the reference root is left as the test found it: every entry's type, mode and size" test "$(shape_of "$reference")" = "$shape"
 }
 
 t_source_and_contract() {
@@ -824,8 +940,12 @@ t_source_and_contract() {
     test "$(jq -r '.primitives.start.call | map(strings) | (index("respawn-pane") < index("clear-history"))' "$tool/host/binding.json")" = true
   check "[C10] every tmux call runs under setpriv --no-new-privs and names its server" \
     test "$(jq -c '.programs.tmux.argv[0:5]' "$tool/host/binding.json")" = '[{"slot":["program","setpriv"]},"--no-new-privs",{"slot":["program","tmux"]},"-L",{"slot":["server"]}]'
-  check "[C10] the loop removes TMUX and TMUX_PANE before anything else" \
-    test "$(sed -n 4p "$tool/bin/workplace")" = "unset TMUX TMUX_PANE"
+  check "[C10] the loop removes TMUX and TMUX_PANE before any program runs" \
+    test "$(sed -n 6p "$tool/bin/workplace")" = "unset TMUX TMUX_PANE"
+  check "[C26] the loop sets LC_ALL=C before anything else, once it has kept the caller's" \
+    test "$(sed -n 2,3p "$tool/bin/workplace")" = 'if [[ -n ${LC_ALL+set} ]]; then caller_lc_all=$LC_ALL; fi
+export LC_ALL=C'
+  check "[C26] and so does this test file" test "$(sed -n 2p "$here/run.sh")" = "export LC_ALL=C"
   check "every tmux call of these tests names its server" \
     bash -c '! grep -nE "(^|[;&|({!]|\\\$\\()[[:space:]]*tmux " "$1" | grep -vE "tmux -L|tmux -S"' _ "$here/run.sh"
   check "the tests run as a user, not root" test "$EUID" -ne 0
@@ -852,6 +972,7 @@ tests=(
   t_fixed_part
   t_server_privilege
   t_failure_leaves_nothing
+  t_failure_between_a_session_and_its_mark
   t_unattached_options
   t_down_removes_only_its_own
   t_status_and_down_on_a_damaged_run
@@ -859,6 +980,8 @@ tests=(
   t_two_workplaces
   t_the_default_name
   t_structure_and_form_refusals
+  t_the_name_by_its_rule
+  t_the_callers_locale
   t_without_bubblewrap
   t_hostile_text
   t_why

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+if [[ -n ${LC_ALL+set} ]]; then caller_lc_all=$LC_ALL; fi
+export LC_ALL=C
 set -o nounset -o pipefail
 shopt -s nullglob dotglob globstar
 unset TMUX TMUX_PANE
@@ -169,6 +171,36 @@ check_facts() {
   fi
 }
 
+derive_name() {
+  local rule=$1 sum
+  case $rule in
+    sha256-path-prefix12-v1)
+      sum=$(printf '%s' "$clone" | sha256sum) || return 1
+      printf '%s\n' "${clone##*/}-${sum:0:12}"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+check_name() {
+  local manifest=$1 name default rule derived
+  name=$(jq -r '.name // ""' <<< "$report")
+  default=$(jq -r '.name.default // ""' "$tool/host/binding.json")
+  [[ -n $default && $name == "$default" ]] && return 0
+  rule=$(jq -r '.derivations["workplace-name"] // "" | strings' "$manifest")
+  if [[ -z $rule ]]; then
+    warn "the plan names the workplace $name, and the manifest names no rule for the workplace's name (derivations.workplace-name)"
+    return 1
+  fi
+  if ! derived=$(derive_name "$rule"); then
+    warn "the manifest names the rule $rule for the workplace's name, and this loop does not know it"
+    return 1
+  fi
+  [[ $name == "$derived" ]] && return 0
+  warn "the plan names the workplace $name; by the rule $rule its clone $clone gives $derived"
+  return 1
+}
+
 manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq)
 
 cmd_build() {
@@ -217,6 +249,7 @@ cmd_build() {
   done
   (( bad == 0 )) || die "build refuses: the plan no longer matches its sources"
   plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq"
+  check_name "$manifest" || die "build refuses: the plan's workplace name is not the one its clone gives"
   if [[ $facts_member == none ]]; then
     :
   elif [[ $facts_member =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -314,10 +347,14 @@ verify_build() {
   return 0
 }
 
+caller_locale() {
+  if [[ -n ${caller_lc_all+set} ]]; then LC_ALL=$caller_lc_all; else unset LC_ALL; fi
+} 2> /dev/null
+
 run_call() {
   local -n _out=$1
   shift
-  _out=$("$@" 2> "$run_dir/call.err")
+  _out=$(caller_locale; "$@" 2> "$run_dir/call.err")
 }
 
 log_call() {
@@ -472,6 +509,20 @@ apply_term() {
   return 0
 }
 
+name_an_empty_server() {
+  local setpriv tmux server out
+  local -a lines
+  setpriv=$(jq -r '.slots[(["program", "setpriv"] | tojson)] // ""' <<< "$state")
+  tmux=$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' <<< "$state")
+  server=$(jq -r '.slots[(["server"] | tojson)] // ""' <<< "$state")
+  [[ -n $setpriv && -n $tmux && -n $server ]] || return 0
+  run_call out "$setpriv" --no-new-privs "$tmux" -L "$server" -u \
+    list-sessions -F x \; show-options -sv exit-empty \; display-message -p '#{socket_path}' || return 0
+  mapfile -t lines <<< "$out"
+  (( ${#lines[@]} == 2 )) && [[ ${lines[0]} == off && -n ${lines[1]} ]] || return 0
+  warn "the tmux server at ${lines[1]} is left running with no session, and the loop never ends a server; to end it: tmux -S ${lines[1]@Q} kill-server"
+}
+
 cmd_up() {
   (( $# == 0 )) || die "up takes no arguments" 2
   need_jq
@@ -509,6 +560,7 @@ cmd_up() {
   for record in "${records[@]}"; do
     if ! apply_term "$record"; then
       teardown failed
+      name_an_empty_server
       rm -rf -- "$run_dir"
       die "up stopped after $applied of ${#records[@]} terms; everything it made is torn down"
     fi
@@ -520,6 +572,7 @@ cmd_up() {
   if [[ -n $leftover ]]; then
     warn "a pane would stand that is not a seat: nothing claimed $leftover"
     teardown failed
+    name_an_empty_server
     rm -rf -- "$run_dir"
     die "up stopped after $applied terms; everything it made is torn down"
   fi

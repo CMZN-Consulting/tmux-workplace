@@ -100,6 +100,7 @@ $b[0] as $binding
             {errors: [],
              programs: ([$binding.tables[] | select((source_rows(.cell) | length) > 0) | .programs // [] | .[]] | unique),
              terms: (terms | length),
+             name: ([terms[] | .term | select(.[0] == $binding.name.term) | .[$binding.name.arg]] | first // null),
              tables: ($binding.tables | with_entries(.value = source_rows(.value.cell))),
              must_exist: [$binding.tables[] | select(has("must-exist")) | . as $spec
                           | source_rows($spec.cell)[] | select(.value[0] as $v | $spec["must-exist"] | index($v)) | .key[3]] | unique,

@@ -42,17 +42,18 @@ for argument in "$@"; do
     ro=*)
       place=${argument#ro=}
       if IFS= read -r line < "$place/page" 2> /dev/null; then got=ok; else got=refused; fi
-      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; rm -f -- "$place/probe-$name"; else put=refused; fi
       say "ro $place: read=$got write=$put"
       ;;
     rw=*)
       place=${argument#rw=}
-      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; rm -f -- "$place/probe-$name"; else put=refused; fi
       say "rw $place: write=$put"
+      say "where $place: $(stat -L -c %d:%i -- "$place" 2> /dev/null)"
       ;;
     reach=*)
       place=${argument#reach=}
-      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; rm -f -- "$place/probe-$name"; else put=refused; fi
       say "reach $place: write=$put"
       ;;
     list=*)
@@ -63,8 +64,9 @@ for argument in "$@"; do
     scratch=*)
       place=${argument#scratch=}
       listing=("$place"/*)
-      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; else put=refused; fi
+      if { printf '%s\n' "$name" > "$place/probe-$name"; } 2> /dev/null; then put=ok; rm -f -- "$place/probe-$name"; else put=refused; fi
       say "scratch $place: entries=${#listing[@]} write=$put"
+      say "where $place: $(stat -L -c %d:%i -- "$place" 2> /dev/null)"
       ;;
     env)
       mapfile -d '' -t entries < /proc/self/environ

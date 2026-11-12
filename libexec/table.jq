@@ -58,6 +58,24 @@ def path_problems($binding):
        | "\(at($row.origin // {}; "the plan")) (state \($cell)): the path \($v | tojson) is refused: \($fault)"
        else empty end);
 
+def clone_problems($binding; $clone):
+  def inside: type == "string" and (. == $clone or startswith(if $clone == "/" then "/" else $clone + "/" end));
+  def at($o; $file): "\($o.path // $file):\($o.line // "?")";
+  def bare: if type == "object" and has("term") then .term else . end;
+  ($binding.directories // {}) as $d
+  | (.programs // [])[] | select(type == "object") | (.path // "a program") as $file
+  | ((.plan // []) | to_entries[] | (.key + 1) as $n | (.value | bare) as $t
+     | select(($t | type) == "array" and ($t[0] | type) == "string")
+     | ($binding.primitives[$t[0]].seat // null) as $seat | select($seat != null)
+     | (($seat.directory.path? // empty) | select(. < ($t | length)) | $t[.] | select(inside)
+        | "\($file), term \($n) (\($t[0])): the seat's directory \(.) lies in the clone \($clone), which the frame masks in every view"),
+       (($seat.argv // empty) | select(. < ($t | length)) | ($t[.] | try fromjson catch null)
+        | select(type == "array") | .[0] | select(inside)
+        | "\($file), term \($n) (\($t[0])): the seat's program \(.) lies in the clone \($clone), which the frame masks in every view")),
+    ((.recorded // [])[] | select(type == "object" and (.term | type) == "array" and .term[0] == $d.recorded)
+     | .term[$d.path] as $p | select($p | inside)
+     | "\(at(.origin // {}; $file)) (\($d.recorded)): the seat's directory \($p) lies in the clone \($clone), which the frame masks in every view");
+
 def joined($binding; $root):
   ($binding.paths.recorded // {}) as $recorded
   | ($binding.paths.cells // {}) as $cells

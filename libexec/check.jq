@@ -80,14 +80,22 @@ $b[0] as $binding
                | if length > 0 then "the view of \($who) is refused whole: \(join("; "))" else empty end))
          else empty end)
       end;
-  def identity_problems:
-    ([$binding.tables[] | (.["after-rows"] // [])[] | (.environment // [])[] | .[0]] | unique) as $names
-    | [($folded[0].seats // [])[] | select(.key.state? == "held") | .seat] as $holders
-    | $binding.tables[] | select(has("name")) | . as $spec
-    | source_rows($spec)[]
-    | .key[0:3] as $s | .key[3] as $n
-    | select(($holders | index([$s])) != null and ($names | index($n)) != null)
-    | "state \($spec.cell): \(.key[0:3] | join("/")) holds a key, and its environment may not set \(.key[3]), which the frame gives (\(.origin.path // "?"):\(.origin.line // "?"))";
+  def frame_problems:
+    ($binding["kept-names"] // []) as $kept
+    | ($folded[0].seats // []) as $seats
+    | def given($seat):
+        (if $seat.key.state? == "held" then [$kept[] | {name: ., by: "holds a key"}] else [] end)
+        + (if $seat.home != null then [{name: $seat.home.variable, by: "has a home"}, ($seat.home.variables[] | {name, by: "has a home"})] else [] end);
+      def at($o): "\($o.path // "?"):\($o.line // "?")";
+      $binding.tables[] | select(has("name")) | . as $spec
+      | source_rows($spec)[] | . as $row
+      | ($seats[] | select(.seat == $row.key[0:3])) as $seat
+      | (given($seat) | map(select(.name == $row.key[3])) | first) as $g
+      | if $g != null then
+          "state \($spec.cell): \($row.key[0:3] | join("/")) \($g.by), and its environment may not set \($row.key[3]), which the frame gives (\(at($row.origin // {})))"
+        elif any(($seat.expects // [])[]; .name == $row.key[3]) then
+          "state \($spec.cell): \($row.key[0:3] | join("/")) expects the value \($row.key[3]) at its start, and its environment may not set it (\(at($row.origin // {})))"
+        else empty end;
   def problems:
     path_problems($binding),
     (if any($binding.tables[]; folded($plan; .)) and $folded[0] == null
@@ -106,7 +114,7 @@ $b[0] as $binding
     [problems] as $first
     | if ($first | length) > 0 then {errors: $first}
       else
-        [term_problems, unique_problems, structure_problems, table_problems, identity_problems] as $errors
+        [term_problems, unique_problems, structure_problems, table_problems, frame_problems] as $errors
         | if ($errors | length) > 0 then {errors: $errors}
           else
             {errors: [],

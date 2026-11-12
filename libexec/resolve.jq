@@ -93,7 +93,12 @@ $b[0] as $binding
        command: (view_args($vspec; $k; $directory; $st) + $argv),
        environment: ([($tables[$espec.cell] // [])[] | select(.key[0:3] == $k) | [.key[3], .value[0]]]
                      + (if ([($tables[$vspec.cell] // [])[] | select(.key[0:3] == $k)] | length) > 0
-                        then [after_rows($vspec; $st)[] | (.environment // [])[] | [.[0], one(.[1]; $st)]] else [] end)),
+                        then [after_rows($vspec; $st)[]
+                              | ((.environment // [])[] | [.[0], one(.[1]; $st)]),
+                                (.["environment-pairs"] // empty | one(.; $st) | fromjson[])]
+                        else [] end)),
+       expects: (($st.slots[key(["expects"] + $s.key)] // "[]") | fromjson),
+       values: ($st.slots[key(["values-file"])] // ""),
        view: ([($tables[$vspec.cell] // [])[] | select(.key[0:3] == $k)] | length)};
   def phase_call:
     entry as $e

@@ -73,7 +73,11 @@
         "statement",
         "clearance",
         "label",
-        "key"
+        "key",
+        "home",
+        "home-variable",
+        "home-seed",
+        "expect"
       ],
       "programs": [
         "bwrap"
@@ -169,6 +173,21 @@
       "after-rows": [
         {
           "if-slot": [
+            "clone"
+          ],
+          "args": [
+            "--perms",
+            "0000",
+            "--tmpfs",
+            {
+              "slot": [
+                "clone"
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
             "runtime-gnupg"
           ],
           "args": [
@@ -187,7 +206,7 @@
             "state-root"
           ],
           "unless-slot": [
-            "key-home",
+            "state-pass",
             {
               "arg": 1
             },
@@ -211,7 +230,7 @@
         },
         {
           "if-slot": [
-            "key-home",
+            "state-pass",
             {
               "arg": 1
             },
@@ -230,7 +249,23 @@
               "slot": [
                 "state-root"
               ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "key-home",
+            {
+              "arg": 1
             },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
             "--perms",
             "0700",
             "--tmpfs",
@@ -409,6 +444,113 @@
               }
             ]
           ]
+        },
+        {
+          "if-slot": [
+            "home-kept",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--bind",
+            {
+              "slot": [
+                "home-kept",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            {
+              "slot": [
+                "home-kept",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "home-scratch",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [
+            "--perms",
+            "0700",
+            "--tmpfs",
+            {
+              "slot": [
+                "home-scratch",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "if-slot": [
+            "home-environment",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "args": [],
+          "environment-pairs": {
+            "slot": [
+              "home-environment",
+              {
+                "arg": 1
+              },
+              {
+                "arg": 2
+              },
+              {
+                "arg": 3
+              }
+            ]
+          }
         }
       ]
     },
@@ -430,6 +572,9 @@
       ],
       "record-directory": [
         4
+      ],
+      "home-seed": [
+        2
       ]
     },
     "cells": {
@@ -687,6 +832,15 @@
         {
           "slot": [
             "run"
+          ]
+        },
+        ";",
+        "set-option",
+        "-g",
+        "@workplace-clone",
+        {
+          "slot": [
+            "clone"
           ]
         }
       ],
@@ -1329,5 +1483,18 @@
         ]
       ]
     ]
-  }
+  },
+  "directories": {
+    "recorded": "record-directory",
+    "seat": [
+      1,
+      2,
+      3
+    ],
+    "path": 4
+  },
+  "kept-names": [
+    "GNUPGHOME",
+    "SSH_AUTH_SOCK"
+  ]
 }

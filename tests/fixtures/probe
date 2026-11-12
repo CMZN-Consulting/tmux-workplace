@@ -79,6 +79,39 @@ for argument in "$@"; do
       variable=${argument#value=}
       say "value $variable=${!variable-unset}"
       ;;
+    secret=*)
+      variable=${argument#secret=}
+      if [[ -n ${!variable+x} ]]; then
+        sum=$(printf '%s' "${!variable}" | sha256sum)
+        say "secret $variable: sha256 ${sum%% *}"
+      else
+        say "secret $variable: unset"
+      fi
+      ;;
+    home=*)
+      variable=${argument#home=}
+      place=${!variable-}
+      if [[ -z $place ]]; then
+        say "home $variable: unset"
+      else
+        say "home $variable: $place"
+        printf '%s\n' "$name" >> "$place/starts" 2> /dev/null && got=ok || got=refused
+        say "home write: $got"
+        say "home starts: $(grep -c '' "$place/starts" 2> /dev/null)"
+        say "home fs: $(stat -f -c %T -- "$place" 2> /dev/null)"
+        say "home where: $(stat -L -c %d:%i -- "$place" 2> /dev/null)"
+        if [[ $(stat -c %d -- "$place" 2> /dev/null) != "$(stat -c %d -- "${place%/*}" 2> /dev/null)" ]]; then got=yes; else got=no; fi
+        say "home own file system: $got"
+        say "home mode: $(stat -c %a -- "$place" 2> /dev/null)"
+        listing=("$place"/*)
+        say "home entries: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+        listing=("${place%/*}"/*)
+        say "home siblings: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+        listing=("${place%/*/*}"/*)
+        say "home state: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+        if [[ -f $place/seeded ]]; then say "home seeded: $(tr '\n' ' ' < "$place/seeded")"; else say "home seeded: no"; fi
+      fi
+      ;;
     pid)
       procs=(/proc/[0-9]*)
       say "pid $$ procs ${#procs[@]}"

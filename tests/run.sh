@@ -419,6 +419,7 @@ t_structure_and_order() {
 t_a_foreign_tmux_in_the_environment() {
   T -f /dev/null new-session -d -s bystander
   T select-pane -t =bystander: -T Bystander
+  T set-option -g @workplace-clone "$clone"
   local socket pane
   socket=$(T display -p -t =bystander: '#{socket_path},#{pid},#{session_id}')
   pane=$(T display -p -t =bystander: '#{pane_id}')
@@ -502,10 +503,11 @@ bind $root/harbor/holdall
 tmpfs $root/harbor/ledger
 tmpfs $root/harbor/scratch
 tmpfs $root/harbor/vault
-bind $root/harbor/vault/shelf"
+bind $root/harbor/vault/shelf
+tmpfs $clone"
   [[ -d /run/user/$EUID/gnupg ]] && expected+=$'\n'"tmpfs /run/user/$EUID/gnupg"
   expected+=$'\n'"tmpfs $HOME/.local/state/workplace"
-  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order, then the frame's masks (C39)" \
+  check "[C12] keeper's view: / first, then /proc and /dev, then the rows in byte order, then the frame's masks (C39, C52)" \
     test "$(view_ops "$(seat_command 'Harbor Keeper')" | sed 's/^ro-bind /bind /')" = "$expected"
   check "[C12] bwrap is named by its absolute path" \
     test "$(jq -r '.[0]' <<< "$(seat_command 'Harbor Keeper')")" = "$(command -v bwrap)"
@@ -633,6 +635,7 @@ t_server_privilege() {
   make_plan
   check "build" exit_is 0 wp build
   start_a_server_without_no_new_privileges bystander
+  T set-option -g @workplace-clone "$clone"
   check "[C10] up refuses a running server without no-new-privileges" exit_is 1 wp up
   check "[C10] the refusal says why" said "runs without no-new-privileges; it is refused"
   check "[C10] no session was built, and the bystander survives" sessions_are "bystander "
@@ -650,6 +653,7 @@ t_failure_leaves_nothing() {
   check "build of a plan whose last seat starts in a directory that will be removed" exit_is 0 wp build
   rmdir -- "$root/orchard/gone"
   T -f /dev/null new-session -d -s bystander
+  T set-option -g @workplace-clone "$clone"
   check "[C19] up exits 1 at the last start" exit_is 1 wp up
   check "[C19] the failure names the directory" said "$root/orchard/gone is not a directory"
   check "[C19] every session it made is torn down, by its captured id" said "undo session/harbor: done"
@@ -739,6 +743,8 @@ t_down_after_the_server_restarted() {
   T -f /dev/null new-session -d -s stranger
   check "the stranger now holds the id the workplace's first session had" \
     test "$(T display -p -t =stranger: '#{session_id}')" = "$first"
+  check "[C53] status exits 1 for a server that is not the run's" exit_is 1 wp status
+  check "[C53] telling a new process with no mark from the run's own" said "is process $(T display -p '#{pid}'), not the run's $(jq -r '.slots[(["server-pid"] | tojson)]' "$run/state.json") one, and carries no mark"
   check "[C18] down" exit_is 0 wp down
   check "[C18] down did not kill the stranger that reuses the id" sessions_are "stranger "
   check "[C18] down said it left it alone" said "undo session/harbor: it does not carry this run's mark, left alone"
@@ -1090,7 +1096,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-v3
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-v4
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1519,7 +1525,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is the one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-v3
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-v4
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -1539,7 +1545,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-v3; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-v4; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -1548,7 +1554,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-v3; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-v4; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "plan with an environment row the frame owns" exit_is 0 wplan
   check "[C39] build refuses a holding seat's row for GNUPGHOME" exit_is 1 wp build
@@ -1665,7 +1671,7 @@ t_identity() {
   check "[C39] nor holds GNUPGHOME or SSH_AUTH_SOCK, which keeper holds" \
     bash -c '[[ $1 != *GNUPGHOME* && $1 != *SSH_AUTH_SOCK* && $2 == *GNUPGHOME*SSH_AUTH_SOCK* ]]' _ "$(screen_of 'Harbor Watch' | grep '^env ')" "$(screen_of 'Harbor Keeper' | grep '^env ')"
   wp why "Harbor Keeper" "$home" > "$scratch/out" 2>&1
-  check "[C43] why names the mask on the state directory" said "masked by the frame after the rows (Identity): $HOME/.local/state/workplace, where workplaces keep their state, is shown to no seat"
+  check "[C43] why names the mask on the state directory" said "masked by the frame after the rows (Identity, Home): $HOME/.local/state/workplace, where workplaces keep their state, is shown to no seat"
   check "[C43] and what a holding seat is shown" said "passes through it to $state/gnupg"
   check "[C43] and the seat's key with its term" said "key: held, by the room's term, from programs/IDENTITY.typify:3"
   gpgconf --homedir "$home" --kill gpg-agent > /dev/null 2>&1
@@ -1703,6 +1709,426 @@ t_identity() {
   else
     skip "[C42] /run/user/$EUID/gnupg cannot be read here, so the directories left after the whole test are measured where it can"
   fi
+}
+
+home_terms='def h($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/HOMES.typify"}};
+  kinds([["harbor", "dock", "keeper", "navigator"], ["harbor", "dock", "pilot", "navigator"], ["harbor", "tower", "watch", "none"],
+         ["orchard", "barn", "grower", "gardener"], ["orchard", "barn", "picker", "gardener"]])
+  | .programs[-1].recorded += [
+      h(["home", "navigator", "WPT_HOME", "kept"]; 1), h(["home-variable", "navigator", "WPT_CACHE", "cache"]; 2),
+      h(["home-seed", "navigator", "tools/seed"]; 3), h(["home", "gardener", "WPT_HOME", "scratch"]; 4),
+      h(["home-variable", "gardener", "WPT_CACHE", "."]; 5),
+      h(["record-directory", "harbor", "dock", "keeper", "harbor/berth"]; 6),
+      h(["record-directory", "harbor", "dock", "keeper", $root + "/harbor/vault"]; 7),
+      h(["record-directory", "harbor", "dock", "keeper", "harbor/berth"]; 8)]'
+value_terms='def v($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/VALUES.typify"}};
+  .programs[-1].recorded += [
+    v(["expect", "-", "-", "-", "workplace", "WPT_TOKEN"]; 1), v(["expect", "harbor", "dock", "-", "room", "WPT_DOCK"]; 2),
+    v(["expect", "harbor", "dock", "keeper", "seat", "WPT_TOKEN"]; 3), v(["expect", "orchard", "-", "-", "office", "WPT_ORCHARD"]; 4)]'
+probe_args='def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
+  .programs[-1].recorded += [st("harbor"; "tower"; "watch"; "seat"; $root + "/harbor/charts"; "read-write"; 20),
+                             st("orchard"; "barn"; "-"; "room"; $root + "/orchard/almanac"; "read-write"; 21)]'
+refused_by() {
+  local exit=$1 command=$2 filter=$3 message=$4
+  statements_plan "$home_terms | $value_terms | $filter"
+  if [[ $command == build ]]; then
+    exit_is 0 wplan || return 1
+    exit_is "$exit" wp build || return 1
+  else
+    exit_is "$exit" wplan || return 1
+  fi
+  said "$message" || { note "    wanted: $message"; sed 's/^/    | /' "$scratch/out"; return 1; }
+}
+write_seed() {
+  printf '%s\n' '#!/usr/bin/env bash' 'home=$1' 'shift' 'printf "%s\n" "$@" > "$home/seeded"' \
+    '{ printf "%s\n" "pwd $PWD" "$(grep "^NoNewPrivs" /proc/self/status | tr -d " \t")" "names $(tr "\0" "\n" < /proc/$$/environ | cut -d= -f1 | LC_ALL=C sort | tr "\n" " ")" "WPT_HOME=${WPT_HOME-} WPT_CACHE=${WPT_CACHE-}" "stdin $(readlink /proc/$$/fd/0)"; } > "$home/seeded.how"' \
+    'printf "%s\n" "$home" >> "$HOME/seed-log"' > "$root/tools/seed"
+  chmod +x -- "$root/tools/seed"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "the seed fails on purpose" >&2' 'exit 3' > "$root/tools/failing-seed"
+  chmod +x -- "$root/tools/failing-seed"
+}
+
+t_home_and_values_selection() {
+  scoped_clone
+  statements_plan "$home_terms | $value_terms"
+  check "plan with homes and expected values" exit_is 0 wplan
+  check "[C45] a seat of a kind with a home has it, with the kind's variable, its further variables and its seed, the seed's path joined; a seat of no kind has none" \
+    test "$(jq -c '[.seats[] | [.seat[2], .home.kind, .home.state, .home.variable, [.home.variables[]? | [.name, .path]], .home.seed.path]]' "$clone/PLAN/view.json")" = \
+    "$(jq -c -n --arg s "$root/tools/seed" '[["keeper", "navigator", "kept", "WPT_HOME", [["WPT_CACHE", "cache"]], $s], ["pilot", "navigator", "kept", "WPT_HOME", [["WPT_CACHE", "cache"]], $s],
+      ["watch", null, null, null, [], null], ["grower", "gardener", "scratch", "WPT_HOME", [["WPT_CACHE", "."]], null], ["picker", "gardener", "scratch", "WPT_HOME", [["WPT_CACHE", "."]], null]]')"
+  check "[C45] each seat expects the names of every scope that speaks for it, with the scopes and their origins" \
+    test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
+    '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
+  check "[C29] the fold's version is the one that reads homes and expected values" \
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-v4
+  check "[C32] plan prints each seat's home and the names it expects" \
+    bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; clearance 0, by default; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; clearance 0, by default; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
+  statements_plan
+  check "plan with neither" exit_is 0 wplan
+  check "[C45] a plan with no home and no expect gives no seat a home or an expects member" \
+    test "$(jq '[.seats[] | has("home") or has("expects")] | any' "$clone/PLAN/view.json")" = false
+  local planned
+  planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
+  statements_plan '.programs[-1].recorded += [{term: ["expect", "-", "-", "-", "workplace", "WPT_TOKEN"], origin: at(1)}] | .programs[-1].recorded |= map(select(.term[0] != "statement"))'
+  check "[C45] a plan with an expect and no statement is folded, and refused for want of a row for /" exit_is 1 wplan
+  check "[C45] naming a seat" said "no row for /"
+  local plan_refusals=(
+    '.programs[-1].recorded += [h(["home", "ghost", "WPT_X", "kept"]; 9)]|programs/HOMES.typify:9: the home names the kind ghost, which the plan does not make'
+    '.programs[-1].recorded += [h(["home", "navigator", "WPT_HOME"]; 9)]|programs/HOMES.typify:9: a home has the words home KIND VARIABLE STATE, not 3'
+    '.programs[-1].recorded += [h(["home", "navigator", "1BAD", "kept"]; 9)]|programs/HOMES.typify:9: 1BAD is not a variable name'
+    '.programs[-1].recorded += [h(["home", "navigator", "WPT_HOME", "shared"]; 9)]|programs/HOMES.typify:9: shared is not kept or scratch'
+    '.programs[-1].recorded += [h(["home", "navigator", "WPT_OTHER", "kept"]; 9)]|two homes of the kind navigator differ: WPT_HOME kept from programs/HOMES.typify:1, WPT_OTHER kept from programs/HOMES.typify:9'
+    '.programs[-1].recorded += [h(["home-variable", "navigator", "WPT_CACHE", "other"]; 9)]|two home variables WPT_CACHE of the kind navigator differ: cache from programs/HOMES.typify:2, other from programs/HOMES.typify:9'
+    '.programs[-1].recorded += [h(["home-variable", "navigator", "WPT_UP", "../up"]; 9)]|programs/HOMES.typify:9: ../up is not a path inside the home'
+    '.programs[-1].recorded += [h(["home-variable", "navigator", "WPT_ABS", "/abs"]; 9)]|programs/HOMES.typify:9: /abs is not a path inside the home'
+    '.programs[-1].recorded += [h(["home-variable", "navigator", "WPT_HOME", "x"]; 9)]|programs/HOMES.typify:9: the home variable WPT_HOME of the kind navigator is the variable that names its home'
+    '.state.kinds = [{key: ["lookout"], value: ["declared"]}] | .programs[-1].recorded += [h(["home-variable", "lookout", "WPT_X", "x"]; 9)]|programs/HOMES.typify:9: the kind lookout has a home variable and no home'
+    '.state.kinds = [{key: ["lookout"], value: ["declared"]}] | .programs[-1].recorded += [h(["home-seed", "lookout", "tools/seed"]; 9)]|programs/HOMES.typify:9: the kind lookout has a seed and no home'
+    '.programs[-1].recorded += [h(["home-seed", "gardener", "tools/seed"]; 9)]|programs/HOMES.typify:9: the kind gardener has a scratch home, and build seeds only a kept one'
+    '.programs[-1].recorded += [h(["home-seed", "navigator", "tools/other"]; 9)]|two seeds of the kind navigator differ: '"$root"'/tools/seed from programs/HOMES.typify:3, '"$root"'/tools/other from programs/HOMES.typify:9'
+    '.programs[-1].recorded += [h(["home-seed", "navigator", "tools//seed"]; 9)]|programs/HOMES.typify:9 (home-seed): the path "tools//seed" is refused: it has an empty component'
+    '.programs[-1].recorded += [v(["expect", "harbor", "dock", "ghost", "seat", "WPT_X"]; 9)]|programs/VALUES.typify:9: the expect names the seat harbor/dock/ghost, which the plan does not make'
+    '.programs[-1].recorded += [v(["expect", "-", "-", "-", "workplace", "9X"]; 9)]|programs/VALUES.typify:9: 9X is not a variable name'
+    '.programs[-1].recorded += [v(["expect", "navigator", "-", "-", "kind", "WPT_X"]; 9)]|programs/VALUES.typify:9: kind is not a scope of an expect'
+    '.programs[-1].recorded += [h(["home", "gardener", "GNUPGHOME", "scratch"]; 9)]|programs/HOMES.typify:9: GNUPGHOME is a name the frame keeps for itself, and no home may take it'
+    '.programs[-1].recorded += [h(["home-variable", "navigator", "SSH_AUTH_SOCK", "agent"]; 9)]|programs/HOMES.typify:9: SSH_AUTH_SOCK is a name the frame keeps for itself, and no home may take it'
+    '.programs[-1].recorded += [v(["expect", "-", "-", "-", "workplace", "GNUPGHOME"]; 9)]|programs/VALUES.typify:9: GNUPGHOME is a name the frame keeps for itself, and no value may take it'
+    '.programs[-1].recorded += [v(["expect", "-", "-", "-", "workplace", "PATH"]; 9)]|programs/VALUES.typify:9: PATH is a name every seat takes from its caller, and a value given at run time may not take it'
+    '.programs[-1].recorded += [v(["expect", "harbor", "dock", "-", "room", "WPT_HOME"]; 9)]|seat Harbor Keeper (harbor/dock/keeper): it expects the value WPT_HOME, which the home of its kind navigator gives it (the expect at programs/VALUES.typify:9; the home at programs/HOMES.typify:1)'
+    '.programs[-1].recorded += [v(["expect", "orchard", "barn", "picker", "seat", "WPT_CACHE"]; 9)]|seat Orchard Picker (orchard/barn/picker): it expects the value WPT_CACHE, which the home of its kind gardener gives it (the expect at programs/VALUES.typify:9; the home at programs/HOMES.typify:4, programs/HOMES.typify:5)'
+  )
+  local entry
+  for entry in "${plan_refusals[@]}"; do
+    check "[C45] plan refuses, with exit 1: ${entry##*|}" refused_by 1 plan "${entry%|*}" "${entry##*|}"
+  done
+  check "[C45] and after every refusal PLAN/ is as it was" test "$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)" = "$planned"
+  local build_refusals=(
+    '.state.environment += [{key: ["harbor", "dock", "keeper", "WPT_HOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]|state environment: harbor/dock/keeper has a home, and its environment may not set WPT_HOME, which the frame gives (programs/policy.typify:40)'
+    '.state.environment += [{key: ["orchard", "barn", "picker", "WPT_CACHE"], value: ["/elsewhere"], masked: false, origin: at(40)}]|state environment: orchard/barn/picker has a home, and its environment may not set WPT_CACHE, which the frame gives (programs/policy.typify:40)'
+    '.state.environment += [{key: ["harbor", "dock", "keeper", "WPT_DOCK"], value: ["plain"], masked: false, origin: at(40)}]|state environment: harbor/dock/keeper expects the value WPT_DOCK at its start, and its environment may not set it (programs/policy.typify:40)'
+    "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "SSH_AUTH_SOCK"], value: ["/elsewhere"], masked: false, origin: at(40)}]|state environment: harbor/dock/keeper holds a key, and its environment may not set SSH_AUTH_SOCK, which the frame gives (programs/policy.typify:40)'
+  )
+  for entry in "${build_refusals[@]}"; do
+    check "[C48] build refuses, with exit 1: ${entry##*|}" refused_by 1 build "${entry%|*}" "${entry##*|}"
+  done
+  check "[C48] and leaves no BUILD" test ! -e "$clone/BUILD"
+  check "[C45] the names the frame keeps are the binding's kept-names, the very names its fixed part gives" \
+    test "$(jq -c '.["kept-names"] as $k | [.tables[]["after-rows"]?[]? | (.environment // [])[] | .[0]] | unique == ($k | sort) and $k == ["GNUPGHOME", "SSH_AUTH_SOCK"]' "$tool/host/binding.json")" = true
+}
+
+t_homes() {
+  scoped_clone
+  write_seed
+  local w=$label s=$HOME/.local/state/workplace/$label
+  local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "home=WPT_HOME", "value=WPT_CACHE", "hidden=" + $s + "/homes/02"])
+    | add("harbor/tower/watch/seat.typify"; ["report=" + $root + "/harbor/charts/watch", "home=WPT_HOME", "hidden=" + $s])
+    | add("orchard/barn/grower/seat.typify"; ["report=" + $root + "/orchard/almanac/grower", "home=WPT_HOME", "value=WPT_CACHE"])'
+  statements_plan "$home_terms | $probe_args ${args//\$s/\"$s\"}"
+  check "plan" exit_is 0 wplan
+  check "[C46] build" exit_is 0 wp build
+  check "[C46] it makes a kept home for keeper and for pilot, each seeded" \
+    bash -c 'grep -qxF "home: $1/homes/01 made for Harbor Keeper (harbor/dock/keeper), and seeded by $2" "$3" && grep -qxF "home: $1/homes/02 made for Harbor Pilot (harbor/dock/pilot), and seeded by $2" "$3"' _ "$s" "$root/tools/seed" "$scratch/out"
+  check "[C46] S/homes and each kept home are 0700" test "$(stat -c %a "$s/homes" "$s/homes/01" "$s/homes/02" | tr '\n' ' ')" = "700 700 700 "
+  check "[C46] no directory stands for a scratch home, or for a seat of no kind" test "$(ls "$s/homes" | tr '\n' ' ')" = "01 02 "
+  check "[C46] the frame's record names the seat of each kept home" \
+    test "$(jq -c . "$s/homes.json")" = '{"01":{"seat":"harbor/dock/keeper","state":"made"},"02":{"seat":"harbor/dock/pilot","state":"made"}}'
+  check "[C46] and only its owner may read it" test "$(stat -c %a "$s/homes.json")" = 600
+  check "[C46] BUILD/homes.json, listed in the MANIFEST, holds each home with its variables" \
+    bash -c 'grep -qE "^[0-9a-f]{64}  homes\.json$" "$1/MANIFEST" && [[ $(jq -c "[.seats[] | [.name, .state, .home, .environment]]" "$1/homes.json") == "$2" ]]' _ "$clone/BUILD" \
+    "$(jq -c -n --arg s "$s" '[["Harbor Keeper", "kept", "homes/01", [["WPT_HOME", "\($s)/homes/01"], ["WPT_CACHE", "\($s)/homes/01/cache"]]],
+      ["Harbor Pilot", "kept", "homes/02", [["WPT_HOME", "\($s)/homes/02"], ["WPT_CACHE", "\($s)/homes/02/cache"]]],
+      ["Orchard Grower", "scratch", "homes/04", [["WPT_HOME", "\($s)/homes/04"], ["WPT_CACHE", "\($s)/homes/04"]]],
+      ["Orchard Picker", "scratch", "homes/05", [["WPT_HOME", "\($s)/homes/05"], ["WPT_CACHE", "\($s)/homes/05"]]]]')"
+  check "[C47] the seed ran once for each new kept home" test "$(grep -c '' "$HOME/seed-log")" = 2
+  check "[C47] with the home and then the seat's declared directories, joined and each once, as its words" \
+    test "$(cat "$s/homes/01/seeded" | tr '\n' ' ')" = "$root/harbor/berth $root/harbor/vault "
+  check "[C47] in the home" grep -qxF "pwd $s/homes/01" "$s/homes/01/seeded.how"
+  check "[C47] with nothing on standard input" grep -qxF "stdin /dev/null" "$s/homes/01/seeded.how"
+  check "[C47] given the home's variables" grep -qxF "WPT_HOME=$s/homes/01 WPT_CACHE=$s/homes/01/cache" "$s/homes/01/seeded.how"
+  check "[C47] and nothing of the caller's but the inherited names" \
+    bash -c 'line=$(grep "^names " "$1"); for n in ${line#names }; do [[ " $2 PWD WPT_HOME WPT_CACHE " == *" $n "* ]] || exit 1; done' _ "$s/homes/01/seeded.how" "$(jq -r '.inherit | join(" ")' "$tool/host/binding.json")"
+  if [[ $(nnp_of $$) == NoNewPrivs:1 ]]; then
+    skip "[C47] the seed reports NoNewPrivs:1, but so would any process this shell starts; measured where the shell does not run under it"
+  else
+    check "[C47] under no-new-privileges" grep -qxF "NoNewPrivs:1" "$s/homes/01/seeded.how"
+  fi
+  check "[C48] up" exit_is 0 wp up
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  local report=$root/harbor/berth/keeper
+  r() { grep -qxF -- "$2" "$1"; }
+  check "[C48] keeper is given its home through the kind's variable" r "$report" "home WPT_HOME: $s/homes/01"
+  check "[C48] and the further variable, the path inside it" r "$report" "value WPT_CACHE=$s/homes/01/cache"
+  check "[C48] it writes there" r "$report" "home write: ok"
+  check "[C48] it sees what the seed wrote" r "$report" "home seeded: $root/harbor/berth $root/harbor/vault "
+  check "[C48] a kept home is the machine's directory itself" r "$report" "home where: $(stat -c %d:%i "$s/homes/01")"
+  check "[C48] of the homes, keeper sees its own alone" r "$report" "home siblings: 01 "
+  check "[C48] and of S, the homes alone" r "$report" "home state: homes "
+  check "[C48] pilot's home is not shown to keeper" r "$report" "hidden $s/homes/02: unseen"
+  check "grower ran" wait_for_probe "Orchard Grower" grower
+  report=$root/orchard/almanac/grower
+  check "[C48] grower's scratch home is a file system of the pane" r "$report" "home fs: tmpfs"
+  check "[C48] made for it alone, not a directory of the mask around it" r "$report" "home own file system: yes"
+  check "[C48] at its path, 0700, empty at the start and writable" \
+    bash -c 'grep -qxF "home WPT_HOME: $2/homes/04" "$1" && grep -qxF "home mode: 700" "$1" && grep -qxF "home starts: 1" "$1" && grep -qxF "home entries: starts " "$1"' _ "$report" "$s"
+  check "[C48] a further variable written . is the home itself" r "$report" "value WPT_CACHE=$s/homes/04"
+  check "watch ran" wait_for_probe "Harbor Watch" watch
+  check "[C48] a seat of no kind has no home variable" r "$root/harbor/charts/watch" "home WPT_HOME: unset"
+  check "[C48] and is shown nothing of S" r "$root/harbor/charts/watch" "hidden $s: unseen"
+  wp status > "$scratch/out" 2>&1
+  check "[C51] status names each home and its state" \
+    bash -c 'grep -qxF "home    Harbor Keeper (harbor/dock/keeper): kept at $2/homes/01, named to its program by WPT_HOME" "$1" && grep -qxF "home    Orchard Grower (orchard/barn/grower): scratch, a file system made when its pane starts at $2/homes/04, named to its program by WPT_HOME" "$1"' _ "$scratch/out" "$s"
+  wp why "Harbor Keeper" "$s/homes/01/x" > "$scratch/out" 2>&1
+  check "[C51] why names the seat's home, its variables, its seed and their terms" \
+    bash -c 'grep -qxF "home: kept at $2/homes/01, named to its program by WPT_HOME, by the kind navigator'"'"'s term, from programs/HOMES.typify:1" "$1" && grep -qxF "  home variable WPT_CACHE: the home'"'"'s cache, from programs/HOMES.typify:2" "$1" && grep -qxF "  seeded by $3 when build makes the home, from programs/HOMES.typify:3" "$1"' _ "$scratch/out" "$s" "$root/tools/seed"
+  check "[C51] and that a path in it is the seat's own, shown read-write" said "the seat's home: shown read-write at its own path by the frame after the rows (Home), to this seat alone"
+  wp why "Harbor Watch" "$s/homes/01" > "$scratch/out" 2>&1
+  check "[C51] for another seat the same path is masked" said "masked by the frame after the rows (Identity, Home): $HOME/.local/state/workplace, where workplaces keep their state, is shown to no seat"
+  wp doctor > "$scratch/out" 2>&1
+  check "[C51] doctor counts the homes" said "ok      the seats' homes in $s/homes: 2 kept, 2 scratch"
+  mv -- "$s/homes/02" "$s/homes/02.away"
+  check "[C51] status exits 1 for a kept home that is missing" exit_is 1 wp status
+  check "[C51] naming it" said "missing home $s/homes/02 of Harbor Pilot (harbor/dock/pilot); build again"
+  mv -- "$s/homes/02.away" "$s/homes/02"
+  check "[C48] down" exit_is 0 wp down
+  check "[C48] nothing of a scratch home is left on the machine" test "$(ls "$s/homes" | tr '\n' ' ')" = "01 02 "
+  check "[C48] up again, with no build" exit_is 0 wp up
+  check "keeper ran again" eventually bash -c 'grep -qxF "home starts: 2" "$1"' _ "$root/harbor/berth/keeper"
+  check "[C46] a kept home keeps what its seat wrote" r "$root/harbor/berth/keeper" "home starts: 2"
+  check "grower ran again" wait_for_probe "Orchard Grower" grower
+  check "[C48] a scratch home starts empty every time" r "$root/orchard/almanac/grower" "home starts: 1"
+  check "down" exit_is 0 wp down
+  rm -rf -- "$clone/BUILD"
+  check "[C47] build again" exit_is 0 wp build
+  check "[C47] no seed runs for a home that exists" test "$(grep -c '' "$HOME/seed-log")" = 2
+  check "[C47] and build says nothing of it" bash -c '! grep -q "^home: " "$1"' _ "$scratch/out"
+  rm -rf -- "$clone/BUILD" "$s/homes/02"
+  statements_plan "$home_terms | $probe_args"' | (.programs[-1].recorded[] | select(.term[0] == "home-seed") | .term[2]) = "tools/failing-seed"'
+  check "plan with a failing seed" exit_is 0 wplan
+  check "[C47] a seed that fails refuses the build, with exit 1" exit_is 1 wp build
+  check "[C47] naming the seed, the kind, the seat and the exit, with what it said" \
+    said "build refuses: the seed $root/tools/failing-seed of the kind navigator failed for Harbor Pilot (harbor/dock/pilot) with exit 3, and its new home is removed: the seed fails on purpose"
+  check "[C47] its new home is removed, the old one kept, and the record names the old one alone" \
+    bash -c '[[ ! -e $1/homes/02 && -d $1/homes/01 && $(jq -c "keys" "$1/homes.json") == "[\"01\"]" ]]' _ "$s"
+  check "[C47] and no BUILD is left" test ! -e "$clone/BUILD"
+  statements_plan "$home_terms | $probe_args"' | (.programs[-1].recorded[] | select(.term[0] == "home-seed") | .term[2]) = "tools/nothing"'
+  check "plan with a seed that is not there" exit_is 0 wplan
+  check "[C47] a seed that is not an executable file refuses the build" exit_is 1 wp build
+  check "[C47] naming it" said "build refuses: the seed $root/tools/nothing of the kind navigator is not an executable file"
+  statements_plan "$home_terms | $probe_args"
+  check "plan" exit_is 0 wplan
+  jq '.["01"].seat = "orchard/barn/picker"' "$s/homes.json" > "$scratch/h" && cp -- "$scratch/h" "$s/homes.json"
+  check "[C46] a kept home that the record gives another seat refuses the build" exit_is 1 wp build
+  check "[C46] naming both seats" said "build refuses: the home $s/homes/01 was made for the seat orchard/barn/picker, and the plan now places Harbor Keeper (harbor/dock/keeper) at 01 among the panes; move the home by hand"
+  jq 'del(.["01"])' "$s/homes.json" > "$scratch/h" && cp -- "$scratch/h" "$s/homes.json"
+  check "[C46] a directory the record does not name refuses the build" exit_is 1 wp build
+  check "[C46] and is left alone" bash -c 'grep -qF "build refuses: $1/homes/01 exists, and $1/homes.json names no seat for it; the frame did not make it, so it is left alone" "$2" && [[ -f $1/homes/01/starts ]]' _ "$s" "$scratch/out"
+  jq '.["01"] = {seat: "harbor/dock/keeper", state: "seeding"}' "$s/homes.json" > "$scratch/h" && cp -- "$scratch/h" "$s/homes.json"
+  check "[C47] a home whose seed did not finish is made and seeded again" exit_is 0 wp build
+  check "[C47] saying so" said "home: $s/homes/01 of Harbor Keeper (harbor/dock/keeper) was left unseeded by an earlier build, and is made again"
+  check "[C47] the seed ran for it and for pilot's new home" test "$(grep -c '' "$HOME/seed-log")" = 4
+}
+
+t_values() {
+  scoped_clone
+  local s=$HOME/.local/state/workplace/$label values
+  values=$HOME/.local/state/workplace/$label/values.json
+  local keeper_token='keeper token: "quoted", $HOME, ${PATH}, a back\slash, # a mark, and  two spaces'
+  local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "secret=WPT_TOKEN", "secret=WPT_DOCK", "env"])
+    | add("harbor/tower/watch/seat.typify"; ["report=" + $root + "/harbor/charts/watch", "secret=WPT_TOKEN", "secret=WPT_DOCK"])
+    | add("orchard/barn/grower/seat.typify"; ["report=" + $root + "/orchard/almanac/grower", "secret=WPT_TOKEN", "secret=WPT_ORCHARD"])'
+  statements_plan "$value_terms | $probe_args $args"
+  check "plan" exit_is 0 wplan
+  check "[C49] build" exit_is 0 wp build
+  mkdir -p -- "$s"
+  jq -n --arg k "$keeper_token" '{workplace: {WPT_TOKEN: "the workplace token"}, rooms: {"harbor/dock": {WPT_DOCK: "the dock value"}},
+    seats: {"harbor/dock/keeper": {WPT_TOKEN: $k}}}' > "$values"
+  chmod 0600 -- "$values"
+  check "[C49] a value missing at every place of a seat refuses up, with exit 1" exit_is 1 wp up
+  check "[C49] naming the value and each seat" \
+    bash -c 'grep -qF "the seat Orchard Grower (orchard/barn/grower) expects the value WPT_ORCHARD, and $2 gives it at none of its places: the seat, its room, its office, the workplace" "$1" && grep -qF "the seat Orchard Picker (orchard/barn/picker) expects the value WPT_ORCHARD" "$1"' _ "$scratch/out" "$values"
+  check "[C49] and starts nothing" bash -c '[[ ! -e $1 ]]' _ "$run"
+  check "[C49] no server" no_server
+  jq '.offices = {orchard: {WPT_ORCHARD: "the orchard value"}}' "$values" > "$scratch/v" && cp -- "$scratch/v" "$values"
+  chmod 0644 -- "$values"
+  check "[C49] a run-time file that others can read refuses up" exit_is 1 wp up
+  check "[C49] naming its mode" said "$values has the mode 644, and others than its owner may read it"
+  check "[C49] and starts nothing" test ! -e "$run"
+  chmod 0600 -- "$values"
+  printf '%s\n' '{"workplace": {"WPT_TOKEN": 1}}' > "$scratch/bad" && cp -- "$scratch/bad" "$values"
+  check "[C49] a run-time file of another form refuses up" exit_is 1 wp up
+  check "[C49] naming what is wrong" said "$values: its workplace gives WPT_TOKEN a value that is not text"
+  jq -n '{workplace: {WPT_TOKEN: ""}, rooms: {"harbor/dock": {WPT_DOCK: "two\nlines"}}, seats: {"orchard/barn/picker": {WPT_NUL: "a\u0000b"}}}' > "$values"
+  check "[C49] an empty value, one of two lines and one with a NUL byte refuse up" exit_is 1 wp up
+  check "[C49] naming each name and no value" \
+    bash -c 'grep -qF "$2: its workplace gives WPT_TOKEN an empty value" "$1" && grep -qF "$2: its rooms entry \"harbor/dock\" gives WPT_DOCK a value of more than one line, or with a NUL byte" "$1" && grep -qF "$2: its seats entry \"orchard/barn/picker\" gives WPT_NUL a value of more than one line, or with a NUL byte" "$1" && ! grep -q lines "$1"' _ "$scratch/out" "$values"
+  jq -n --arg k "$keeper_token" '{workplace: {WPT_TOKEN: "the workplace token"}, rooms: {"harbor/dock": {WPT_DOCK: "the dock value"}},
+    offices: {orchard: {WPT_ORCHARD: "the orchard value"}}, seats: {"harbor/dock/keeper": {WPT_TOKEN: $k}}}' > "$values"
+  check "[C49] up" exit_is 0 wp up
+  cp -- "$scratch/out" "$scratch/said-up"
+  sha() { local sum; sum=$(printf '%s' "$1" | sha256sum); printf '%s\n' "${sum%% *}"; }
+  r() { grep -qxF -- "$2" "$1"; }
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  check "[C49] keeper is given its own value, the narrowest, exactly as written" r "$root/harbor/berth/keeper" "secret WPT_TOKEN: sha256 $(sha "$keeper_token")"
+  check "[C49] and its room's" r "$root/harbor/berth/keeper" "secret WPT_DOCK: sha256 $(sha "the dock value")"
+  check "[C49] as variables of its environment, with no other new name" \
+    bash -c 'grep -q "^env .* WPT_DOCK WPT_TOKEN" "$1" && ! grep -q WORKPLACE_VALUE "$1"' _ "$root/harbor/berth/keeper"
+  check "watch ran" wait_for_probe "Harbor Watch" watch
+  check "[C49] watch is given the workplace's" r "$root/harbor/charts/watch" "secret WPT_TOKEN: sha256 $(sha "the workplace token")"
+  check "[C49] and nothing it does not expect" r "$root/harbor/charts/watch" "secret WPT_DOCK: unset"
+  check "grower ran" wait_for_probe "Orchard Grower" grower
+  check "[C49] grower is given its office's" r "$root/orchard/almanac/grower" "secret WPT_ORCHARD: sha256 $(sha "the orchard value")"
+  check "[C50] exec --print" exit_is 0 wp exec --print "Harbor Keeper"
+  cp -- "$scratch/out" "$scratch/said-print"
+  check "[C50] shows each value's place by its name" \
+    test "$(jq -c '.[2:4]' "$scratch/said-print")" = '["-S","WPT_DOCK=${WORKPLACE_VALUE_WPT_DOCK} WPT_TOKEN=${WORKPLACE_VALUE_WPT_TOKEN}"]'
+  local wrap=$scratch/wrap real_env
+  real_env=$(command -v env)
+  mkdir -p -- "$wrap"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\0" "$0" "$@" > "$WPT_ARGV_LOG"' "exec ${real_env@Q} \"\$@\"" > "$wrap/env"
+  chmod +x -- "$wrap/env"
+  env PATH="$wrap:$PATH" WPT_ARGV_LOG="$scratch/argv" "$BASH" "$loop" exec --print "Harbor Keeper" > "$scratch/wrapped-print" 2>&1
+  (cd / && env PATH="$wrap:$PATH" WPT_ARGV_LOG="$scratch/argv" "$BASH" "$loop" exec "Harbor Keeper" < /dev/null > "$scratch/hand" 2>&1)
+  check "[C50] the call exec makes is the one it prints, word for word, with no value in it" \
+    test "$(jq -R -s -c 'split("\u0000")[:-1]' "$scratch/argv")" = "$(jq -c . "$scratch/wrapped-print")"
+  check "[C49] and by hand the seat is given the same values" grep -qxF "secret WPT_TOKEN: sha256 $(sha "$keeper_token")" "$scratch/hand"
+  wp status > "$scratch/out" 2>&1
+  cp -- "$scratch/out" "$scratch/said-status"
+  check "[C51] status names each value a seat expects and the place that gives it" \
+    grep -qxF "values  Harbor Keeper (harbor/dock/keeper): WPT_DOCK by the room, WPT_TOKEN by the seat" "$scratch/said-status"
+  wp why "Harbor Keeper" "$root/harbor/berth" > "$scratch/out" 2>&1
+  cp -- "$scratch/out" "$scratch/said-why"
+  check "[C51] why names each value, its terms and the place that supplies it" \
+    grep -qxF "value WPT_TOKEN: expected by the workplace's and the seat's terms, from programs/VALUES.typify:1, programs/VALUES.typify:3; supplied by the seat in $values" "$scratch/said-why"
+  wp doctor > "$scratch/out" 2>&1
+  cp -- "$scratch/out" "$scratch/said-doctor"
+  check "[C51] doctor names the run-time file without its values" said "ok      the run-time file $values, which only its owner may read; its values are not shown"
+  check "[C51] and that env fills a value's place" said "ok      env takes -S and fills a variable's place in it"
+  chmod 0640 -- "$values"
+  check "[C51] status exits 1 for a run-time file it refuses" exit_is 1 wp status
+  check "[C51] naming why" said "refused $values has the mode 640, and others than its owner may read it"
+  cp -- "$scratch/out" "$scratch/said-status-loose"
+  wp doctor > "$scratch/said-doctor-loose" 2>&1
+  check "[C51] and so does doctor" grep -qF "refused $values has the mode 640" "$scratch/said-doctor-loose"
+  check "[C49] exec refuses it too, with exit 2" exit_is 2 wp exec --print "Harbor Keeper"
+  cp -- "$scratch/out" "$scratch/said-exec-loose"
+  chmod 0600 -- "$values"
+  jq 'del(.rooms)' "$values" > "$scratch/v" && cp -- "$scratch/v" "$values"
+  check "[C49] a value removed after up refuses the seat's start by hand, with exit 2" exit_is 2 wp exec "Harbor Keeper" < /dev/null
+  cp -- "$scratch/out" "$scratch/said-exec"
+  check "[C49] naming the value and the seat" said "the seat Harbor Keeper (harbor/dock/keeper) expects the value WPT_DOCK, and $values gives it at none of its places"
+  check "[C51] status exits 1 for a missing value" exit_is 1 wp status
+  check "[C51] naming it" said "values  Harbor Keeper (harbor/dock/keeper): WPT_DOCK missing, WPT_TOKEN by the seat"
+  cp -- "$scratch/out" "$scratch/said-status-missing"
+  wp why "Harbor Keeper" "$root/harbor/berth" > "$scratch/said-why-missing" 2>&1
+  check "[C51] and why says it is missing" grep -qF "value WPT_DOCK: expected by the room's term, from programs/VALUES.typify:2; missing from $values" "$scratch/said-why-missing"
+  local -a kept=("$run"/ledger "$run"/checks "$run"/calls.jsonl "$run"/state.json "$run"/slots.json "$run"/tables.json "$run"/seats/*.json)
+  mkdir -p -- "$scratch/run-copy"
+  cp -- "${kept[@]}" "$scratch/run-copy/"
+  T show-environment -g > "$scratch/said-server" 2>&1
+  check "[C49] down" exit_is 0 wp down
+  cp -- "$scratch/out" "$scratch/said-down"
+  local new_token="a new keeper token"
+  jq --arg k "$new_token" '.seats["harbor/dock/keeper"].WPT_TOKEN = $k | .rooms = {"harbor/dock": {WPT_DOCK: "the dock value"}}' "$values" > "$scratch/v" && cp -- "$scratch/v" "$values"
+  check "[C49] a value changed with no new plan and no new build" exit_is 0 wp up
+  check "keeper ran with it" eventually bash -c 'grep -qxF "secret WPT_TOKEN: sha256 $2" "$1"' _ "$root/harbor/berth/keeper" "$(sha "$new_token")"
+  check "[C49] reaches its seat at the next up" r "$root/harbor/berth/keeper" "secret WPT_TOKEN: sha256 $(sha "$new_token")"
+  cat "$scratch/out" >> "$scratch/said-up"
+  check "down" exit_is 0 wp down
+  printf '%s\n' "the workplace token" "the dock value" "the orchard value" "$new_token" > "$scratch/patterns"
+  printf '%s\n' "$keeper_token" >> "$scratch/patterns"
+  check "[C50] no value stands in any message of build, up, exec --print, exec, status, why, doctor or down, in the ledger, the run's checks, calls, state, slots or seats, in BUILD, or in the server's environment" \
+    bash -c '! grep -rlF -f "$1" "$2"/said-* "$2"/run-copy "$2"/hand "$3"' _ "$scratch/patterns" "$scratch" "$clone/BUILD"
+}
+
+t_the_clone_is_masked() {
+  scoped_clone
+  write_seed
+  cp -- "$root/tools/seed" "$clone/seed"
+  local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "hidden=" + $root + "/config", "list=" + $root + "/config", "hidden=" + $root + "/config/BUILD"])
+    | add("harbor/tower/watch/seat.typify"; ["report=" + $root + "/harbor/charts/watch", "hidden=" + $root + "/config"])
+    | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; $root + "/config"; "read-only"; 22)]
+    | (.programs[-1].recorded[] | select(.term[0] == "home-seed") | .term[2]) = "config/seed"'
+  statements_plan "$home_terms | $probe_args $args"
+  check "plan with a row that opens the clone to keeper, and a seed in the clone" exit_is 0 wplan
+  check "[C52] build runs a seed that lies in the clone, outside every view" exit_is 0 wp build
+  check "[C52] it ran" said "home: $HOME/.local/state/workplace/$label/homes/01 made for Harbor Keeper (harbor/dock/keeper), and seeded by $clone/seed"
+  check "up" exit_is 0 wp up
+  check "[C52] keeper's view masks the clone after its rows: the row's bind, then the closed file system" \
+    test "$(view_ops "$(seat_command 'Harbor Keeper')" | sed 's/^ro-bind /bind /' | grep -nxE "(bind|tmpfs) $clone" | cut -d: -f2 | tr '\n' ',')" = "bind $clone,tmpfs $clone,"
+  check "[C52] and closes it: 0000" test "$(jq -r --arg c "$clone" '. as $a | [range(0; length) | select($a[.] == "--tmpfs" and $a[. + 1] == $c) | $a[. - 1]] | join(",")' <<< "$(seat_command 'Harbor Keeper')")" = 0000
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  local report=$root/harbor/berth/keeper
+  check "[C52] inside keeper's pane the clone cannot be listed, though a row would open it" \
+    bash -c 'grep -qxF "hidden $2: unseen" "$1" && grep -qxF "list $2: refused" "$1" && grep -qxF "hidden $2/BUILD: unseen" "$1"' _ "$report" "$clone"
+  check "watch ran" wait_for_probe "Harbor Watch" watch
+  check "[C52] nor in watch's" grep -qxF "hidden $clone: unseen" "$root/harbor/charts/watch"
+  wp why "Harbor Keeper" "$clone/BUILD" > "$scratch/out" 2>&1
+  check "[C52] why names the mask" said "masked by the frame after the rows: $clone, the clone the workplace is built from, with its PLAN and BUILD, is shown to no seat, whatever its rows say"
+  check "down" exit_is 0 wp down
+  local planned
+  planned=$(cat "$clone/PLAN/plan.json" "$clone/PLAN/manifest.json" | sha256sum)
+  local refusals=(
+    '(.programs[] | select(.path == "harbor/dock/keeper/seat.typify") | .plan[1].term[4]) = "config"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s directory '"$clone"' lies in the clone '"$clone"', which the frame masks in every view'
+    '(.programs[] | select(.path == "harbor/dock/keeper/seat.typify") | .plan[1].term[5]) = (["config/tools/probe"] | tojson)|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s program '"$clone"'/tools/probe lies in the clone '"$clone"', which the frame masks in every view'
+    '.programs[-1].recorded += [h(["record-directory", "harbor", "dock", "pilot", "config/work"]; 9)]|programs/HOMES.typify:9 (record-directory): the seat'"'"'s directory '"$clone"'/work lies in the clone '"$clone"', which the frame masks in every view'
+  )
+  local entry
+  for entry in "${refusals[@]}"; do
+    statements_plan "$home_terms | ${entry%|*}"
+    check "[C52] plan refuses, with exit 1, a seat in the clone: ${entry##*|}" exit_is 1 wplan
+    check "[C52] naming it" said "${entry##*|}"
+  done
+  check "[C52] and PLAN/ is as it was" test "$(cat "$clone/PLAN/plan.json" "$clone/PLAN/manifest.json" | sha256sum)" = "$planned"
+  jq --arg c "$clone" '(.programs[] | select(.path == "harbor/dock/keeper/seat.typify") | .plan[1].term[4]) = $c' "$clone/PLAN/plan.json" > "$scratch/p" \
+    && cp -- "$scratch/p" "$clone/PLAN/plan.json"
+  jq --arg s "$(sha256sum < "$clone/PLAN/plan.json" | cut -d' ' -f1)" '(.outputs[] | select(.path == "plan.json") | .sha256) = $s' "$clone/PLAN/manifest.json" > "$scratch/m" \
+    && cp -- "$scratch/m" "$clone/PLAN/manifest.json"
+  rm -rf -- "$clone/BUILD"
+  check "[C52] build refuses such a plan too" exit_is 1 wp build
+  check "[C52] naming it" said "harbor/dock/keeper/seat.typify, term 2 (start): the seat's directory $clone lies in the clone $clone"
+}
+
+t_a_server_belongs_to_one_clone() {
+  label=default
+  render default > "$scratch/plan.json"
+  check "build and up a workplace whose server is named default, as any clone's may be" up_fixture
+  check "[C53] up marks its server with its clone" test "$(T show-options -gqv @workplace-clone)" = "$clone"
+  wp status > "$scratch/out" 2>&1
+  check "[C53] status reads the mark" said "ok      the server, process $(T display -p '#{pid}'), carries this clone's mark"
+  local second=$root/config2 socket=$TMUX_TMPDIR/tmux-$UID/default
+  make_clone "$second"
+  cp -- "$scratch/plan.json" "$scratch/plan-first.json"
+  render default "$second/tmux.conf" > "$scratch/plan.json"
+  PLAN_CLONE=$second make_plan
+  cp -- "$scratch/plan-first.json" "$scratch/plan.json"
+  check "build another clone that names the same server" env WORKPLACE_CONFIG="$second" "$BASH" "$loop" build
+  check "[C53] its up refuses the server that carries the first clone's mark, with exit 1" exit_is 1 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" up
+  check "[C53] naming both clones" said "the tmux server default at $socket carries the mark of the clone $clone, not this one's ($second); up leaves it alone"
+  check "[C53] before any term: the other clone has no run" test ! -e "$second/BUILD/RUN"
+  check "[C53] and the first's sessions stand as they were" sessions_are "Harbor Orchard "
+  check "down" exit_is 0 wp down
+  T -f /dev/null new-session -d -s foreign
+  check "[C53] up refuses a server that holds sessions and carries no mark, with exit 1" exit_is 1 wp up
+  check "[C53] naming it" said "the tmux server default at $socket holds sessions (1) and carries no clone's mark; up leaves it alone"
+  check "[C53] and leaves its session alone" sessions_are "foreign "
+  T kill-server
+  check "up" exit_is 0 wp up
+  T new-session -d -s extra
+  check "down, while another session keeps the server" exit_is 0 wp down
+  check "the server stands, with its mark" test "$(T show-options -gqv @workplace-clone)" = "$clone"
+  check "[C53] up again takes the workplace's own server, which carries its mark" exit_is 0 wp up
+  check "[C53] and stands in it" sessions_are "Harbor Orchard extra "
+  T set-option -g @workplace-clone /elsewhere
+  check "[C53] status exits 1 when the server carries another clone's mark" exit_is 1 wp status
+  check "[C53] naming it" said "refused the server at $socket carries the mark of the clone /elsewhere, not this one's"
+  check "[C53] down refuses it, with exit 2" exit_is 2 wp down
+  check "[C53] and keeps RUN" test -d "$run"
+  T set-option -gu @workplace-clone
+  check "[C53] status exits 1 when the run's own server has lost its mark" exit_is 1 wp status
+  check "[C53] telling it from another server by the process the run recorded" said "missing the server, process $(T display -p '#{pid}'), is the run's own and has lost its mark"
+  check "[C53] down goes on, each undo checking its own mark" exit_is 0 wp down
+  check "[C53] and leaves the other session" sessions_are "extra "
+  T kill-server
 }
 
 t_source_and_contract() {
@@ -1774,6 +2200,11 @@ tests=(
   t_plan_end_to_end
   t_identity_selection
   t_identity
+  t_home_and_values_selection
+  t_homes
+  t_values
+  t_the_clone_is_masked
+  t_a_server_belongs_to_one_clone
   t_source_and_contract
 )
 (( $# )) && tests=("$@")

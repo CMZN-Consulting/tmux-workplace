@@ -32,7 +32,7 @@
   - A program's and an origin's `path` are the reader's record of where a line was written, and the loop neither rewrites nor refuses them.
   - A `read-only` or `read-write` row whose path does not exist is refused, and so is a `hidden`, `searchable-only` or `scratch` row whose path is not a directory. The preconditions the binding names (a directory, a file) are checked at build.
 - **C5.** `up` checks `BUILD` against its `MANIFEST`, refuses a changed, missing or unlisted file, and never builds.
-- **C6.** The loop needs bash 5.2, jq 1.7 and tmux 3.5a or later, and refuses an older one; versions are compared with tmux's letter suffix, so the floor 3.5a refuses 3.5. It needs `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`, and bubblewrap only when a seat has a view. GnuPG 2.4.4 or later (`gpg`, `gpg-agent`, `gpgconf`, `gpg-connect-agent`), with `setsid` and `base64`, is needed only by a plan in which a seat holds a key (C44). It resolves each program to an absolute path before it applies anything, and refuses a path that holds `=`.
+- **C6.** The loop needs bash 5.2, jq 1.7 and tmux 3.5a or later, and refuses an older one; versions are compared with tmux's letter suffix, so the floor 3.5a refuses 3.5. It needs `setpriv`, `env`, `mkdir`, `cp`, `rm`, `sha256sum` and `stat`, and bubblewrap only when a seat has a view. GnuPG 2.4.4 or later (`gpg`, `gpg-agent`, `gpgconf`, `gpg-connect-agent`), with `setsid` and `base64`, is needed only by a plan in which a seat holds a key (C44), and GNU `env` with `-S` only by one in which a seat expects a value (C49). It resolves each program to an absolute path before it applies anything, and refuses a path that holds `=`.
 
 ## Applying the plan
 
@@ -53,11 +53,11 @@
   - `read-only` and `read-write` bind the path onto itself.
   A path with no row has its nearest ancestor's state, and every table of a seat holds a row for `/`.
 - **C15.** Inside a view, `/dev/tty` opens, the terminal's size can be read, job control works, a full-screen program reaches the alternate screen, and another pane's terminal cannot be written.
-- **C16.** A seat's program receives exactly the binding's inherited names and the rows of the plan's `environment` cell for that seat. An inherited name takes its value from the environment `exec` runs in, and `PWD` is the seat's directory. A variable of the server or of the loop does not arrive.
+- **C16.** A seat's program receives exactly the binding's inherited names and the rows of the plan's `environment` cell for that seat, then the variables that the frame gives it (C39, C48) and the values it expects (C49). An inherited name takes its value from the environment `exec` runs in, and `PWD` is the seat's directory. A variable of the server or of the loop does not arrive.
 
 ## exec, down and the run
 
-- **C17.** A pane's command is `workplace exec -- SEAT` and nothing else. `exec` checks `BUILD` first. It starts the seat's program with the view, the environment's rows and the inherited names that `up` recorded in the seat's own record, from any terminal and any directory. `--print` prints the call, and an unknown seat, a changed build or a workplace that is not up is refused with exit 2. A pane holds a silent tmux client until its start replaces it with `respawn-pane -k`, which is followed by clearing its history, and no key is ever sent to a pane.
+- **C17.** A pane's command is `workplace exec -- SEAT` and nothing else. `exec` checks `BUILD` first. It starts the seat's program with the view, the environment's rows and the inherited names that `up` recorded in the seat's own record, from any terminal and any directory. `--print` prints the call that `exec` makes, word for word, and an unknown seat, a changed build or a workplace that is not up is refused with exit 2. A pane holds a silent tmux client until its start replaces it with `respawn-pane -k`, which is followed by clearing its history, and no key is ever sent to a pane.
 - **C18.** `down` undoes, newest first, what `up` recorded and nothing else. It acts only on a session that still carries the run's mark, removes `RUN` and keeps `BUILD`, and with nothing up it does nothing. It refuses, keeping `RUN`, when this shell would reach another tmux socket than the run's, and it keeps `RUN` and exits 1 when an undo fails.
 - **C19.** A failed term stops `up`. Everything made in that run is torn down by its captured id, whether or not its mark was set yet, `RUN` is removed, and the failure names the term.
 - **C20.** `up` refuses while `RUN` exists.
@@ -99,11 +99,11 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-v3`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-v4`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
-- **C30.** The fold reads the plan's `statement A B C SCOPE PATH STATE`, `clearance A B C SCOPE NUMBER`, `label PATH NUMBER` and `key A B C SCOPE STATE` terms from the programs' `recorded` lists, in the plan's order. It takes the seats from the `pane` terms and each seat's kind from the `seat-kinds` cell. For each seat:
+- **C30.** The fold reads the plan's `statement A B C SCOPE PATH STATE`, `clearance A B C SCOPE NUMBER`, `label PATH NUMBER`, `key A B C SCOPE STATE`, and the four terms of C45 from the programs' `recorded` lists, in the plan's order. It takes the seats from the `pane` terms and each seat's kind from the `seat-kinds` cell. For each seat:
   - its statements are the workplace's, its kind's, its office's, its room's and its own;
   - equal statements, clearances and labels count once, and carry the origin of each;
   - a statement is replaced by a narrower one at its path or at a directory above it, by components, and those that remain are the seat's rows;
@@ -123,15 +123,15 @@
   - a row that is not hidden, lying beneath a hidden row;
   - a row that is not hidden, lying at or beneath a label above the seat's clearance.
 - **C32.** `plan` prints, for each seat:
-  - its kind and clearance;
+  - its kind and clearance, and its home and the names it expects where it has them;
   - each remaining statement that replaced others, with every statement that it replaced. A statement that was itself replaced is printed only as replaced;
   - each statement that stands at a labelled path;
   - the counts.
 
   It prints each label that lies beneath a larger one, with the seats between the two, and lists the directories held by nobody as a report. None of this is in the plan.
 - **C33.** A seat's table is `view.json` when the plan holds statements, and the plan's `view` cell when it holds none.
-  - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance`, `label` and `key`.
-  - `plan`, `build`, `up` and `why` all call it. A plan that holds clearances, labels or keys without a statement is folded too, and refused, since no seat has a row for `/`.
+  - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance`, `label`, `key`, `home`, `home-variable`, `home-seed` and `expect`.
+  - `plan`, `build`, `up` and `why` all call it. A plan that holds any of them without a statement is folded too, and refused, since no seat has a row for `/`.
   - `view.json` holds the rows and, for each seat in the order of the `pane` terms, its kind, clearance, key, count of rows, replacement statements and their counts, and its statements at labelled paths.
   - `why` names the statement or the label behind a folded row, and what that statement replaced.
 - **C34.** The fold reads `key A B C SCOPE STATE`, with SCOPE `workplace`, `office`, `room` or `seat` and STATE `held` or `none`. A seat holds a key by the narrowest scope that speaks: its own, else its room's, else its office's, else the workplace's, else none. `view.json` gives each seat `key: {state, scope, origins}`.
@@ -153,7 +153,7 @@
   - It refuses where an agent of the home already answers, and leaves that agent alone.
   - It refuses a socket path over 106 bytes, the most GnuPG takes. `build` refuses a state directory too long for the sockets: over 84 bytes, or over 78 where there is no runtime directory.
   - It records in the ledger the agent, marked by its process id, and, where its sockets stand in the runtime directory, that directory. It records in the run's checks the agent's answer.
-- **C39.** After the rows, the binding's fixed part masks the runtime directory's `gnupg` in every view, and R in every view: closed for a seat that holds no key, and searchable for one that does.
+- **C39.** After the rows, the binding's fixed part masks the runtime directory's `gnupg` in every view, and R in every view: closed for a seat that holds no key and has no home, and searchable for one that holds a key or has a home.
   - A holding seat is shown, at G = `S/gnupg`, a read-only directory of the frame's making. It holds the key's public ring, its trust database and `gpg.conf`, the agent's extra socket as `S.gpg-agent`, and its ssh socket as `S.gpg-agent.ssh`. It is never shown the standard socket, a private key or another seat's home.
   - The frame gives such a seat `GNUPGHOME` and `SSH_AUTH_SOCK` after the environment's cell, and a plan that sets either for it is refused.
 - **C40.** In its view a holding seat signs with gpg and with `ssh-keygen -Y sign`, and makes a signed git commit with the committer set to its name and address alone, all with nothing set by hand. Each verifies against `keys.json`.
@@ -168,3 +168,47 @@
   - `why` names a seat's key and the term that gives it, and the masks on R and on the runtime directory's `gnupg`.
   - `doctor` reports GnuPG and its floor, the state directory and the length it leaves for a workplace's name, and the runtime directory.
 - **C44.** GnuPG's floor is 2.4.4, the CI image's, and only a plan in which a seat holds a key needs it. An older gpg refuses such a build with exit 2, naming both versions.
+
+## A seat's home and the values at run time
+
+- **C45.** The fold reads four terms of the plan's `recorded` lists.
+  - `home KIND VARIABLE STATE`: a seat of the kind has a home, named to its program through VARIABLE. STATE is `kept` or `scratch`.
+  - `home-variable KIND NAME SUBPATH`: a further variable, given the path SUBPATH inside the home. SUBPATH is relative to the home, with no empty, `.` or `..` component; `.` alone is the home.
+  - `home-seed KIND PATH`: a program that `build` runs for each kept home it makes. PATH is a path position of C4.
+  - `expect A B C SCOPE NAME`, with SCOPE `workplace`, `office`, `room` or `seat`: the seats of that scope expect the value NAME, an environment variable, at their start. A seat expects the union of the names that the workplace, its office, its room and its own terms state; none takes a name away, and equal terms count once with all their origins.
+  - `view.json` gives a seat of a kind with a home `home: {kind, variable, state, variables, seed, origins}`, and a seat that expects a value `expects: [{name, scopes, origins}]`, by name. A seat with neither has neither member, so the view of a plan without these terms is the one the fold gave before.
+  - It refuses, naming the origins: a kind no seat has and the plan does not declare; a name that is not a variable name; a state other than `kept` or `scratch`; two homes, two variables of one name or two seeds of one kind that differ; a variable or a seed for a kind with no home; a variable that is the home's own; a seed for a scratch home; an expect of a place the plan does not make or of another scope.
+  - The names the frame keeps are the binding's `kept-names`, the names its fixed part gives a seat itself: `GNUPGHOME` and `SSH_AUTH_SOCK`. A home's variable, a further variable or an expected name that is one of them is refused. So is an expected name that the binding passes on from the caller, such as `HOME`, since that would cover the value; a home may use such a name.
+  - It refuses a seat that expects a name its kind's home gives it, naming the seat and both origins.
+- **C46.** A kept home is `S/homes/NN`, NN being the seat's place among the panes. `build` makes it with mode 0700 in `S/homes`, also 0700, and keeps it across builds.
+  - `S/homes.json`, the frame's record with mode 0600, names the seat of each kept home. `build` refuses, naming both, a home that the record gives another seat, and a directory that the record does not name, which it leaves alone.
+  - A scratch home has nothing on the machine.
+  - `BUILD/homes.json`, listed in `BUILD/MANIFEST`, holds for each seat with a home its place, name, kind, state, path and variables.
+- **C47.** For each kept home that `build` makes new, it runs the kind's seed once, under `setpriv --no-new-privs`, in the home, with nothing on standard input. Its words are the home and then the seat's declared directories, joined, each once: the recorded term that the binding's `directories` names, `record-directory`. Its environment is the inherited names and the home's variables.
+  - It never runs for a home that exists. A home whose seed did not finish is made and seeded again.
+  - A seed that fails refuses the build, with exit 1, naming the seed, the kind, the seat, its exit and what it said last. Its new home is removed. A seed that is not an executable file refuses the build before the home is made.
+- **C48.** After the rows and inside the mask on R, the binding's fixed part shows a seat its home at the home's own path: a kept home read-write as the machine's directory, and a scratch home as a file system of mode 0700 made when the pane starts, empty, of which nothing is left when the pane ends. No other seat is shown it.
+  - The frame gives the seat, after the environment's cell, the kind's variable with the home's path, and each further variable with its path inside the home.
+  - `build` refuses a plan whose environment cell sets one of them for a seat of the kind, or sets a value the seat expects.
+- **C49.** The run-time file is `S/values.json`, mode 0600, written by the desk lead and never by the frame. It is an object with `workplace`, mapping names to values, and `offices`, `rooms` and `seats`, mapping a place written `A`, `A/B` or `A/B/C` to names and values. A value is text of one line that is not empty: an empty one, or one with a line end or a NUL byte, is refused, naming the name and never the value. A name in the file that a seat does not expect is not given to it.
+  - `up` and `exec` give a seat each value it expects from the narrowest place that has it: the seat, its room, its office, the workplace. Changing a value needs no new plan and no new build.
+  - `up` refuses, with exit 1 and before it starts anything, a run-time file that others than its owner may read, one of another owner or form, and a seat that expects a value the file does not give, naming the value and the seat. `exec` refuses the same, with exit 2.
+  - `exec` gives the values through the environment of `env`, which fills each value's place in one `-S` word and clears every other variable. No value is a word of any program's command line.
+- **C50.** No value is ever shown. A message, the ledger, the run's checks, calls, state, slots and seats' records, `BUILD`, the server's environment, `status`, `why`, `doctor` and the call that `exec --print` prints carry a value's name and never the value. In the printed call each value's place is `NAME=${WORKPLACE_VALUE_NAME}`.
+- **C51.** `status` names each seat's home and its state, and each name a seat expects with the place that gives it. It exits 1 for a kept home that is missing, a value that is missing, or a run-time file it refuses.
+  - `why` names the seat's home, its variables and seed with their terms, says that a path in the home is the seat's own, and names each value the seat expects with its terms and whether the file supplies it.
+  - `doctor` reports `env -S`, the run-time file of the workplace that `WORKPLACE_CONFIG` names, and the count of its homes, without a value.
+
+## The clone
+
+- **C52.** In every view the binding's fixed part masks the clone the workplace is built from, `WORKPLACE_CONFIG`, with its `PLAN` and `BUILD`: closed (0000), after the rows and before the other masks. A row that names the clone or a path in it opens nothing.
+  - `plan` and `build` refuse, with exit 1, naming the term or its origin, a seat whose directory, its start's or one it declares, or whose program lies at or beneath the clone.
+  - A kind's seed may lie in the clone, since `build` runs it outside every view.
+  - `why` names the mask for a path at or beneath the clone.
+
+## A server belongs to one clone
+
+- **C53.** The `session` term marks its server with the clone, as the global user option `@workplace-clone`. The mark lives in the server's memory and nowhere else, so it ends with the server.
+  - Before any term, `up` reads the server that the plan names. It refuses, with exit 1 and naming the server, a server that carries another clone's mark, and a server that holds sessions and carries no mark, and it starts nothing. It takes the workplace's own server, and a server with no session.
+  - `status` reads the mark, and exits 1 for another clone's mark or for none. A server that lost its mark is told from one that never had it by the process id, which the run records: the run's own process with no mark is reported as such, and another process as another.
+  - `down` refuses, keeping `RUN`, a server that carries another clone's mark. For a server with no mark it says so and goes on, since each undo checks its own mark.

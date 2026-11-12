@@ -1,0 +1,2 @@
+view : /tmp/workplace-reference-s3/agents/gardener = searchable-only
+view : /tmp/workplace-reference-s3/agents/gardener/shared = read-only

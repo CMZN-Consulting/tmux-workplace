@@ -1,1 +1,1 @@
-command : ["/tmp/workplace-reference-a4/tools/probe","picker","hidden=cellar","reach=cellar/inner","ro=almanac","rw=crate-picker","list=silo","reach=silo/bin"]
+command : ["/tmp/workplace-reference-s3/tools/probe","picker","hidden=cellar","reach=cellar/inner","ro=almanac","rw=crate-picker","list=silo","reach=silo/bin"]

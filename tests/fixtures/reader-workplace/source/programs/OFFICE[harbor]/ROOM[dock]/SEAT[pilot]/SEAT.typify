@@ -1,0 +1,3 @@
+clearance : 3
+view : /tmp/workplace-reference-s3/public = read-write
+view : /tmp/workplace-reference-s3/agents/navigator/stores/pilot = read-write

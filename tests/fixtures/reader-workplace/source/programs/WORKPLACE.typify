@@ -1,0 +1,17 @@
+view : / = read-only
+view : /tmp/workplace-reference-s3 = read-write
+view : /tmp/workplace-reference-s3/agents = searchable-only
+view : /tmp/workplace-reference-s3/agents/navigator = hidden
+view : /tmp/workplace-reference-s3/agents/gardener = hidden
+view : /tmp/workplace-reference-s3/harbor/charts = read-write
+view : /tmp/workplace-reference-s3/harbor/charts = read-write
+view : /tmp/workplace-reference-s3/harbor/ledger/inner = read-write
+view : /tmp/workplace-reference-s3/harbor/berth = read-write
+view : /tmp/workplace-reference-s3/orchard/crate-picker = read-write
+view : /tmp/workplace-reference-s3/sealed = hidden
+view : /tmp/workplace-reference-s3/harbor/scratch = scratch
+view : /tmp/workplace-reference-s3/orchard/scratch = scratch
+label : /tmp/workplace-reference-s3/public = 0
+label : /tmp/workplace-reference-s3/restricted = 2
+label : /tmp/workplace-reference-s3/restricted/lower = 1
+label : /tmp/workplace-reference-s3/sealed/info = 0

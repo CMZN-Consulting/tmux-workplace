@@ -1,4 +1,34 @@
 #lang typify
+declare : AgentKinds
+version : 1
+file : programs/KINDS.typify
+optional!
+is : kind-key = /[A-Za-z0-9][A-Za-z0-9_-]*/ except "none"
+cell : kinds = shadow
+primitive : declare-kind : kind-key
+writes : declare-kind : kinds = put 1 "declared"
+effect : declare-kind = state
+form : kind : <kind-key>
+does : declare-kind <kind-key>
+count : declare-kind = 0..1 by 1
+end!
+
+declare : KindAccess
+version : 1
+file : programs/KIND[<kind-key>]/KIND.typify
+optional!
+is : kind-key = /[A-Za-z0-9][A-Za-z0-9_-]*/ except "none"
+is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
+cell : kinds = shadow
+cell : statement-records = shadow
+primitive : statement : text text text text canonical-path mode
+writes : statement : statement-records = put 5
+effect : statement = state
+ensure : statement : kind-declared = (bound kinds <kind-key>)
+form : view : <canonical-path> = <mode>
+does : statement <kind-key> - - kind <canonical-path> <mode>
+end!
+
 declare : Directories
 version : 1
 file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/DIRECTORIES.typify
@@ -7,7 +37,17 @@ is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : relative = relative-path except ""
-is : kind = "none"
+is : kind = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : kind-key = /[A-Za-z0-9][A-Za-z0-9_-]*/ except "none"
+cell : kinds = shadow
+cell : named-selections = shadow
+cell : none-selections = shadow
+primitive : mark-named : office-key room-key seat-key
+writes : mark-named : named-selections = put 3 "selected"
+effect : mark-named = state
+primitive : mark-none : office-key room-key seat-key
+writes : mark-none : none-selections = put 3 "selected"
+effect : mark-none = state
 cell : panes = shadow
 cell : directories = shadow
 primitive : record-directory : office-key room-key seat-key canonical-path
@@ -20,13 +60,24 @@ effect : assign-kind = state
 term : directory : relative
 rule : directory <p> -> record-directory <office-key> <room-key> <seat-key> (join (context Host.workdir) <p>)
 ensure : directory : declared-seat = (bound panes <office-key> <room-key> <seat-key>)
+ensure : directory : kind-selected = (bound seat-kinds <office-key> <room-key> <seat-key>)
 form : directory : <relative>
 does : directory <relative>
 count : directory = 1..*
 count : directory = 0..1 by 1
-form : agent : <kind>
-does : assign-kind <office-key> <room-key> <seat-key> <kind>
-count : assign-kind = 1
+term : select-none : kind
+rule : select-none <k> -> assign-kind <office-key> <room-key> <seat-key> <k> ; mark-none <office-key> <room-key> <seat-key>
+ensure : select-none : no-named-kind = (absent named-selections <office-key> <room-key> <seat-key>)
+form : agent : none
+does : select-none none
+count : select-none = 0..1
+term : select-kind : kind-key
+rule : select-kind <k> -> assign-kind <office-key> <room-key> <seat-key> <k> ; mark-named <office-key> <room-key> <seat-key>
+ensure : select-kind : kind-declared = (bound kinds <1>)
+ensure : select-kind : no-none-kind = (absent none-selections <office-key> <room-key> <seat-key>)
+form : agent : <kind-key>
+does : select-kind <kind-key>
+count : select-kind = 0..1
 end!
 
 declare : SeatEnvironment

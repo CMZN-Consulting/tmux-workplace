@@ -1,0 +1,2 @@
+clearance : 1
+view : agents/gardener/stores/grower = read-write

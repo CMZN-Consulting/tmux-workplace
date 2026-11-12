@@ -1,0 +1,2 @@
+view : agents/navigator = searchable-only
+view : agents/navigator/shared = read-only

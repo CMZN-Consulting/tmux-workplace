@@ -3,6 +3,7 @@ declare : Host
 version : 1
 file : ROOT.typify
 required!
+is : workplace-path = canonical-path | relative-path | "."
 is : workplace = /[A-Za-z0-9][A-Za-z0-9_-]*/
 cell : configuration = shadow
 primitive : configure : text text
@@ -13,12 +14,11 @@ rule : workdir <p> -> configure root <p>
 form : workdir : <canonical-path>
 does : workdir <canonical-path>
 count : workdir = 1
-primitive : server : workplace relative-path
+primitive : server : workplace workplace-path
 effect : server = external
-scope : server = root
 stage : server = 0
-form : server : <workplace> : <relative-path>
-does : server <workplace> <relative-path>
+form : server : <workplace> : <workplace-path>
+does : server <workplace> <workplace-path>
 count : server = 1
 end!
 
@@ -42,14 +42,14 @@ declare : Start
 version : 1
 file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/run/START.typify
 required!
+is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : argv = /\[.+\]/
 cell : panes = shadow
-primitive : start : office-key room-key seat-key relative-path argv
+primitive : start : office-key room-key seat-key workplace-path argv
 effect : start = external
-scope : start = root
 stage : start = 50
 form : command : <argv>
 does : start <office-key> <room-key> <seat-key> (context Directories.directory) <argv>

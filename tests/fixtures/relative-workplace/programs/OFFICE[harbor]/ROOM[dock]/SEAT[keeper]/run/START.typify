@@ -1,0 +1,1 @@
+command : ["tools/probe","keeper","hidden=ledger","reach=ledger/inner","ro=charts","rw=berth","list=vault","reach=vault/shelf"]

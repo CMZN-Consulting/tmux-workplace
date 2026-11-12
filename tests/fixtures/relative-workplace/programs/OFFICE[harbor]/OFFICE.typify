@@ -1,0 +1,3 @@
+clearance : 1
+view : harbor/charts = read-only
+view : harbor/ledger = hidden

@@ -49,32 +49,34 @@ declare : WorkplaceAccess
 version : 1
 file : programs/WORKPLACE.typify
 optional!
+is : workplace-path = canonical-path | relative-path | "."
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
 is : clearance-number = /(0|[1-9][0-9]*)/
 cell : statement-records = shadow
-primitive : statement : text text text text canonical-path mode
+primitive : statement : text text text text workplace-path mode
 writes : statement : statement-records = put 5
 effect : statement = state
 cell : label-records = shadow
-primitive : label : canonical-path clearance-number
+primitive : label : workplace-path clearance-number
 writes : label : label-records = put 1
 effect : label = state
-form : view : <canonical-path> = <mode>
-does : statement - - - workplace <canonical-path> <mode>
-form : label : <canonical-path> = <clearance-number>
-does : label <canonical-path> <clearance-number>
+form : view : <workplace-path> = <mode>
+does : statement - - - workplace <workplace-path> <mode>
+form : label : <workplace-path> = <clearance-number>
+does : label <workplace-path> <clearance-number>
 end!
 
 declare : OfficeAccess
 version : 1
 file : programs/OFFICE[<office-key>]/OFFICE.typify
 optional!
+is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
 is : clearance-number = /(0|[1-9][0-9]*)/
 cell : sessions = shadow
 cell : statement-records = shadow
-primitive : statement : text text text text canonical-path mode
+primitive : statement : text text text text workplace-path mode
 writes : statement : statement-records = put 5
 effect : statement = state
 ensure : statement : office-declared = (bound sessions <office-key>)
@@ -83,8 +85,8 @@ primitive : clearance : text text text text clearance-number
 writes : clearance : clearance-records = put 4
 effect : clearance = state
 ensure : clearance : office-declared = (bound sessions <office-key>)
-form : view : <canonical-path> = <mode>
-does : statement <office-key> - - office <canonical-path> <mode>
+form : view : <workplace-path> = <mode>
+does : statement <office-key> - - office <workplace-path> <mode>
 form : clearance : <clearance-number>
 does : clearance <office-key> - - office <clearance-number>
 end!
@@ -93,13 +95,14 @@ declare : RoomAccess
 version : 1
 file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/ROOM.typify
 optional!
+is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
 is : clearance-number = /(0|[1-9][0-9]*)/
 cell : windows = shadow
 cell : statement-records = shadow
-primitive : statement : text text text text canonical-path mode
+primitive : statement : text text text text workplace-path mode
 writes : statement : statement-records = put 5
 effect : statement = state
 ensure : statement : room-declared = (bound windows <office-key> <room-key>)
@@ -108,8 +111,8 @@ primitive : clearance : text text text text clearance-number
 writes : clearance : clearance-records = put 4
 effect : clearance = state
 ensure : clearance : room-declared = (bound windows <office-key> <room-key>)
-form : view : <canonical-path> = <mode>
-does : statement <office-key> <room-key> - room <canonical-path> <mode>
+form : view : <workplace-path> = <mode>
+does : statement <office-key> <room-key> - room <workplace-path> <mode>
 form : clearance : <clearance-number>
 does : clearance <office-key> <room-key> - room <clearance-number>
 end!
@@ -118,6 +121,7 @@ declare : SeatAccess
 version : 1
 file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/SEAT.typify
 optional!
+is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
@@ -125,7 +129,7 @@ is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write
 is : clearance-number = /(0|[1-9][0-9]*)/
 cell : panes = shadow
 cell : statement-records = shadow
-primitive : statement : text text text text canonical-path mode
+primitive : statement : text text text text workplace-path mode
 writes : statement : statement-records = put 5
 effect : statement = state
 ensure : statement : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
@@ -134,8 +138,8 @@ primitive : clearance : text text text text clearance-number
 writes : clearance : clearance-records = put 4
 effect : clearance = state
 ensure : clearance : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
-form : view : <canonical-path> = <mode>
-does : statement <office-key> <room-key> <seat-key> seat <canonical-path> <mode>
+form : view : <workplace-path> = <mode>
+does : statement <office-key> <room-key> <seat-key> seat <workplace-path> <mode>
 form : clearance : <clearance-number>
 does : clearance <office-key> <room-key> <seat-key> seat <clearance-number>
 end!
@@ -157,26 +161,27 @@ declare : KindAccess
 version : 1
 file : programs/KIND[<kind-key>]/KIND.typify
 optional!
+is : workplace-path = canonical-path | relative-path | "."
 is : kind-key = /[A-Za-z0-9][A-Za-z0-9_-]*/ except "none"
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
 cell : kinds = shadow
 cell : statement-records = shadow
-primitive : statement : text text text text canonical-path mode
+primitive : statement : text text text text workplace-path mode
 writes : statement : statement-records = put 5
 effect : statement = state
 ensure : statement : kind-declared = (bound kinds <kind-key>)
-form : view : <canonical-path> = <mode>
-does : statement <kind-key> - - kind <canonical-path> <mode>
+form : view : <workplace-path> = <mode>
+does : statement <kind-key> - - kind <workplace-path> <mode>
 end!
 
 declare : Directories
 version : 1
 file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/DIRECTORIES.typify
 required!
+is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
-is : relative = relative-path except ""
 is : kind = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : kind-key = /[A-Za-z0-9][A-Za-z0-9_-]*/ except "none"
 cell : kinds = shadow
@@ -190,19 +195,19 @@ writes : mark-none : none-selections = put 3 "selected"
 effect : mark-none = state
 cell : panes = shadow
 cell : directories = shadow
-primitive : record-directory : office-key room-key seat-key canonical-path
+primitive : record-directory : office-key room-key seat-key workplace-path
 writes : record-directory : directories = put 4 "declared"
 effect : record-directory = state
 cell : seat-kinds = shadow
 primitive : assign-kind : office-key room-key seat-key kind
 writes : assign-kind : seat-kinds = put 3
 effect : assign-kind = state
-term : directory : relative
-rule : directory <p> -> record-directory <office-key> <room-key> <seat-key> (join (context Host.workdir) <p>)
+term : directory : workplace-path
+rule : directory <p> -> record-directory <office-key> <room-key> <seat-key> <p>
 ensure : directory : declared-seat = (bound panes <office-key> <room-key> <seat-key>)
 ensure : directory : kind-selected = (bound seat-kinds <office-key> <room-key> <seat-key>)
-form : directory : <relative>
-does : directory <relative>
+form : directory : <workplace-path>
+does : directory <workplace-path>
 count : directory = 1..*
 count : directory = 0..1 by 1
 term : select-none : kind
@@ -244,6 +249,7 @@ declare : Host
 version : 1
 file : ROOT.typify
 required!
+is : workplace-path = canonical-path | relative-path | "."
 is : workplace = /[A-Za-z0-9][A-Za-z0-9_-]*/
 cell : configuration = shadow
 primitive : configure : text text
@@ -254,12 +260,11 @@ rule : workdir <p> -> configure root <p>
 form : workdir : <canonical-path>
 does : workdir <canonical-path>
 count : workdir = 1
-primitive : server : workplace relative-path
+primitive : server : workplace workplace-path
 effect : server = external
-scope : server = root
 stage : server = 0
-form : server : <workplace> : <relative-path>
-does : server <workplace> <relative-path>
+form : server : <workplace> : <workplace-path>
+does : server <workplace> <workplace-path>
 count : server = 1
 end!
 
@@ -283,14 +288,14 @@ declare : Start
 version : 1
 file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/run/START.typify
 required!
+is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : argv = /\[.+\]/
 cell : panes = shadow
-primitive : start : office-key room-key seat-key relative-path argv
+primitive : start : office-key room-key seat-key workplace-path argv
 effect : start = external
-scope : start = root
 stage : start = 50
 form : command : <argv>
 does : start <office-key> <room-key> <seat-key> (context Directories.directory) <argv>

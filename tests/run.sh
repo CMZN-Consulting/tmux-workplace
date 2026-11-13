@@ -3612,9 +3612,14 @@ t_wake() {
   check "watch's pane works, as it did" eventually_long screen_has "Harbor Watch" "working"
   check "[C95] what was to be pointed out outlives the run: status lists it after down and up" \
     bash -c '"$BASH" "$1" status > "$2" 2>&1; grep -q "^wake    Harbor Watch (harbor/tower/watch): 2 delivered and not yet pointed out, the first at " "$2"' _ "$loop" "$scratch/out"
+  local since
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '%s\n' ready > "$c/screen"
-  check "[C94] and once the pane is ready, the pointer comes with that count and the newest id" \
-    file_comes_to "$c/typed" "$(printf '%s\n' "$(pointer 2 "$p2")" "$(pointer 2 "$p4")")"
+  check "[C94] and once the pane is ready, the pointer comes with that count and the newest id, within two minutes: a refused pointer holds the next one a minute" \
+    bash -c 'for (( i = 0; i < 1200; i++ )); do [[ $(cat -- "$1" 2> /dev/null) == "$2" ]] && exit 0; sleep 0.1; done; printf "    %s holds:\n" "$1"; cat -A -- "$1" | cut -c1-120 | sed "s/^/    | /"; exit 1' \
+    _ "$c/typed" "$(printf '%s\n' "$(pointer 2 "$p2")" "$(pointer 2 "$p4")")"
+  jq -r --arg t "$since" 'select(.action == "wake" and .target == ["Harbor Watch"] and .at >= $t and .outcome != "ok") | "\(.at) \(.outcome): \(.reason)"' "$s/comms/record" \
+    | while IFS= read -r line; do note "  a pointer to watch after up was not ok, at $line"; done
   check "down" exit_is 0 wp down
 }
 
@@ -3878,9 +3883,20 @@ t_records_day_and_limit() {
   check "up" exit_is 0 wp up
   check "watch's program wrote 5,000 bytes and ended, its pane staying dead" eventually_long dead_pane "Harbor Watch"
   check "[C82] at the limit nothing more is stored: the day holds 2,000 bytes" eventually_long bash -c '[[ $(stat -c %s "$1") == 2000 ]]' _ "$(record_of watch)/$(date -u +%F).pane"
-  check "[C82] and what was not stored is counted exactly, when the day's file ends: 3,000" \
-    eventually_long bash -c '[[ $(awk -v d="$2" "\$1 == d { n += \$2 } END { print n + 0 }" "$1/unstored" 2> /dev/null) == 3000 ]]' _ "$(record_of watch)" "$(date -u +%F)"
+  local counted='[[ $(awk -v d="$2" "\$1 == d { n += \$2 } END { print n + 0 }" "$1/unstored" 2> /dev/null) == $3 ]]'
+  local keepers='f=1; for p in /proc/[0-9]*; do [[ $(tr "\0" " " 2> /dev/null < "$p/cmdline") == *" keep $1 "* ]] && f=0; done;'
+  if [[ $(T display-message -p -t "$(pane_by_title "Harbor Watch")" '#{pane_pipe}') == 0 ]]; then
+    note "  this tmux, $(T -V), closed the dead pane's pipe (C98)"
+    check "[C98] the pipe closed with the program, so watch's keeper has ended" eventually_long bash -c "$keepers (( f == 1 ))" _ "$(record_of watch)"
+    check "[C82] and what was not stored is counted exactly, when the day's file ends with the pipe: 3,000" \
+      eventually_long bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 3000
+  else
+    note "  this tmux, $(T -V), keeps the dead pane's pipe open (C98)"
+    check "[C98] the pipe stays open, so watch's keeper still runs" bash -c "$keepers (( f == 0 ))" _ "$(record_of watch)"
+    check "[C98] and has written no count yet, since its input has not ended" bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 0
+  fi
   check "down" exit_is 0 wp down
+  check "[C82] after down, what was not stored is counted exactly, once: 3,000" eventually_long bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 3000
   check "[C75] record verify reads watch's unstored against its chain, over its whole span" exit_is 0 wp record verify "Harbor Watch" unstored
   check "[C75] its whole length" said "harbor tower watch/unstored agrees with its chain up to byte $(stat -c %s "$(record_of watch)/unstored"), its whole length"
 }

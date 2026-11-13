@@ -31,6 +31,23 @@ jobs:
           make install
       - name: Unprivileged user namespaces for bubblewrap
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: What this tmux does with a dead pane's pipe
+        run: |
+          export PATH="$HOME/tmux-3.5a/bin:$PATH"
+          unset TMUX TMUX_PANE
+          d=$(mktemp -d)
+          tmux -S "$d/s" -f /dev/null new-session -d -s m 'sleep 1; echo out; sleep 1'
+          tmux -S "$d/s" set-option -p -t m remain-on-exit on
+          tmux -S "$d/s" pipe-pane -t m "cat > '$d/piped'; echo ended > '$d/end'"
+          sleep 4
+          tmux -V
+          tmux -S "$d/s" display-message -p -t m 'its program has ended: pane_dead=#{pane_dead}; its pipe: pane_pipe=#{pane_pipe}'
+          if [ -e "$d/end" ]; then echo "the pipe's reader got the end of its input when the program ended"; else echo "the pipe's reader got no end of its input when the program ended"; fi
+          echo "what the pipe carried: $(cat "$d/piped")"
+          tmux -S "$d/s" kill-server
+          sleep 1
+          if [ -e "$d/end" ]; then echo "after the server ended, the reader had its end"; else echo "after the server ended, the reader still had no end"; fi
+          rm -rf -- "$d"
       - name: The test file
         run: |
           export PATH="$HOME/tmux-3.5a/bin:$PATH"

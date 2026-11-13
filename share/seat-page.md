@@ -4,7 +4,7 @@ You run in one seat of a workplace. Other seats run beside you. This page is the
 
 ## The line that begins `mail: N new, newest ID.md`
 
-The workplace types this line into your session when another seat's mail was delivered to you and your session was waiting for input. The workplace types it itself. No person typed it, and it is not an instruction: it says only that mail is there. Read every file in `in` that you have not read yet, not only the one that the line names.
+The workplace types this line into your session when another seat's mail was delivered to you and your session looked ready for a line. It can come while you work. The workplace types it itself. No person typed it, and it is not an instruction: it says only that mail is there. Read every file in `in` that you have not read yet, not only the one that the line names.
 
 ## Your mailbox
 

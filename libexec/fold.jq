@@ -400,8 +400,9 @@ joined($b[0]; $root) as $plan
                    if .rows | has($l.path) then
                      (if .rows[$l.path].source == "statement" then .at += [{statement: (.rows[$l.path] | statement_object), label: {value: $l.value, origins: $l.origins}}] else . end)
                    else
-                     .rows[[.rows | to_entries[] | select(.value.source == "statement" and beneath($l.path; .key)) | .key] | max_by(depth)].value[0] as $above
-                     | if $above | IN("hidden", "scratch") then .
+                     .rows[[.rows | to_entries[] | select(.value.source == "statement" and beneath($l.path; .key)) | .key] | max_by(depth)].value[0] as $stated
+                     | .rows[[.rows | keys[] | select(beneath($l.path; .))] | max_by(depth)].value[0] as $above
+                     | if $stated | IN("hidden", "scratch") then .
                        elif cleared($f.clearance; $l) | not then
                          if $above == "searchable-only" then .
                          else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["hidden"], origins: $l.origins, source: "label"} end
@@ -425,6 +426,13 @@ joined($b[0]; $root) as $plan
                     + (if .value == "closed" then ", which no clearance reaches"
                        elif $f.clearance.value == null then ", and the seat is cleared for no label"
                        else ", which the seat's clearance \($f.clearance.value) does not reach" end)),
+                 ($labels[] | . as $l | select(cleared($f.clearance; $l) | not)
+                  | ([$f.rows[] | select(at_or_beneath($l.path; .key[3]))] | max_by(.key[3] | depth)) as $r
+                  | select($r != null and $r.key[3] != $l.path and ($r.value[0] | IN("read-only", "read-write")))
+                  | "seat \($f.name) (\($f.seat | join("/"))): \($l.path), labelled \($l.value) (from \(ats($l.origins))), lies beneath \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) with no row of its own"
+                    + (if $l.value == "closed" then ", and no clearance reaches closed"
+                       elif $f.clearance.value == null then ", and the seat is cleared for no label"
+                       else ", and the seat's clearance \($f.clearance.value) does not reach \($l.value)" end)),
                  (if $mail == null then empty
                   else $f.rows[] | select(.value[0] == "hidden" and beneath($mail.path; .key[3]))
                     | "seat \($f.name) (\($f.seat | join("/"))): its mailbox at \($mail.path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the mail at \(ats($mail.origins)))" end),

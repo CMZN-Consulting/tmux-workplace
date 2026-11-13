@@ -104,7 +104,7 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-v11`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-v12`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
@@ -114,10 +114,9 @@
   - a statement is replaced by a narrower one at its path or at a directory above it, by components, and those that remain are the seat's rows;
   - its clearance is its room's, else its office's, else none, and a seat with none is cleared for no label. A seat carries no clearance of its own (5.118).
   - A clearance is a whole number, and 0 is the most cleared (5.122 point 1). A label is a whole number or `closed`. A seat is cleared for a numbered label when its clearance is at most the label, and for a `closed` label never (5.124 point 6).
-  - Labels are taken from the shallowest. Where the seat has no row at a labelled path, the label is read against the nearest row above it that a statement made, passing over the rows that labels made (5.126 point 2):
-    - when that row is hidden or scratch, the label makes no row: beneath a path that a statement hides, a label makes no hidden row, no read-only row and no passage;
-    - when the seat is not cleared for the label, it makes a hidden row, and none when that row is searchable-only;
-    - when it is cleared, it makes a read-only row.
+  - Labels are taken from the shallowest. Where the seat has no row at a labelled path, the label asks two questions, each answered by a row of its own (5.129 point 2):
+    - Does it lie beneath a path that a statement hides or makes scratch? The nearest row above it that a statement made answers, passing over the rows that labels made. If it does, the label makes no row: no hidden row, no read-only row and no passage (5.126 point 2).
+    - If not, which row does it make? The nearest row above it of any source answers, a label's row among them. When the seat is not cleared for the label, it makes a hidden row, and none when that row is searchable-only. When the seat is cleared, it makes a read-only row.
 
     The row a label makes replaces nothing.
   - A hidden row that a label made becomes searchable-only when a row that is not hidden stands beneath it. It is then a passage to what lies beneath (5.124 point 7): a label beneath a labelled path governs that path.
@@ -134,6 +133,7 @@
   - a seat with no row for `/`, checked before any label is taken;
   - a row that is not hidden, lying beneath a hidden row;
   - a row that is not hidden, whose governing label is one the seat is not cleared for. A row's governing label is the deepest label at or above it, and a passage is not refused.
+  - a label the seat is not cleared for, whose path has no row of the seat's, and whose nearest row above is read-only or read-write: `seat NAME (K/R/S): PATH, labelled VALUE (from ORIGIN), lies beneath ROW (STATE, from ORIGIN) with no row of its own`, then `, and no clearance reaches closed`, `, and the seat is cleared for no label`, or `, and the seat's clearance C does not reach VALUE`. This checks what the label step made (5.129 point 2): the rule above reads the labels at or above a row, and this one reads the labels beneath one. A row at the labelled path itself is the rule above's.
 - **C32.** `plan` prints, for each seat:
   - its kind and clearance, or that it is cleared for no label, and its home and the names it expects where it has them;
   - each remaining statement that replaced others, with every statement that it replaced. A statement that was itself replaced is printed only as replaced;

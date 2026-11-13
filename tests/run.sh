@@ -3300,7 +3300,7 @@ t_comms_mail() {
   local by_name="refused its name is not letters, digits, dot, dash and underscore ending in .md, .grab or .write; it is removed"
   parts=$( { ls -A -- "$s/mail/orchard barn picker"; ls -A -- "$s/comms/orchard barn picker"; } | LC_ALL=C sort -u)
   firsts=$(for f in "$s"/comms/*/answers/*; do IFS=' ' read -r x _ < "$f" && printf '%s\n' "$x"; done | LC_ALL=C sort -u)
-  words=$( { grep -oE '`[a-z]+`' "$page" | tr -d '`'; sed -n '/^```text$/,/^---$/p' "$page" | sed -n 's/^\([a-z][a-z]*\):.*/\1/p'; } \
+  words=$( { sed '/^## Other requests$/,$d' "$page" | grep -oE '`[a-z]+`' | tr -d '`'; sed '/^## Other requests$/,$d' "$page" | sed -n '/^```text$/,/^---$/p' | sed -n 's/^\([a-z][a-z]*\):.*/\1/p'; } \
     | LC_ALL=C sort -u | grep -vxF -f <(printf '%s\n' $parts $firsts))
   for word in $words; do
     case $word in
@@ -3310,7 +3310,7 @@ t_comms_mail() {
     esac
   done
   request pilot home.md "${head[@]}" --- "body"
-  check "[C97] every word of a head that the page names, beside the mailbox's parts ($(echo $parts)) and an answer's first words ($(echo $firsts)), is one that the carrier takes: one mail that holds them all, $(echo $words), is served" \
+  check "[C97] every word of a mail's head that the page names, beside the mailbox's parts ($(echo $parts)) and an answer's first words ($(echo $firsts)), is one that the carrier takes: one mail that holds them all, $(echo $words), is served" \
     answered_ok pilot home.md
   suffixes=$(grep -oE '`[.][a-z]+`' "$page" | tr -d '`' | LC_ALL=C sort -u)
   for sfx in $suffixes .txt; do
@@ -3320,6 +3320,16 @@ t_comms_mail() {
   done
   check "[C97] every suffix that the page names, $(echo $suffixes), is one that the carrier takes, and .txt, which it does not name, is refused for its name" \
     bash -c 'r=$1; shift; (( $# >= 2 )) || exit 1; for a in "$@"; do s=${a%%|*} g=${a#*|}; if [[ $s == .txt ]]; then [[ $g == "$r" ]] || exit 1; else [[ $g == refused* && $g != "$r" ]] || exit 1; fi; done' _ "$by_name" "${answers[@]}"
+  local -a form
+  mapfile -t form < <(sed -n '/^## Other requests$/,$p' "$page" | awk '/^```text$/ { n++; on = (n == 1); next } /^```$/ { on = 0; next } on')
+  request keeper form.grab "${form[@]//NAME/Orchard Picker}"
+  answer_of keeper form.grab > /dev/null
+  check "[C97] the page's form of a grab, $(printf '%s|' "${form[@]}"), with a seat that keeper may grab, is served: ok, an id, and the pane's lines" \
+    bash -c 'a=$(cat -- "$1/answers/form.grab" 2> /dev/null); [[ ${a%%$'"'"'\n'"'"'*} =~ ^ok\ [0-9]{8}T[0-9]{6}Z-[0-9]{6}$ && $(grep -c "" <<< "$a") -gt 1 ]]' _ "$s/comms/$(box_of keeper)"
+  mapfile -t form < <(sed -n '/^## Other requests$/,$p' "$page" | awk '/^```text$/ { n++; on = (n == 2); next } /^```$/ { on = 0; next } on')
+  request keeper form.write "${form[@]//NAME/Orchard Picker}"
+  check "[C97] the page's form of a write, $(printf '%s|' "${form[@]}"), passes every check of a write's form, and only the plan's table refuses it for a seat that keeper may not write" \
+    answered keeper form.write "refused the plan does not let Harbor Keeper write to Orchard Picker"
   check "down" exit_is 0 wp down
 }
 

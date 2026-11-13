@@ -38,4 +38,28 @@ the body
 
 ## Other requests
 
-A file that ends in `.grab` asks for what another seat's screen shows, and one that ends in `.write` asks to type one line into another seat's pane. A seat is allowed neither unless its workplace allows it. A request that is not allowed is refused, with the reason.
+A file that ends in `.grab` asks for what another seat's screen shows, and one that ends in `.write` asks to type one line into another seat's pane. A seat is allowed neither unless its workplace allows it. A request that is not allowed is refused, with the reason. You put either in `out` as you put a mail there.
+
+A grab is a head alone, with no line of dashes:
+
+```text
+seat: NAME
+lines: 200
+```
+
+- `seat` names the seat whose screen you ask for, exactly as the workplace names it.
+- `lines` is how many lines above the screen come with it: 200 unless you give it, and at most 5,000.
+- Its answer is `ok` with an id, then what that pane showed: those lines and the screen.
+
+A write is a head, a line of three dashes and one line of text:
+
+```text
+seat: NAME
+key: Enter
+---
+the line to type
+```
+
+- The workplace types the line into that seat's pane as it stands, then a second later the key: `Enter` unless you give `Escape`, `C-c`, `Tab` or `none`.
+- The line holds at most 4,096 bytes of UTF-8, and no control character.
+- Its answer is `ok` with an id, or `refused` with the reason. A write refused once its line was typed says that the line stands typed and its key was not sent.

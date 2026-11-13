@@ -392,7 +392,7 @@
 
 - **C97.** Every mailbox holds `README.md`: the frame's page for a seat. Its text is `share/seat-page.md` in the frame's repository, the same in every mailbox, and it names no seat, no workplace and no path.
   - `build` copies it into `BUILD/seat-page.md` when the plan holds mail, and a plan without mail gets none. The fixed part shows that copy at `PATH/README.md`, read-only, in the mailbox's file system, which is read-only too, so a seat can neither change the page nor put another in its place. `up` refuses a build with mail that holds no page.
-  - The page says what the pointer's line is and that no person typed it; what the four parts of a mailbox are; that the frame writes `id`, `at` and `from`, and that `from` is a sender's only identity; how a mail is sent and where its answer stands; and that grab and write exist and are refused where they are not allowed.
+  - The page says what the pointer's line is and that no person typed it; what the four parts of a mailbox are; that the frame writes `id`, `at` and `from`, and that `from` is a sender's only identity; how a mail is sent and where its answer stands; that grab and write exist and are refused where they are not allowed; and the form of each, as C60 gives it, and what its answer holds.
   - The forms of a request are defined here, in C57 to C60, and told to a seat by the page alone. Every suffix and every word of a head that the page names is one that the carrier takes.
 
 ## Starting a seat again, and removing a build

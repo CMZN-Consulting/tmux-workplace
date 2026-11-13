@@ -104,7 +104,7 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-v11`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
@@ -114,9 +114,10 @@
   - a statement is replaced by a narrower one at its path or at a directory above it, by components, and those that remain are the seat's rows;
   - its clearance is its room's, else its office's, else none, and a seat with none is cleared for no label. A seat carries no clearance of its own (5.118).
   - A clearance is a whole number, and 0 is the most cleared (5.122 point 1). A label is a whole number or `closed`. A seat is cleared for a numbered label when its clearance is at most the label, and for a `closed` label never (5.124 point 6).
-  - Labels are taken from the shallowest. Where the seat has no row at a labelled path, the label is read against the nearest row above it:
-    - when the seat is not cleared for the label, it makes a hidden row, and none when that row is searchable-only or scratch;
-    - when it is cleared, it makes a read-only row, and none when that row is scratch, or hidden by a statement.
+  - Labels are taken from the shallowest. Where the seat has no row at a labelled path, the label is read against the nearest row above it that a statement made, passing over the rows that labels made (5.126 point 2):
+    - when that row is hidden or scratch, the label makes no row: beneath a path that a statement hides, a label makes no hidden row, no read-only row and no passage;
+    - when the seat is not cleared for the label, it makes a hidden row, and none when that row is searchable-only;
+    - when it is cleared, it makes a read-only row.
 
     The row a label makes replaces nothing.
   - A hidden row that a label made becomes searchable-only when a row that is not hidden stands beneath it. It is then a passage to what lies beneath (5.124 point 7): a label beneath a labelled path governs that path.
@@ -124,10 +125,11 @@
 - **C31.** The fold refuses the plan, naming the seat, the paths and the origins, for:
   - a term of the wrong shape, an unknown scope or state, a path that is not canonical, a number that is not whole, or a label that is neither a whole number nor `closed`;
   - a clearance at a seat's scope, since a seat has its room's clearance (5.118);
-  - clearance or label terms with no `clearance-scale turned` term. A configuration numbered before 5.122's turn is refused, until it is renumbered and says so;
+  - clearance or label terms with no `clearance-scale turned` term, naming the first three origins of the clearances followed by the labels. A configuration numbered before 5.122's turn is refused, until it is renumbered and says so;
+  - a `clearance-scale` of other words than `clearance-scale turned`;
   - a label beneath a `closed` path;
   - a statement or clearance that names an office, a room or a seat that the plan does not make;
-  - two statements of one scope about one path with different states, two clearances of one scope, or two labels of one path, with different numbers;
+  - two statements of one scope about one path with different states, two clearances of one scope with different numbers, or two labels of one path with different values, `closed` and a number among them;
   - a label on `/`;
   - a seat with no row for `/`, checked before any label is taken;
   - a row that is not hidden, lying beneath a hidden row;
@@ -140,8 +142,9 @@
 
   It prints each label whose row is a passage (C30), with the seats that pass through it, and lists the directories held by nobody as a report. None of this is in the plan.
 - **C33.** A seat's table is `view.json` when the plan holds statements, and the plan's `view` cell when it holds none.
-  - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance`, `clearance-scale`, `label`, `key`, `home`, `home-variable`, `home-seed` and `expect`.
+  - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance`, `label`, `key`, `home`, `home-variable`, `home-seed` and `expect`.
   - `plan`, `build`, `up` and `why` all call it. A plan that holds any of them without a statement is folded too, and refused, since no seat has a row for `/`.
+  - `clearance-scale` is not a fold word: it states nothing to fold (5.126 point 3). A plan whose only such term is `clearance-scale turned` is not folded, and the fold reads the scale only beside the terms it folds.
   - `view.json` holds the rows and, for each seat in the order of the `pane` terms, its kind, clearance (with `null` for none), key, count of rows, replacement statements and their counts, and its statements at labelled paths.
   - `why` names the statement or the label behind a folded row, and what that statement replaced.
 - **C34.** The fold reads `key A B C SCOPE STATE`, with SCOPE `workplace`, `office`, `room` or `seat` and STATE `held` or `none`. A seat holds a key by the narrowest scope that speaks: its own, else its room's, else its office's, else the workplace's, else none. `view.json` gives each seat `key: {state, scope, origins}`.

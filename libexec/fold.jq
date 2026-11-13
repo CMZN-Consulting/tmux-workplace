@@ -400,12 +400,11 @@ joined($b[0]; $root) as $plan
                    if .rows | has($l.path) then
                      (if .rows[$l.path].source == "statement" then .at += [{statement: (.rows[$l.path] | statement_object), label: {value: $l.value, origins: $l.origins}}] else . end)
                    else
-                     .rows[[.rows | keys[] | select(beneath($l.path; .))] | max_by(depth)] as $aboverow
-                     | $aboverow.value[0] as $above
-                     | if cleared($f.clearance; $l) | not then
-                         if $above | IN("searchable-only", "scratch") then .
+                     .rows[[.rows | to_entries[] | select(.value.source == "statement" and beneath($l.path; .key)) | .key] | max_by(depth)].value[0] as $above
+                     | if $above | IN("hidden", "scratch") then .
+                       elif cleared($f.clearance; $l) | not then
+                         if $above == "searchable-only" then .
                          else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["hidden"], origins: $l.origins, source: "label"} end
-                       elif $above == "scratch" or ($above == "hidden" and $aboverow.source != "label") then .
                        else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["read-only"], origins: $l.origins, source: "label"} end
                    end) end) as $made
                | ($made.rows | with_entries(

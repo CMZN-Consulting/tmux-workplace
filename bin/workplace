@@ -15,7 +15,8 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
+floor_sub=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
 LOG_PROGRAMS=(dd date tail head)
@@ -224,12 +225,40 @@ work_dir() {
 assemble() {
   local into=$1 file=$clone/workplace.json problems line
   [[ -f $file && ! -L $file ]] || die "$file is missing; the clone of a workplace holds workplace.json" 2
-  problems=$(jq -r '
+  problems=$(jq -r -L "$tool/libexec" 'include "table";
     def path_word: type == "string" and (test("[[:cntrl:]]") | not) and (startswith("/") | not)
       and (split("/") | all(. != "" and . != "." and . != ".."));
+    def floor_words: ["key", "name", "houses", "enforced", "socket", "conf", "smallest"];
     if type != "object" then "workplace.json is not an object"
     else
-      (keys[] | select(IN("layers", "socket") | not) | "workplace.json holds \(.), which the loop does not read"),
+      (keys[] | select(IN("layers", "socket", "floors") | not) | "workplace.json holds \(.), which the loop does not read"),
+      (if has("floors") and has("socket") then "workplace.json holds socket beside floors: with floors, each floor names its socket" else empty end),
+      (if has("floors") | not then empty
+       elif (.floors | type) != "array" or (.floors | length) == 0 or (.floors | all(type == "object") | not)
+       then "workplace.json'"'"'s floors is not a list of one or more floors"
+       else
+         (.floors | to_entries[] | .key as $i | .value as $f
+          | ($f | keys[] | select(IN(floor_words[]) | not) | "the floor at index \($i) holds \(.), which the loop does not read"),
+            (floor_words[] | select(. as $w | $f | has($w) | not) | "the floor at index \($i) lacks \(.)")),
+         (.floors[] | select(has("key")) | .key as $k | ($k | key_fault) as $fault | select($fault != null)
+          | "the floor key \($k | tojson) is refused: \($fault)"),
+         ([.floors[].key | strings] | group_by(.)[] | select(length > 1) | "the floor key \(.[0]) is listed \(length) times"),
+         (.floors[] | . as $f | ($f.key | if type == "string" then . else tojson end) as $k
+          | (if $f | has("houses") and ($f.houses | IN("offices", "rooms") | not) then "the floor \($k) houses \($f.houses | tojson): offices or rooms" else empty end),
+            (if $f | has("enforced") and ($f.enforced | type) != "boolean" then "the floor \($k) says enforced \($f.enforced | tojson): true or false" else empty end),
+            (if $f | has("socket") and ($f.socket | IN("run", "tmux-default") | not) then "the floor \($k) takes the socket \($f.socket | tojson): run or tmux-default" else empty end),
+            (if $f.enforced == true and $f.socket == "tmux-default"
+             then "the floor \($k) is enforced and takes tmux-default: an enforced floor stands on a socket of its run, so that no plain tmux command reaches it (5.124 point 2)" else empty end),
+            (if $f | has("conf") and ($f.conf | path_word | not) then "the floor \($k) names its conf \($f.conf | tojson), which is not a relative path" else empty end),
+            (if $f | has("smallest") and (($f.smallest | type) != "string" or ($f.smallest | test("^[1-9][0-9]*x[1-9][0-9]*$") | not))
+             then "the floor \($k) says smallest \($f.smallest | tojson): COLSxROWS" else empty end),
+            (if $f | has("name") then
+               ($f.name | name_fault // (if contains(":") then "it holds a :, which separates the words of the root program" else null end)) as $nf
+               | select($nf != null) | "the floor \($k) is named \($f.name | tojson), which is refused: \($nf)"
+             else empty end)),
+         ([.floors[] | select(.socket == "tmux-default")] | length) as $d
+         | (if $d > 1 then "\($d) floors take the socket tmux-default, and at most one may" else empty end)
+       end),
       (if (.layers | type) != "array" or (.layers | length) == 0 then "workplace.json names no layers"
        else
          (.layers[] | select(path_word | not) | "workplace.json names a layer that is not a relative path: \(tojson)"),
@@ -242,10 +271,13 @@ assemble() {
     while IFS= read -r line; do warn "$line"; done <<< "$problems"
     exit 2
   fi
-  local -a layers lines
+  local -a layers lines floors=()
   mapfile -t layers < <(jq -r '.layers[]' "$file")
+  mapfile -t floors < <(jq -r '.floors[]? | [.key, .name, .houses, (if .enforced then "enforced" else "unenforced" end), .socket, .conf, .smallest] | @tsv' "$file")
+  assembled_root_rule=root-two-lines-v1
+  (( ${#floors[@]} )) && assembled_root_rule=root-floors-v1
   assembled_name=default
-  if [[ $(jq -r '.socket // ""' "$file") != default ]]; then
+  if (( ${#floors[@]} )) || [[ $(jq -r '.socket // ""' "$file") != default ]]; then
     assembled_name=$(derive_name sha256-path-prefix12-v1) || die "cannot derive the workplace's name" 2
   fi
   local declarations=$into/LanguageDeclarations.typify layer path content size at=1 i language
@@ -279,7 +311,18 @@ assemble() {
     at=$(( at + ${#lines[@]} - 1 ))
   done
   [[ -d $clone/programs && ! -L $clone/programs ]] || die "$clone/programs is missing; the clone holds its programs there" 2
-  [[ -f $clone/tmux.conf && ! -L $clone/tmux.conf ]] || die "$clone/tmux.conf is missing" 2
+  local fkey fname fhouses fenforced fsocket fconf fsmallest
+  local -a floor_confs=()
+  if (( ${#floors[@]} )); then
+    [[ ! -e $clone/tmux.conf && ! -L $clone/tmux.conf ]] || die "tmux.conf stands in the clone beside floors: each floor names its own file" 2
+    for line in "${floors[@]}"; do
+      IFS=$'\t' read -r fkey fname fhouses fenforced fsocket fconf fsmallest <<< "$line"
+      [[ -f $clone/$fconf && ! -L $clone/$fconf ]] || die "the floor $fkey names its conf $fconf, which is not a file in the clone" 2
+      floor_confs+=("$fconf")
+    done
+  else
+    [[ -f $clone/tmux.conf && ! -L $clone/tmux.conf ]] || die "$clone/tmux.conf is missing" 2
+  fi
   local -a programs=() inside
   for path in "$clone"/programs/**; do
     [[ -L $path ]] && die "${path#"$clone"/} is a symbolic link; the assembler copies files only" 2
@@ -299,15 +342,29 @@ assemble() {
   done
   (( ${#programs[@]} )) || die "$clone/programs holds no program" 2
   local conf
-  if [[ $clone == "$root" ]]; then conf=tmux.conf
-  elif [[ $root == / ]]; then conf=${clone#/}/tmux.conf
-  else conf=${clone#"$root"/}/tmux.conf; fi
-  [[ $root$assembled_name$conf != *[[:cntrl:]]* ]] || die "the root, the name or the configuration's path holds a control character" 2
+  from_root() {
+    if [[ $clone == "$root" ]]; then printf '%s\n' "$1"
+    elif [[ $root == / ]]; then printf '%s\n' "${clone#/}/$1"
+    else printf '%s\n' "${clone#"$root"/}/$1"; fi
+  }
+  conf=$(from_root tmux.conf)
+  local -a root_lines=("workdir : $root")
+  if (( ${#floors[@]} )); then
+    root_lines+=("workplace : $assembled_name")
+    for line in "${floors[@]}"; do
+      IFS=$'\t' read -r fkey fname fhouses fenforced fsocket fconf fsmallest <<< "$line"
+      root_lines+=("floor : $fkey : $fname : $fhouses : $fenforced : $fsocket : $(from_root "$fconf") : $fsmallest")
+    done
+  else
+    root_lines+=("server : $assembled_name : $conf")
+  fi
+  [[ ${root_lines[*]} != *[[:cntrl:]]* ]] || die "the root, the name or the configuration's path holds a control character" 2
   mkdir -- "$into/tree" && cp -R -- "$clone/programs" "$into/tree/programs" || die "cannot copy the programs into $into/tree" 2
-  printf '%s\n' "workdir : $root" "server : $assembled_name : $conf" > "$into/tree/ROOT.typify" || die "cannot write the root program" 2
+  printf '%s\n' "${root_lines[@]}" > "$into/tree/ROOT.typify" || die "cannot write the root program" 2
   local -a inputs
   mapfile -d '' -t inputs < <(printf '%s\0' "${programs[@]}" | jq -R -s --raw-output0 'split("\u0000")[:-1] | sort[]')
-  inputs=(workplace.json "${layers[@]}" "${inputs[@]}" tmux.conf)
+  if (( ${#floors[@]} )); then inputs=(workplace.json "${layers[@]}" "${inputs[@]}" "${floor_confs[@]}")
+  else inputs=(workplace.json "${layers[@]}" "${inputs[@]}" tmux.conf); fi
   assembled_inputs=$(for path in "${inputs[@]}"; do
       printf '%s\0%s\0' "$path" "$(sha_of "$clone/$path")" || exit 1
     done | jq -R -s -c 'split("\u0000")[:-1] | [range(0; length; 2) as $i | {path: .[$i], sha256: .[$i + 1]}]') \
@@ -355,7 +412,8 @@ refuse_terms() {
   local -a faults
   found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --slurpfile b "$tool/host/binding.json" '
     include "table";
-    joined($b[0]; $root) | key_problems($b[0]), name_problems($b[0]), unique_problems($b[0]), mail_problems($b[0]; $clone)' "$1") \
+    joined($b[0]; $root) | key_problems($b[0]), name_problems($b[0]), unique_problems($b[0]), mail_problems($b[0]; $clone),
+      (if any(plan_terms[]; .term[0] == ($b[0].structure.floors.floor // "")) then structure_problems($b[0]) else floors_problems($b[0]) end)' "$1") \
     || { warn "cannot read $1 for its keys, its names and its mail path"; return 1; }
   [[ -z $found ]] && return 0
   mapfile -t faults <<< "$found"
@@ -441,7 +499,9 @@ print_fold_report() {
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
-      (.report.passages[] | "label \(.label.path) (\(.label.value)) is searchable only, a passage to the labels beneath it that a seat is cleared for (5.124 point 7), for: \(.seats | join(", ")) (\(ats(.label.origins)))")
+      (.report.passages[] | "label \(.label.path) (\(.label.value)) is searchable only, a passage to the labels beneath it that a seat is cleared for (5.124 point 7), for: \(.seats | join(", ")) (\(ats(.label.origins)))"),
+      (.report.unnumbered[]? | "room \(.room | join("/")), on the enforced floor \(.floor), has no number: it is cleared for no label, and least among its office'"'"'s rooms (5.125 point 7)"),
+      (.report.unenforced[]? | "the unenforced floor \(.) has no view: its occupants read the machine as the user does, and labels, closed paths and bans bind them as conduct (5.124 point 3)")
   ' <<< "$folded"
 }
 
@@ -528,11 +588,11 @@ cmd_plan() {
   local out_json
   out_json=$(for name in "${outputs[@]}"; do printf '%s\0%s\0' "$name" "$(sha_of "$work/$name")"; done \
     | jq -R -s -c 'split("\u0000")[:-1] | [range(0; length; 2) as $i | {path: .[$i], sha256: .[$i + 1]}]')
-  jq -n --arg root "$root" --arg name "$assembled_name" --arg reader "$version" --arg fold "$FOLD_DERIVATION" \
+  jq -n --arg root "$root" --arg name "$assembled_name" --arg reader "$version" --arg fold "$FOLD_DERIVATION" --arg root_rule "$assembled_root_rule" \
     --argjson inputs "$assembled_inputs" --argjson generated "$assembled_generated" \
     --argjson map "$assembled_map" --argjson outputs "$out_json" '
     {root: $root, name: $name, reader: $reader,
-     derivations: {assembly: "whole-bodies-v1", "root-program": "root-two-lines-v1",
+     derivations: {assembly: "whole-bodies-v1", "root-program": $root_rule,
                    "workplace-name": "sha256-path-prefix12-v1", fold: $fold},
      inputs: $inputs, generated: $generated, source_map: $map, outputs: $outputs}' > "$work/manifest.json" \
     || die "cannot write the manifest"
@@ -725,6 +785,11 @@ make_keys() {
   mkdir -p -- "${state_dir%/*/*}" && { [[ -d ${state_dir%/*} ]] || mkdir -m 0700 -- "${state_dir%/*}"; } \
     && { [[ -d $state_dir ]] || mkdir -m 0700 -- "$state_dir"; } || die "cannot make the state directory $state_dir" 2
   [[ $(stat -c %a -- "$state_dir") == 700 ]] || die "the state directory $state_dir has the mode $(stat -c %a -- "$state_dir"), not 700" 2
+  if [[ -n $floor_sub ]]; then
+    { [[ -d $state_dir/floors ]] || mkdir -m 0700 -- "$state_dir/floors"; } && { [[ -d $state_dir/$floor_sub ]] || mkdir -m 0700 -- "$state_dir/$floor_sub"; } \
+      || die "cannot make the floor's state directory $state_dir/$floor_sub" 2
+    state_dir=$state_dir/$floor_sub
+  fi
   remove_key_homes "$state_dir" || die "cannot remove the old key homes in $state_dir/keys" 2
   [[ $holders == '[]' ]] && return 0
   need_version gpg --version "$GPG_FLOOR"
@@ -786,8 +851,8 @@ make_keys() {
              public_key: $pub, ssh: $ssh, ssh_fingerprint: $sshfp, grants: $grants}]' <<< "$entries")
   done < <(jq -c '.[]' <<< "$holders")
   rm -f -- "$build_dir/key.out"
-  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir/keys.json" \
-    || die "cannot write $build_dir/keys.json" 2
+  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir${floor_sub:+/$floor_sub}/keys.json" \
+    || die "cannot write $build_dir${floor_sub:+/$floor_sub}/keys.json" 2
   say "keys: $count made in $state_dir/keys"
   jq -r '[.[].grants[]] | group_by(.) | map("\(.[0]) for \(length) seat\(if length > 1 then "s" else "" end)") | select(length > 0)
     | "ssh keys loaded: \(join(", "))"' <<< "$holders"
@@ -848,7 +913,7 @@ make_homes() {
   local holders=$1 workplace=$2 state_dir
   [[ $holders == '[]' ]] && return 0
   state_dir=$(state_root) || die "build needs the workplaces' state directory for the seats' homes, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
-  state_dir=$state_dir/$workplace
+  state_dir=$state_dir/$workplace${floor_sub:+/$floor_sub}
   [[ -d $state_dir && ! -L $state_dir ]] || die "the state directory $state_dir is missing" 2
   local homes=$state_dir/homes record=$state_dir/homes.json owners='{}'
   [[ -e $homes || -L $homes ]] || mkdir -m 0700 -- "$homes" || die "cannot make $homes" 2
@@ -873,7 +938,7 @@ make_homes() {
     who="$name ($place)"
     state=$(jq -r '.home.state' <<< "$holder")
     kind=$(jq -r '.home.kind' <<< "$holder")
-    hname=$kind/$place
+    hname=$kind/$name
     path=$homes/$hname
     variable=$(jq -r '.home.variable' <<< "$holder")
     seed=$(jq -r '.home.seed.path // ""' <<< "$holder")
@@ -944,8 +1009,8 @@ make_homes() {
              environment: $pairs, seed: (if $seed == "" then null else $seed end), made: $made}]' <<< "$entries")
   done < <(jq -c '.[]' <<< "$holders")
   rm -f -- "$build_dir/seed.out"
-  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir/homes.json" \
-    || die "cannot write $build_dir/homes.json" 2
+  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir${floor_sub:+/$floor_sub}/homes.json" \
+    || die "cannot write $build_dir${floor_sub:+/$floor_sub}/homes.json" 2
 }
 
 make_dirs() { home_parents "$1" "$2/x" make; }
@@ -1005,7 +1070,7 @@ make_mail() {
   [[ -f $comms/record && ! -L $comms/record ]] || die "build refuses: $comms/record is not the carrier's record, a file"
   while IFS= read -r seat; do
     name=$(jq -r '.name' <<< "$seat")
-    box=$(jq -r '.seat | join(" ")' <<< "$seat")
+    box=$name
     for rel in "mail/$box/in" "mail/$box/sent" "comms/$box/out" "comms/$box/answers"; do
       make_dirs "$state_dir" "$rel" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the mailbox of $name stands"
     done
@@ -1046,7 +1111,7 @@ make_records() {
       die "build refuses: the record path $path and the workplaces' state directory $state_dir lie one in the other; it would cover the seats' homes and keys, or stand where the frame keeps its state (the record-path at $at)"
     fi
   fi
-  state_dir=$state_dir/$workplace
+  state_dir=$state_dir/$workplace${floor_sub:+/$floor_sub}
   [[ -d $state_dir && ! -L $state_dir ]] || die "the state directory $state_dir is missing" 2
   dir=$state_dir/records
   [[ -e $dir || -L $dir ]] || mkdir -m 0700 -- "$dir" || die "cannot make $dir" 2
@@ -1058,19 +1123,36 @@ make_records() {
   [[ -f $dir/mark && ! -L $dir/mark ]] && state_mark=$(< "$dir/mark") && [[ $state_mark =~ ^[0-9a-f]{32}$ ]] \
     || die "build refuses: $dir/mark is not a file that holds 32 hexadecimal digits, the mark of this state directory"
   while IFS= read -r seat; do
-    box=$(jq -r '.seat | join(" ")' <<< "$seat")
+    box=$(jq -r '.name' <<< "$seat")
     make_dirs "$state_dir" "records/$box" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the record of $(jq -r '.name' <<< "$seat") stands"
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg dir "$dir" '. + [$s + {box: $box, dir: "\($dir)/\($box)"}]' <<< "$entries")
-  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], pane: .record.pane, reads: (.reach.record // [])}' <<< "$folded")
-  jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --argjson o "$origins" --arg c "$chain" --arg u "$(carrier_unit "$workplace")" \
+  done < <(jq -c --arg f "${floor_sub#floors/}" '.report.names as $n | .view.seats[] | select($f == "" or .floor == $f) | {seat, name: $n[.seat | tojson], pane: .record.pane, reads: (.reach.record // [])}' <<< "$folded")
+  jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --argjson o "$origins" --arg c "$chain" --arg u "$(carrier_unit "$workplace${floor_sub:+-${floor_sub#floors/}}")" \
     --arg m "$state_mark" --argjson limit "$(jq '.view.records.limit' <<< "$folded")" --argjson seats "$entries" \
     '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), origins: $o, limit: $limit,
-      chain: (if $c == "" then null else $c end), unit: $u, mark: $m, seats: $seats}' > "$build_dir/records.json" \
-    || die "cannot write $build_dir/records.json" 2
+      chain: (if $c == "" then null else $c end), unit: $u, mark: $m, seats: $seats}' > "$build_dir${floor_sub:+/$floor_sub}/records.json" \
+    || die "cannot write $build_dir${floor_sub:+/$floor_sub}/records.json" 2
   say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
 }
 
 manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
+
+build_floor_seats() {
+  local floor=$1 holders='[]'
+  if [[ -n $folded ]]; then
+    holders=$(jq -c --arg f "$floor" '.report.names as $names | [.view.seats[] | select($f == "" or .floor == $f)] | [to_entries[] | select(.value.key.state == "held")
+      | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson], grants: [(.value.ssh.granted // [])[].name]}]' <<< "$folded") || die "cannot read the seats that hold a key" 2
+  fi
+  make_keys "$holders" "$(jq -r '.name // "default"' <<< "$report")"
+  holders='[]'
+  if [[ -n $folded ]]; then
+    holders=$(jq -c --arg f "$floor" '.report.names as $names | [.view.seats[] | select($f == "" or .floor == $f)] | [to_entries[] | select(.value.home != null)
+      | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson], home: .value.home}]' <<< "$folded") || die "cannot read the seats that have a home" 2
+  fi
+  make_homes "$holders" "$(jq -r '.name // "default"' <<< "$report")"
+  [[ -n $folded ]] && make_records "$(jq -r '.name // "default"' <<< "$report")"
+  return 0
+}
 
 cmd_build() {
   (( $# == 0 )) || die "build takes no arguments; it reads PLAN/ in the configuration's clone" 2
@@ -1218,21 +1300,23 @@ cmd_build() {
       die "the copy of ${sources[i]} differs from its source; $build_dir was removed"
     fi
   done
-  local holders='[]'
-  if [[ -n $folded ]]; then
-    holders=$(jq -c '.report.names as $names | [.view.seats | to_entries[] | select(.value.key.state == "held")
-      | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson], grants: [(.value.ssh.granted // [])[].name]}]' <<< "$folded") || die "cannot read the seats that hold a key" 2
+  local floor_keys="" fk floor_files=()
+  [[ -n $folded ]] && floor_keys=$(jq -r '.view.floors[]?.key' <<< "$folded")
+  floor_sub=""
+  if [[ -n $floor_keys ]]; then
+    for fk in $floor_keys; do
+      floor_sub=floors/$fk
+      mkdir -p -- "$build_dir/$floor_sub" || die "cannot make $build_dir/$floor_sub" 2
+      build_floor_seats "$fk"
+      floor_files+=("$floor_sub/keys.json" "$floor_sub/homes.json" "$floor_sub/records.json")
+    done
+    floor_sub=""
+    make_mail "$(jq -r '.name // "default"' <<< "$report")"
+  else
+    build_floor_seats ""
+    [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
   fi
-  make_keys "$holders" "$(jq -r '.name // "default"' <<< "$report")"
-  holders='[]'
-  if [[ -n $folded ]]; then
-    holders=$(jq -c '.report.names as $names | [.view.seats | to_entries[] | select(.value.home != null)
-      | {n: (.key + 1), seat: .value.seat, name: $names[.value.seat | tojson], home: .value.home}]' <<< "$folded") || die "cannot read the seats that have a home" 2
-  fi
-  make_homes "$holders" "$(jq -r '.name // "default"' <<< "$report")"
-  [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
-  [[ -n $folded ]] && make_records "$(jq -r '.name // "default"' <<< "$report")"
-  for name in keys.json homes.json mail.json seat-page.md records.json; do
+  for name in keys.json homes.json mail.json seat-page.md records.json "${floor_files[@]}"; do
     if [[ -f $build_dir/$name ]]; then
       copy_sums+=("$(cd -- "$build_dir" && sha256sum -- "$name")") || die "cannot hash $build_dir/$name"
     fi
@@ -1626,8 +1710,12 @@ values_problems() {
 }
 
 value_places() {
-  jq --raw-output0 --argjson k "$2" --argjson names "$3" --argjson with "$4" '
-    [["seat", (.seats // {})[$k | join("/")]], ["room", (.rooms // {})[$k[0:2] | join("/")]],
+  local plan=$build_dir/plan.json name
+  [[ -f $plan ]] || plan=$clone/PLAN/plan.json
+  name=$(jq -r --argjson k "$2" 'def term: if type == "object" then .term else . end;
+    [.programs[].plan[] | term | select(.[0] == "pane" and .[1:4] == $k) | .[4]][0] // ""' "$plan" 2> /dev/null)
+  jq --raw-output0 --argjson k "$2" --arg name "$name" --argjson names "$3" --argjson with "$4" '
+    [["seat", (.seats // {})[$name]], ["room", (.rooms // {})[$k[0:2] | join("/")]],
      ["office", (.offices // {})[$k[0]]], ["workplace", .workplace]] as $places
     | $names[] as $n
     | ([$places[] | select(.[1] != null and (.[1] | has($n))) | [.[0], .[1][$n]]][0]) as $hit
@@ -1892,6 +1980,9 @@ cmd_up() {
   need_tmux
   locate
   verify_build || die "up starts only a verified build, and never builds"
+  if jq -e 'any(.programs[].plan[]?; (if type == "object" then .term else . end) | .[0] == "floor")' "$build_dir/plan.json" > /dev/null 2>&1; then
+    die "the build stands on floors; this frame plans and builds floors and does not yet stand them up, which comes with S2's stop 4" 2
+  fi
   local view_file=/dev/null
   [[ -f $build_dir/plan-view.json ]] && view_file=$build_dir/plan-view.json
   plan_report "$build_dir/plan.json" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
@@ -2770,7 +2861,7 @@ cmd_why() {
   [[ -f $build_dir/keys.json ]] && key_view=$(jq -r '.state + "/gnupg"' "$build_dir/keys.json")
   local workplace seat_key names="[]" supplied='{}' values_note="" file="" i
   local -a problems fields
-  workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "server") | .[1]][0] // "default"' "$plan")
+  workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$plan")
   seat_key=$(jq -c --arg s "$seat" '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "pane" and .[4] == $s) | .[1:4]][0]' "$plan")
   if [[ $view != /dev/null && $seat_key != null ]]; then
     names=$(jq -c --argjson k "$seat_key" '[.seats[]? | select(.seat == $k) | .expects[]?.name]' "$view") || names="[]"
@@ -2813,7 +2904,7 @@ cmd_why() {
           | ([($folded[0].seats // [])[] | select(.seat == $k) | .key][0]) as $key
           | ([($folded[0].seats // [])[] | select(.seat == $k)][0]) as $folded_seat
           | (if $folded_seat.home? == null or $stateroot == "" then null
-             else "\($stateroot)/\($workplace)/homes/\($folded_seat.home.kind)/\($k | join("/"))" end) as $home_path
+             else "\($stateroot)/\($workplace)/\(if $folded_seat.floor? == null then "" else "floors/\($folded_seat.floor)/" end)homes/\($folded_seat.home.kind)/\($seat)" end) as $home_path
           | ($folded[0].mail.path? // null) as $mailpath
           | ($folded[0].records.path? // null) as $recordpath
           | def within($p; $q): $q != null and $q != "" and ($p == $q or beneath($p; $q));
@@ -3048,7 +3139,7 @@ cmd_doctor() {
   local config=${WORKPLACE_CONFIG-} workplace file
   local -a problems
   if [[ $config == /* && -f $config/BUILD/plan.json && -n $state_dir ]]; then
-    workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "server") | .[1]][0] // "default"' "$config/BUILD/plan.json" 2> /dev/null)
+    workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$config/BUILD/plan.json" 2> /dev/null)
     file=$state_dir/$workplace/values.json
     if [[ ! -e $file && ! -L $file ]]; then
       say "absent  the run-time file $file: needed only by a seat that expects a value"
@@ -3132,7 +3223,7 @@ seats_report() {
     done < <(jq -c '.seats[]' "$build_dir/homes.json")
   fi
   [[ -f $build_dir/plan-view.json ]] || return "$bad"
-  workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "server") | .[1]][0] // "default"' "$build_dir/plan.json")
+  workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$build_dir/plan.json")
   state_dir=$(workplace_state "$workplace") && file=$state_dir/values.json
   if [[ -n $file && ( -e $file || -L $file ) ]]; then
     mapfile -t problems < <(values_problems "$file")
@@ -3373,7 +3464,7 @@ unbuild_state() {
     [[ -f $plan && ! -L $plan ]] || continue
     name=$(jq -r --arg t "$term" --argjson a "$arg" '
       [.programs[]?.plan[]? | (if type == "object" then .term else . end)
-       | select(type == "array" and .[0] == $t) | .[$a] | strings] | first // empty' "$plan" 2> /dev/null) || name=""
+       | select(type == "array" and (.[0] == $t or .[0] == "workplace")) | .[$a] | strings] | first // empty' "$plan" 2> /dev/null) || name=""
     if [[ -n $name && ( $name == "$default" || $name == "$derived" ) ]]; then
       workplace_state "$name"
       return
@@ -3407,21 +3498,26 @@ cmd_unbuild() {
     say "unbuild: the plan kept nothing in a state directory"
     return 0
   fi
-  if [[ -d $state_dir/keys && ! -L $state_dir/keys ]]; then
-    homes=()
-    for home in "$state_dir"/keys/*; do
-      [[ -d $home && ! -L $home ]] || continue
-      n=$(find "$home" ! -type d -printf . | wc -c)
-      homes+=("  ${home##*/}: $n files")
-      total=$(( total + n ))
-    done
-    remove_key_homes "$state_dir"
-    [[ ! -e $state_dir/keys && ! -L $state_dir/keys ]] || die "cannot remove the key homes in $state_dir/keys" 2
-    say "unbuild: removed the key homes in $state_dir/keys, ${#homes[@]} homes, $total files, first removing their runtime socket directories, which ends any agent of them:"
-    for name in "${homes[@]}"; do say "$name"; done
-  else
-    say "unbuild: no key home stands in $state_dir/keys"
-  fi
+  local each
+  for each in "$state_dir" "$state_dir"/floors/*; do
+    [[ $each == "$state_dir" || ( -d $each && ! -L $each ) ]] || continue
+    total=0
+    if [[ -d $each/keys && ! -L $each/keys ]]; then
+      homes=()
+      for home in "$each"/keys/*; do
+        [[ -d $home && ! -L $home ]] || continue
+        n=$(find "$home" ! -type d -printf . | wc -c)
+        homes+=("  ${home##*/}: $n files")
+        total=$(( total + n ))
+      done
+      remove_key_homes "$each"
+      [[ ! -e $each/keys && ! -L $each/keys ]] || die "cannot remove the key homes in $each/keys" 2
+      say "unbuild: removed the key homes in $each/keys, ${#homes[@]} homes, $total files, first removing their runtime socket directories, which ends any agent of them:"
+      for name in "${homes[@]}"; do say "$name"; done
+    elif [[ $each == "$state_dir" ]]; then
+      say "unbuild: no key home stands in $state_dir/keys"
+    fi
+  done
   if [[ -d $state_dir ]]; then
     local kept=""
     mapfile -t files < <(cd -- "$state_dir" && find . -mindepth 1 -maxdepth 1 -printf '%P\n' | LC_ALL=C sort)

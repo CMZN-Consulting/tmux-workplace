@@ -114,6 +114,7 @@ def name_fault:
   if type != "string" then "it is not text"
   elif . == "" then "it is empty"
   elif . == "." or . == ".." then "it is \(.)"
+  elif startswith(".") then "it begins with ., and the seat's directories in the store and the records are named by it"
   elif contains("/") then "it holds a /"
   elif contains(",") then "it holds a comma, and a mail's head separates its readers by commas"
   elif (explode | any(. < 32 or (. >= 127 and . < 160))) then "it holds a control character"
@@ -131,11 +132,52 @@ def unique_problems($binding):
   | [$terms[] | select(.term[0] == $word and (.term | length) > $pos)] | group_by(.term[$pos])[] | select(length > 1)
   | "the name \(.[0].term[$pos]) is given to \(length) of the \($word) terms; it must be unique (\(map(term_at) | join("; ")))";
 
+def floors_problems($binding):
+  ($binding.structure.floors // null) as $fs
+  | select($fs != null)
+  | plan_terms as $all
+  | def of($w): [$all[] | select(.term[0] == $fs[$w])];
+    of("floor") as $floors | of("server") as $servers | of("workplace") as $workplaces
+  | of("house") as $houses | of("session") as $sessions | of("window") as $windows
+  | [$floors[] | select(.term[$fs.houses] == "offices") | .term[$fs.key]] as $office_floors
+  | [$floors[] | select(.term[$fs.houses] == "rooms") | .term[$fs.key]] as $room_floors
+  | ([$sessions[] | .term[1]] + [$houses[] | .term[2]] | unique) as $offices
+  | if ($floors | length) == 0 then
+      (($workplaces + $houses)[] | "\(.term[0]) speaks only in a plan with floors, and this plan holds none (\(term_at))")
+    else
+      (if ($servers | length) > 0
+       then "the plan holds \($servers | length) server terms and \($floors | length) floor terms: a plan holds one server and no floor, or no server, one workplace and at least one floor" else empty end),
+      (if ($workplaces | length) != 1 then "the plan holds \($workplaces | length) workplace terms, and with floors it holds exactly one" else empty end),
+      ($floors | group_by(.term[$fs.key])[] | select(length > 1)
+       | "the floor \(.[0].term[$fs.key]) is declared \(length) times (\(map(term_at) | join("; ")))"),
+      ($floors[] | select(.term[$fs.smallest] | test("^[1-9][0-9]*x[1-9][0-9]*$") | not)
+       | "the floor \(.term[$fs.key]) says smallest \(.term[$fs.smallest] | tojson): COLSxROWS (\(term_at))"),
+      ($houses[] | select(.term[1] as $f | $office_floors | index($f) | not)
+       | "the house of \(.term[2]) names the floor \(.term[1]), which houses no offices (\(term_at))"),
+      ($houses | group_by(.term[2])[] | select(length > 1)
+       | "the office \(.[0].term[2]) stands in \(length) houses, and it stands in one (\(map(term_at) | join("; ")))"),
+      ($sessions[] | select(.term[1] as $a | ($room_floors | index($a) | not) and ([$houses[].term[2]] | index($a) | not))
+       | "the office \(.term[1]) stands on no floor: with floors every session stands in a house (\(term_at))"),
+      ($sessions[] | select(.term[1] as $a | $room_floors | index($a))
+       | "the floor \(.term[1]) houses rooms, and the plan holds a session or a house for it (\(term_at))"),
+      ($offices[] as $k | select([$floors[].term[$fs.key]] | index($k))
+       | "the key \($k) names a floor and an office (\(([$floors[] | select(.term[$fs.key] == $k)] + [($sessions + $houses)[] | select(.term[1] == $k or .term[2] == $k)]) | map(term_at) | unique | join("; ")))"),
+      ($office_floors[] as $f | select([$houses[] | select(.term[1] == $f)] | length == 0)
+       | "the floor \($f) holds no office and no room"),
+      ($room_floors[] as $f | select([$windows[] | select(.term[1] == $f)] | length == 0)
+       | "the floor \($f) holds no office and no room")
+    end;
+
 def structure_problems($binding):
   ($binding.structure // {}) as $s
   | plan_terms as $all
-  | def keyed($p; $pos): [$all[] | select(.term[0] == $p) | . + {k: [.term[$pos[]]]}];
-    (($s["exactly-one"] // [])[] | . as $p | [$all[] | select(.term[0] == $p)] as $have
+  | ($s.floors // null) as $fs
+  | ([$all[] | select($fs != null and .term[0] == $fs.floor)] | length > 0) as $floored
+  | def keyed($p; $pos): [$all[] | select(.term[0] == $p) | . + {k: [.term[$pos[]]]}]
+      + (if $fs != null and $p == $fs.session
+         then [$all[] | select(.term[0] == $fs.floor and .term[$fs.houses] == "rooms") | . + {k: [.term[$fs.key]]}] else [] end);
+    floors_problems($binding),
+    (($s["exactly-one"] // [])[] | select($floored | not) | . as $p | [$all[] | select(.term[0] == $p)] as $have
      | select(($have | length) != 1)
      | "the plan holds \($have | length) \($p) terms; it needs exactly one\(if ($have | length) > 1 then " (\($have | map(term_at) | join("; ")))" else "" end)"),
     (($s["unique-keys"] // [])[] | . as [$p, $pos] | keyed($p; $pos) | group_by(.k) | map(select(length > 1))[]

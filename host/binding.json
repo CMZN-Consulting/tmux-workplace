@@ -2,6 +2,9 @@
   "binding": 3,
   "order": [
     "server",
+    "workplace",
+    "floor",
+    "house",
     "session",
     "window",
     "pane",
@@ -31,7 +34,11 @@
   "name": {
     "term": "server",
     "arg": 1,
-    "default": "default"
+    "default": "default",
+    "with-floors": {
+      "term": "workplace",
+      "arg": 1
+    }
   },
   "programs": {
     "tmux": {
@@ -1096,6 +1103,109 @@
         ]
       ]
     },
+    "workplace": {
+      "arity": 1,
+      "require": [
+        [
+          "name",
+          {
+            "arg": 1
+          }
+        ]
+      ]
+    },
+    "floor": {
+      "arity": 7,
+      "require": [
+        [
+          "name",
+          {
+            "arg": 1
+          }
+        ],
+        [
+          "file",
+          {
+            "path": 6
+          }
+        ]
+      ],
+      "set": [
+        [
+          [
+            "floor-houses",
+            {
+              "arg": 1
+            }
+          ],
+          {
+            "arg": 3,
+            "map": {
+              "offices": "offices",
+              "rooms": "rooms"
+            }
+          }
+        ],
+        [
+          [
+            "floor-enforcement",
+            {
+              "arg": 1
+            }
+          ],
+          {
+            "arg": 4,
+            "map": {
+              "enforced": "enforced",
+              "unenforced": "unenforced"
+            }
+          }
+        ],
+        [
+          [
+            "floor-socket",
+            {
+              "arg": 1
+            }
+          ],
+          {
+            "arg": 5,
+            "map": {
+              "run": "run",
+              "tmux-default": "tmux-default"
+            }
+          }
+        ],
+        [
+          [
+            "config",
+            {
+              "arg": 1
+            }
+          ],
+          {
+            "path": 6
+          }
+        ]
+      ]
+    },
+    "house": {
+      "arity": 2,
+      "require": [
+        [
+          "name",
+          {
+            "arg": 1
+          }
+        ],
+        [
+          "name",
+          {
+            "arg": 2
+          }
+        ]
+      ]
+    },
     "session": {
       "arity": 2,
       "require": [
@@ -1899,7 +2009,19 @@
           3
         ]
       ]
-    ]
+    ],
+    "floors": {
+      "floor": "floor",
+      "key": 1,
+      "houses": 3,
+      "enforcement": 4,
+      "smallest": 7,
+      "house": "house",
+      "workplace": "workplace",
+      "server": "server",
+      "session": "session",
+      "window": "window"
+    }
   },
   "directories": {
     "recorded": "record-directory",
@@ -1915,6 +2037,13 @@
     "SSH_AUTH_SOCK"
   ],
   "keys": {
+    "floor": [
+      1
+    ],
+    "house": [
+      1,
+      2
+    ],
     "session": [
       1
     ],

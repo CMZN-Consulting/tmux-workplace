@@ -37,7 +37,7 @@
 ## Applying the plan
 
 - **C7.** Every value the plan or a slot gives a tmux command is encoded: a backslash before a trailing `;`, and where tmux expands formats, every run of `#` not followed by `[` doubled. The program's own options (`-L`, `-f`) are not encoded, since tmux's command parser never sees them. No text of the plan is evaluated by a shell.
-- **C8.** Terms are applied in the binding's order of primitives (`server`, `session`, `window`, `pane`, `arrange`, `start`), and in plan order within one primitive, whatever the order of the plan's programs. Each office gives a session, each room a window and a layout, each seat a pane and a start in its first directory. A pane is made by splitting its room's window, which is then re-spaced with tmux's `tiled` so that the next split has room. The room's declared layout is applied once, by `arrange`, after all its panes exist, and the room ends in that layout.
+- **C8.** Terms are applied in the binding's order of primitives (`server`, `workplace`, `floor`, `house`, `session`, `window`, `pane`, `arrange`, `start`), and in plan order within one primitive, whatever the order of the plan's programs. Each office gives a session, each room a window and a layout, each seat a pane and a start in its first directory. A pane is made by splitting its room's window, which is then re-spaced with tmux's `tiled` so that the next split has room. The room's declared layout is applied once, by `arrange`, after all its panes exist, and the room ends in that layout.
 - **C9.** tmux's first window of a session and first pane of a window are claimed by the first `window` and `pane` terms that ask for them. No term says which seat is first, and `up` refuses when a window or pane that is not a seat would stand. Every target is a captured id.
 - **C10.** Every tmux call runs under `setpriv --no-new-privs` with `TMUX` and `TMUX_PANE` removed, so the server and every seat run without privilege gain. A running server without no-new-privileges is refused. The check names the process it checked: the tmux server, an agent or the carrier. A process that has ended by the time its status is read is a refusal of its own, which says so. The server's socket stands in `RUN` (C68), so no server that `up` did not start stands there when `up` starts.
 - **C11.** `server` checks, before any session exists, that `destroy-unattached` and `exit-unattached` are off and `exit-empty` is on. With `exit-empty` off, the empty server its check started stays and nothing else is made: the loop never ends a server, and the refusal names the server's socket and the command that ends it, and keeps `RUN`, which holds the socket, while the server stands. Every session carries the run's mark, `@workplace`.
@@ -104,7 +104,7 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
@@ -193,7 +193,7 @@
   - A kind's name and a seat's keys are each one directory of its home's name, since none is empty, `.` or `..` or holds `/` (C67).
   - The names the frame keeps are the binding's `kept-names`, the names its fixed part gives a seat itself: `GNUPGHOME` and `SSH_AUTH_SOCK`. A home's variable, a further variable or an expected name that is one of them is refused. So is an expected name that the binding passes on from the caller, such as `HOME`, since that would cover the value; a home may use such a name.
   - It refuses a seat that expects a name its kind's home gives it, naming the seat and both origins.
-- **C46.** A home is named by its seat's kind and keys, never by the seat's place among the panes: `S/homes/KIND/A/B/C`. No two seats share it, since a key holds no `/` and none is `.` or `..` (C67). `build` makes a kept home with mode 0700, each directory above it in `S/homes`, and `S/homes` itself, also 0700, and keeps it across builds.
+- **C46.** A home is named by its seat's kind and name, never by the seat's place among the panes or its coordinate (5.124 point 2): `S/homes/KIND/NAME`, where S is a floor's state with floors (C102). No two seats share it, since a name is one seat's, holds no `/` and is not `.` or `..` (C67). `build` makes a kept home with mode 0700, each directory above it in `S/homes`, and `S/homes` itself, also 0700, and keeps it across builds.
   - A new order of the panes moves no home. A seat whose kind changes is given the home of its new kind, and its old home stays where it was, shown to no seat.
   - `S/homes.json`, the frame's record with mode 0600, names the seat of each kept home by the home's name, `KIND/A/B/C`. `build` refuses, naming both, a home that the record gives another seat, and a directory that the record does not name, which it leaves alone.
   - A scratch home has the same path and nothing on the machine.
@@ -206,7 +206,7 @@
   - The frame gives the seat, after the environment's cell, the kind's variable with the home's path, and each further variable with its path inside the home.
   - A seat's further variables stand in the code-point order of their names, after the kind's variable: in `view.json`, in `BUILD/homes.json`, and in the environments of the seed and the seat.
   - `plan` refuses, with exit 1 and leaving `PLAN/` as it was, a plan whose environment cell sets for a seat a name that the frame gives it (a key's two names, its home's variables) or a value the seat expects, naming the seat, the row's origin and the term's. `build` keeps its own check of the same, for a plan written by hand.
-- **C49.** The run-time file is `S/values.json`, mode 0600, written by the desk lead and never by the frame. It is an object with `workplace`, mapping names to values, and `offices`, `rooms` and `seats`, mapping a place written `A`, `A/B` or `A/B/C` to names and values. A value is text of one line that is not empty: an empty one, or one with a line end or a NUL byte, is refused, naming the name and never the value. A name in the file that a seat does not expect is not given to it.
+- **C49.** The run-time file is `S/values.json`, mode 0600, written by the desk lead and never by the frame. It is an object with `workplace`, mapping names to values, `offices` and `rooms`, mapping a place written `A` or `A/B` to names and values, and `seats`, mapping a seat's name to names and values (5.124 point 2). A value is text of one line that is not empty: an empty one, or one with a line end or a NUL byte, is refused, naming the name and never the value. A name in the file that a seat does not expect is not given to it.
   - `up` and `exec` give a seat each value it expects from the narrowest place that has it: the seat, its room, its office, the workplace. Changing a value needs no new plan and no new build.
   - `up` refuses, with exit 1 and before it starts anything, a run-time file that others than its owner may read, one of another owner or form, and a seat that expects a value the file does not give, naming the value and the seat. `exec` refuses the same, with exit 2.
   - `exec` gives the values through the environment of `env`, which fills each value's place in one `-S` word and clears every other variable. No value is a word of any program's command line.
@@ -248,7 +248,7 @@
   - Each of these refusals names the origins of the `mail` term beside those of what conflicts with it.
   - `why` names the mailbox for a path at or beneath the mail path.
 - **C56.** The store stands in S, which no view holds. `build` makes it once and keeps it.
-  - `S/mail` is a git repository made with no template, whose branch is `mail`. For each seat it holds a directory named by the seat's three keys joined by a space, with `in` and `sent`. A key may be `.git`, which git refuses as a path's component, and a key holds no white space, so the joined name is one seat's and is never git's.
+  - `S/mail` is a git repository made with no template, whose branch is `mail`. For each seat it holds a directory named by the seat's name, with `in` and `sent` (5.124 point 2). A name never begins with `.` (C67), so it is never `.git`, and git takes every path literally (C64). With floors the store is the configuration's, in S, and one for every floor (5.125 point 13).
   - Beside it, `S/comms` holds for each seat `out` and `answers` under the same name, `taken`, where the carrier keeps what it takes, the record, and `wake.json`, where it keeps the mail each reader has to be pointed out (C94). Every directory is the user's, with mode 0700, and the record and `wake.json` have mode 0600.
   - `BUILD/mail.json`, listed in the MANIFEST, holds the mail path with the origins of its term, S, and each seat's mailbox and reach, and, for a seat whose kind has a wake, its pattern (C93).
   - `BUILD/seat-page.md`, listed in the MANIFEST, is `build`'s copy of the frame's page for a seat (C97).
@@ -283,7 +283,7 @@
 
 ## Keys and names
 
-- **C67.** A key of an office, a room or a seat, and a kind's name, is not empty, is not `-`, `.` or `..`, does not begin with `-`, and holds no `/`, no white space and no control character. `plan` and `build` refuse one that is, with exit 1, naming the term or the row. A name is one seat's alone: `plan` and `build` refuse two seats of one name, naming both terms. A seat's name, in every plan, is not empty, is not `.` or `..`, and holds no `/`, no comma and no control character, and neither begins nor ends with white space: `plan` and `build` refuse one that is, naming the term. The Logs layer uses a name as a directory's name, and a mail's head separates its readers by commas.
+- **C67.** A key of an office, a room or a seat, and a kind's name, is not empty, is not `-`, `.` or `..`, does not begin with `-`, and holds no `/`, no white space and no control character. `plan` and `build` refuse one that is, with exit 1, naming the term or the row. A name is one seat's alone: `plan` and `build` refuse two seats of one name, naming both terms. A seat's name, in every plan, is not empty, does not begin with `.`, and holds no `/`, no comma and no control character, and neither begins nor ends with white space: `plan` and `build` refuse one that is, naming the term. The homes, the store and the Logs layer use a name as a directory's name, and a mail's head separates its readers by commas.
 
 
 ## No seat reaches a tmux server
@@ -306,7 +306,7 @@
     - for the record path, everything it refuses for the mail path (C55), each naming the origins of the `record-path` term where C55's names those of the `mail` term, and a record path at, above or beneath the mail path;
     - a kept record of a seat with no view, since such a seat could reach its own record.
   - `plan` prints the records, whether each seat's pane is kept, and whose records it may read.
-- **C70.** `build` makes `S/records`, and in it one directory for each seat, named by its keys joined by a space, each the user's with mode 0700.
+- **C70.** `build` makes `S/records`, and in it one directory for each seat, named by its name, each the user's with mode 0700. With floors S is the seat's floor's state (C102).
   - A seat's directory holds one file for each day by UTC, `DAY.pane`, and `unstored` and `gaps`, which only grow. `S/records` holds the carrier's `chain.state` and the file sink's `chain`.
   - `BUILD/records.json`, listed in the MANIFEST, holds the path with the origins of its term, the limit, the sink, the carrier's unit, and each seat's directory, its pane's state and whose records it reads.
   - `build` refuses a record path that is not a directory on the machine, or that lies in the state directory R or holds it, and `up` one that is no longer a directory. Each names the origins of the `record-path` term.
@@ -412,6 +412,37 @@
   - Then it removes the homes of `S/keys` as every build does before it makes new ones (C36): their runtime socket directories first, which ends any agent of them, then the homes. It names each home and how many files it held. It does so also when no `BUILD` stands and key homes do.
   - It finds S where the build's records name it while `BUILD` stands, and otherwise by the workplace's name (C25): the one that `BUILD/plan.json` or else `PLAN/plan.json` gives when it is `default` or the clone's derived name, and else the clone's derived name.
   - It names the state directory and keeps everything else in it: the seats' homes, the records, the mail's store, the values file and `restarts`. It exits 0.
+
+## Floors and rooms
+
+- **C100.** `workplace.json` may hold `floors`, a list of one or more floors, each with exactly `key`, `name`, `houses`, `enforced`, `socket`, `conf` and `smallest` (5.116, 5.117, 5.123, 5.124 points 1 and 2).
+  - **The members.** A key follows the rule for a key (C67), and no two floors share one. A name follows the rule for a name and holds no `:`. `houses` is `offices` or `rooms`, and `enforced` is `true` or `false`. `socket` is `run` or `tmux-default`, at most one floor takes `tmux-default`, and an enforced floor takes `run`. `conf` is a relative path to a file in the clone that is not a link. `smallest` is written `COLSxROWS`.
+  - **What else changes.** With `floors`, `workplace.json` holds no `socket` and the clone no `tmux.conf`. The name is the derived one (C25). Each floor's file is an input, in the floors' order, where `tmux.conf` was.
+  - **The root program.** It is `workdir : ROOT`, `workplace : NAME`, and a line `floor : KEY : NAME : HOUSES : ENFORCEMENT : SOCKET : CONF : SMALLEST` for each floor, under the derivation `root-floors-v1`.
+  - **What `plan` refuses.** It refuses each fault of these with exit 2, naming it.
+- **C101.** In a plan with floors the structure is checked at `plan` as well as at `build`. It holds no `server` and exactly one `workplace`.
+  - **Offices.** Each office stands in exactly one `house F A` of a floor that houses offices.
+  - **A floor of rooms** stands for its own session. It has no `session` and no `house`, and its rooms are `window F R NAME`.
+  - **The keys.** No key names both a floor and an office.
+  - **Every floor** holds an office or a room.
+  - **Without floors,** a `workplace` or `house` term is refused.
+  - **`up` refuses a build that stands on floors** until S2's stop 4 brings floors up.
+- **C102.** With floors, a floor's state is `S/floors/F`, mode 0700.
+  - **What stands in it.** Its seats' key homes (`keys/NN`, NN their place among that floor's panes), kept homes and records stand there, and the build's files for them stand in `BUILD/floors/F` and in the MANIFEST.
+  - **What stays in S.** The store, the comms and the values stay in S, one for the configuration (5.125 point 13).
+  - **`unbuild`** removes the key homes of S and of every floor's state.
+- **C103.** The fold knows the scope `floor`, written `F - - floor`, ranked between `workplace` and `kind`. It holds the seats of every office housed on the floor, or of every room of a floor of rooms. `statement`, `key`, `expect`, `record`, `ssh-grant` and `reach` take it, and `clearance` does not.
+  - **Typing the first position.** It is a floor's key exactly when a `floor` term names it, and an office's key otherwise. A term at an office's scope that names a floor refuses the plan, and so does a term at a floor's scope that names an office (5.125 point 1).
+- **C104.** A floor is enforced or not.
+  - **A seat of an unenforced floor** has no rows, no labels and no view. It is not refused for want of a row for `/` (5.124 point 3).
+  - **On an enforced floor the room is one view.**
+    - A statement at a seat's scope refuses the plan (5.124 point 5).
+    - A kind's statements are folded into every room that seats the kind, at the room's scope, with their own terms and origins (5.125 point 4).
+    - Two statements of different states about one path at one room refuse, naming every origin. Equal ones make one row with all their origins.
+    - Every occupant of a room carries the same rows.
+    - An asking `reach` at a seat's scope, in a room of several, refuses (5.118).
+  - **`view.json`** gains `floors`, each seat's `floor` and `enforced`, and `rooms`, one entry for each room of an enforced floor. Each entry holds the room, `of` (`office` or `floor`), its floor, its clearance, its occupants and its rows keyed by the room.
+  - **`plan` prints** each unenforced floor, and each room of an enforced floor that has no number (5.125 point 7).
 
 ## Limits, stated and not checked
 

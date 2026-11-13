@@ -91,7 +91,9 @@ $b[0] as $binding
             {errors: [],
              programs: ([$binding.tables[] | select((source_rows(.) | length) > 0) | .programs // [] | .[]] | unique),
              terms: (terms | length),
-             name: ([terms[] | .term | select(.[0] == $binding.name.term) | .[$binding.name.arg]] | first // null),
+             name: ((($binding.name["with-floors"] // null) as $w
+                     | if $w == null then null else [terms[] | .term | select(.[0] == $w.term) | .[$w.arg]] | first end)
+                    // ([terms[] | .term | select(.[0] == $binding.name.term) | .[$binding.name.arg]] | first) // null),
              tables: ($binding.tables | with_entries(.value = source_rows(.value))),
              must_exist: [$binding.tables[] | select(has("must-exist")) | . as $spec
                           | source_rows($spec)[] | select(.value[0] as $v | $spec["must-exist"] | index($v)) | .key[3]] | unique,

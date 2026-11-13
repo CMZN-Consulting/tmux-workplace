@@ -6,13 +6,13 @@ def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
 def at_or_beneath($p; $q): $p == $q or beneath($p; $q);
 def depth: if . == "/" then 0 else (split("/") | length) - 1 end;
 def whole: type == "string" and test("^(0|[1-9][0-9]*)$");
-def rank: {"workplace": 0, "kind": 1, "office": 2, "room": 3, "seat": 4}[.];
+def rank: {"workplace": 0, "floor": 1, "kind": 2, "office": 3, "room": 4, "seat": 5}[.];
 def states: ["hidden", "searchable-only", "scratch", "read-only", "read-write"];
 def at($o): "\($o.path // "?"):\($o.line // "?")";
 def ats($os): [$os[] | at(.)] | join(", ");
 def places($scope; $n):
   ($n | map(. != "-")) as $used
-  | {"workplace": [false, false, false], "kind": [true, false, false], "office": [true, false, false],
+  | {"workplace": [false, false, false], "floor": [true, false, false], "kind": [true, false, false], "office": [true, false, false],
      "room": [true, true, false], "seat": [true, true, true]}[$scope] == $used;
 def scope_text($t; $scope; $n):
   if $scope == "workplace" then "the workplace"
@@ -32,11 +32,29 @@ joined($b[0]; $root) as $plan
 | [$panes[] | .[1:4]] as $seats
 | ($seats | map(.[0:1]) | unique) as $offices
 | ($seats | map(.[0:2]) | unique) as $rooms
-| [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
+| [$plan.programs[] | .path as $pp | (.plan // []) | to_entries[] | (.value | term_of) as $t | select($t | type == "array" and .[0] == "floor")
+   | {key: $t[1], name: $t[2], houses: $t[3], enforced: ($t[4] == "enforced"), socket: $t[5], conf: $t[6], smallest: $t[7], origins: [{path: $pp, term: (.key + 1)}]}] as $floors
+| [$floors[].key] as $floor_keys
+| [$floors[] | select(.houses == "rooms") | .key] as $room_floor_keys
+| ([$plan.programs[] | (.plan // [])[] | term_of | select(type == "array" and .[0] == "house") | {key: .[2], value: .[1]}] | from_entries) as $housed
+| [$plan.programs[] | (.plan // [])[] | term_of | select(type == "array" and .[0] == "window") | .[1:3]] as $window_rooms
+| ($floors | length > 0) as $floored
+| def floor_of($a): if ($room_floor_keys | index($a)) != null then $a else $housed[$a] end;
+  def mode_of($k): if $floored | not then "legacy"
+    else floor_of($k[0]) as $f | ([$floors[] | select(.key == $f)][0]) as $fl
+      | if $fl == null then "legacy" elif $fl.enforced then "enforced" else "unenforced" end end;
+  def occupants($k): [$seats[] | select(.[0:2] == $k[0:2])];
+  def scoped_fault($t; $scope; $n):
+    if $scope == "office" and ($floor_keys | index($n[0])) != null then "the \($t[0]) names the office \($n[0]), and \($n[0]) is a floor (5.125 point 1)"
+    elif $scope == "floor" and ($floor_keys | index($n[0])) == null and (($offices | index([$n[0]])) != null or ($housed | has($n[0])))
+    then "the \($t[0]) names the floor \($n[0]), and \($n[0]) is an office (5.125 point 1)"
+    else null end;
+  [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
 | [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "clearance-scale", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake")))] as $records
 | def known($scope; $n):
-    if $scope == "office" then ($offices | index([$n[0:1]])) != null
+    if $scope == "floor" then ($floor_keys | index($n[0])) != null
+    elif $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
     elif $scope == "seat" then ($seats | index([$n])) != null
     else true end;
@@ -45,31 +63,38 @@ joined($b[0]; $root) as $plan
     | if ([$t[] | type] | unique) != ["string"] then "\($where): \($t[0]) holds a word that is not a string"
       elif $t[0] == "statement" then
         if ($t | length) != 7 then "\($where): a statement has the words statement A B C SCOPE PATH STATE, not \($t | length)"
-        elif ($t[4] | IN("workplace", "kind", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a statement"
+        elif ($t[4] | IN("workplace", "floor", "kind", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a statement"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) statement cannot name \($t[1:4] | join(" "))"
+        elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the statement names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
+        elif $t[4] == "seat" and mode_of($t[1:4]) == "enforced"
+        then "\($where): the statement speaks at the seat \($t[1:4] | join("/")), on the enforced floor \(floor_of($t[1])), where the room is one view and a seat's statement would promise a wall that the room does not have (5.124 point 5)"
         elif $t[5] | canonical | not then "\($where): \($t[5]) is not an absolute, canonical path"
         elif $t[6] | IN(states[]) | not then "\($where): \($t[6]) is not one of \(states | join(", "))"
         else empty end
       elif $t[0] == "clearance" then
         if ($t | length) != 6 then "\($where): a clearance has the words clearance A B C SCOPE NUMBER, not \($t | length)"
         elif $t[4] == "seat" then "\($where): a seat has its room's clearance and none of its own (5.118), so seat is not a scope of a clearance"
+        elif $t[4] == "floor" then "\($where): floor is not a scope of a clearance: a room's number is its own line's, else its office's (5.122 point 1)"
         elif ($t[4] | IN("office", "room") | not) then "\($where): \($t[4]) is not a scope of a clearance"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) clearance cannot name \($t[1:4] | join(" "))"
+        elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the clearance names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif $t[5] | whole | not then "\($where): \($t[5]) is not a whole number"
         else empty end
       elif $t[0] == "key" then
         if ($t | length) != 6 then "\($where): a key has the words key A B C SCOPE STATE, not \($t | length)"
-        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a key"
+        elif ($t[4] | IN("workplace", "floor", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a key"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) key cannot name \($t[1:4] | join(" "))"
+        elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the key names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif $t[5] | IN("held", "none") | not then "\($where): \($t[5]) is not held or none"
         else empty end
       elif $t[0] == "expect" then
         if ($t | length) != 6 then "\($where): an expect has the words expect A B C SCOPE NAME, not \($t | length)"
-        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of an expect"
+        elif ($t[4] | IN("workplace", "floor", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of an expect"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) expect cannot name \($t[1:4] | join(" "))"
+        elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the expect names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif $t[5] | variable_name | not then "\($where): \($t[5]) is not a variable name"
         elif $kept | index($t[5]) then "\($where): \($t[5]) is a name the frame keeps for itself, and no value may take it"
@@ -93,19 +118,24 @@ joined($b[0]; $root) as $plan
         else empty end
       elif $t[0] == "reach" then
         if ($t | length) != 11 then "\($where): a reach has the words reach A B C SCOPE ACTION TA TB TC TSCOPE STATE, not \($t | length)"
-        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a reach"
+        elif ($t[4] | IN("workplace", "floor", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a reach"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) reach cannot name \($t[1:4] | join(" "))"
+        elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the reach names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
+        elif $t[4] == "seat" and mode_of($t[1:4]) == "enforced" and (occupants($t[1:4]) | length) > 1
+        then "\($where): the reach asks for the seat \($t[1:4] | join("/")), on the enforced floor \(floor_of($t[1])), whose room holds \(occupants($t[1:4]) | length) occupants: what one occupant of a room may ask, each of its room-mates may (5.118)"
         elif ($t[5] | IN("mail", "grab", "write", "record") | not) then "\($where): \($t[5]) is not mail, grab, write or record"
-        elif ($t[9] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[9]) is not a scope of a reach's target"
+        elif ($t[9] | IN("workplace", "floor", "office", "room", "seat") | not) then "\($where): \($t[9]) is not a scope of a reach's target"
         elif places($t[9]; $t[6:9]) | not then "\($where): a \($t[9]) target cannot name \($t[6:9] | join(" "))"
+        elif scoped_fault($t; $t[9]; $t[6:9]) != null then "\($where): \(scoped_fault($t; $t[9]; $t[6:9]))"
         elif known($t[9]; $t[6:9]) | not then "\($where): the reach's target names \(scope_text($t; $t[9]; $t[6:9])), which the plan does not make"
         elif $t[10] | IN("allowed", "banned") | not then "\($where): \($t[10]) is not allowed or banned"
         else empty end
       elif $t[0] == "record" then
         if ($t | length) != 7 then "\($where): a record has the words record A B C SCOPE WHAT STATE, not \($t | length)"
-        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a record"
+        elif ($t[4] | IN("workplace", "floor", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a record"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) record cannot name \($t[1:4] | join(" "))"
+        elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the record names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif ($t[5] | IN("pane", "programs") | not) then "\($where): \($t[5]) is not pane or programs"
         elif ($t[6] | IN("kept", "none") | not) then "\($where): \($t[6]) is not kept or none"
@@ -131,8 +161,9 @@ joined($b[0]; $root) as $plan
         else empty end
       elif $t[0] == "ssh-grant" then
         if ($t | length) != 7 then "\($where): an ssh-grant has the words ssh-grant A B C SCOPE NAME STATE, not \($t | length)"
-        elif ($t[4] | IN("workplace", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of an ssh-grant"
+        elif ($t[4] | IN("workplace", "floor", "office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of an ssh-grant"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) ssh-grant cannot name \($t[1:4] | join(" "))"
+        elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the ssh-grant names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif ($t[5] | key_fault) != null then "\($where): the ssh key's name \($t[5] | tojson) is refused: \($t[5] | key_fault)"
         elif $t[6] | IN("granted", "none") | not then "\($where): \($t[6]) is not granted or none"
@@ -243,7 +274,12 @@ joined($b[0]; $root) as $plan
           | ($said[] | select(at_or_beneath(.term[5]; $m))
              | "\(at(.origin)): the statement speaks of \(.term[5]), which lies at or beneath the mail path \($m), where the frame shows each seat its mailbox (the mail at \(ats([$mailed[] | select(.term[1] == $m) | .origin])))"),
             ($labelled[] | select(at_or_beneath(.term[1]; $m))
-             | "\(at(.origin)): the label speaks of \(.term[1]), which lies at or beneath the mail path \($m), where the frame shows each seat its mailbox (the mail at \(ats([$mailed[] | select(.term[1] == $m) | .origin])))"))] as $conflicts
+             | "\(at(.origin)): the label speaks of \(.term[1]), which lies at or beneath the mail path \($m), where the frame shows each seat its mailbox (the mail at \(ats([$mailed[] | select(.term[1] == $m) | .origin])))")),
+         ($rooms[] as $rm | select(mode_of($rm) == "enforced")
+          | ([$seats[] | select(.[0:2] == $rm) | $kinds[tojson] // "none"] | unique) as $ks
+          | [$said[] | select((.term[4] == "room" and .term[1:3] == $rm) or (.term[4] == "kind" and (.term[1] as $kk | $ks | index($kk)) != null))]
+          | group_by(.term[5])[] | select((map(.term[6]) | unique | length) > 1)
+          | "two statements about \(.[0].term[5]) at the room \($rm | join("/")) differ: \([group_by(.term[6])[] | "\(.[0].term[6]) from \(ats(map(.origin)))"] | join(", ")) (5.124 point 5)")] as $conflicts
       | if ($conflicts | length) > 0 then {errors: $conflicts}
         else
           entities($said) as $statements
@@ -261,7 +297,7 @@ joined($b[0]; $root) as $plan
           | (if ($rpaths | length) == 0 then null else $record_paths[0] end) as $record_path
           | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
           | def holds($scope; $n; $k):
-              $scope == "workplace" or ($scope == "office" and $n[0] == $k[0]) or ($scope == "room" and $n[0:2] == $k[0:2]) or ($scope == "seat" and $n == $k);
+              $scope == "workplace" or ($scope == "floor" and $n[0] == floor_of($k[0])) or ($scope == "office" and $n[0] == $k[0]) or ($scope == "room" and $n[0:2] == $k[0:2]) or ($scope == "seat" and $n == $k);
             def decide($action; $k; $tk):
               [$reaches[] | select(.term[5] == $action and holds(.term[4]; .term[1:4]; $k) and holds(.term[9]; .term[6:9]; $tk))] as $c
               | if ($c | length) == 0 then {state: (if $action == "mail" then "allowed" else "banned" end), origins: []}
@@ -272,14 +308,19 @@ joined($b[0]; $root) as $plan
           | def cleared($c; $l): $l.value != "closed" and $c.value != null and $c.value <= $l.value;
             def governing($p): [$labels[] | select(at_or_beneath($p; .path))] | max_by(.path | depth);
             [$panes[] | . as $pane | $pane[1:4] as $k | ($kinds[$k | tojson] // "none") as $kind
-             | [$statements[] | select(
+             | mode_of($k) as $mode
+             | (if $mode == "enforced" then [occupants($k)[] | $kinds[tojson] // "none"] | unique else [$kind] end) as $kindset
+             | def eff_rank: if $mode == "enforced" and .term[4] == "kind" then ("room" | rank) else (.term[4] | rank) end;
+               (if $mode == "unenforced" then []
+                else [$statements[] | select(
                  .term[4] == "workplace"
-                 or (.term[4] == "kind" and $kind != "none" and .term[1] == $kind)
+                 or (.term[4] == "floor" and .term[1] == floor_of($k[0]))
+                 or (.term[4] == "kind" and .term[1] != "none" and (.term[1] as $kk | $kindset | index($kk)) != null)
                  or (.term[4] == "office" and .term[1] == $k[0])
                  or (.term[4] == "room" and .term[1:3] == $k[0:2])
-                 or (.term[4] == "seat" and .term[1:4] == $k))] as $mine
-             | [$mine[] | . as $s
-                | select(any($mine[]; (.term[4] | rank) > ($s.term[4] | rank) and at_or_beneath($s.term[5]; .term[5])) | not)] as $remaining
+                 or (.term[4] == "seat" and .term[1:4] == $k))] end) as $mine
+             | [$mine[] | . as $s | ($s | eff_rank) as $sr
+                | select(any($mine[]; eff_rank > $sr and at_or_beneath($s.term[5]; .term[5])) | not)] as $remaining
              | ([$clearances[] | select(.term[4] == "room" and .term[1:3] == $k[0:2])]
                 + [$clearances[] | select(.term[4] == "office" and .term[1] == $k[0])]) as $held
              | (if ($held | length) == 0 then {value: null, scope: null, origins: []}
@@ -288,6 +329,7 @@ joined($b[0]; $root) as $plan
              | ([$keys[] | select(.term[4] == "seat" and .term[1:4] == $k)]
                 + [$keys[] | select(.term[4] == "room" and .term[1:3] == $k[0:2])]
                 + [$keys[] | select(.term[4] == "office" and .term[1] == $k[0])]
+                + [$keys[] | select(.term[4] == "floor" and .term[1] == floor_of($k[0]))]
                 + [$keys[] | select(.term[4] == "workplace")]) as $spoken
              | (if ($spoken | length) == 0 then {state: "none", scope: null, origins: []}
                 else {state: $spoken[0].term[5], scope: $spoken[0].term[4], origins: $spoken[0].origins} end) as $key
@@ -299,12 +341,14 @@ joined($b[0]; $root) as $plan
                       origins: $h.origins} end) as $home
              | ([$expects[] | select(
                   .term[4] == "workplace"
+                  or (.term[4] == "floor" and .term[1] == floor_of($k[0]))
                   or (.term[4] == "office" and .term[1] == $k[0])
                   or (.term[4] == "room" and .term[1:3] == $k[0:2])
                   or (.term[4] == "seat" and .term[1:4] == $k))]
                 | group_by(.term[5])
                 | map({name: .[0].term[5], scopes: (map(.term[4]) | unique | sort_by(rank)), origins: [.[].origins[]]})) as $expecting
-             | ([$remaining[] | {key: .term[5], value: {key: ($k + [.term[5]]), value: [.term[6]], origins, source: "statement", term}}]
+             | ([$remaining | group_by(.term[5])[]
+                 | {key: .[0].term[5], value: {key: ($k + [.[0].term[5]]), value: [.[0].term[6]], origins: [.[].origins[]], source: "statement", term: .[0].term}}]
                 | from_entries) as $stated
              | ((if $mail == null then [] else ["mail", "grab", "write"] end) + (if $record_path == null then [] else ["record"] end)) as $actions
              | (if ($actions | length) == 0 then null
@@ -314,6 +358,7 @@ joined($b[0]; $root) as $plan
              | ([$record_terms[] | select(.term[5] == "pane" and .term[4] == "seat" and .term[1:4] == $k)]
                 + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "room" and .term[1:3] == $k[0:2])]
                 + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "office" and .term[1] == $k[0])]
+                + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "floor" and .term[1] == floor_of($k[0]))]
                 + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "workplace")]) as $spoke
              | (if $logs | not then null
                 elif ($spoke | length) == 0 then {pane: "none", scope: null, origins: []}
@@ -327,13 +372,13 @@ joined($b[0]; $root) as $plan
                 else {granted: [], unreached: $ssh_granted} end) as $ssh_seat
              | ([$wakes[] | select(.term[1] == $kind)][0]) as $w
              | (if $w == null then null else {pattern: $w.term[2], origins: $w.origins} end) as $wake
-             | {seat: $k, name: $pane[4], kind: $kind, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record, ssh: $ssh_seat, wake: $wake}]
+             | {seat: $k, name: $pane[4], kind: $kind, mode: $mode, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record, ssh: $ssh_seat, wake: $wake}]
           as $folds
           | [$folds[] | select(.home != null) | . as $f
              | ([$f.home.variable] + [$f.home.variables[].name]) as $given
              | $f.expects[] | .name as $n | select($given | index($n))
              | "seat \($f.name) (\($f.seat | join("/"))): it expects the value \(.name), which the home of its kind \($f.home.kind) gives it (the expect at \(ats(.origins)); the home at \(ats($f.home.origins + [$f.home.variables[] | select(.name == $n) | .origins[]])))"] as $clashes
-          | [$folds[] | select(.stated | has("/") | not)
+          | [$folds[] | select(.mode != "unenforced" and (.stated | has("/") | not))
              | "seat \(.name) (\(.seat | join("/"))): no row for /"
                + ([$reached[] | select(.term[5] != "record")] as $asks
                   | if $mail != null or ($asks | length) > 0
@@ -351,7 +396,7 @@ joined($b[0]; $root) as $plan
             elif ($unheld | length) > 0 then {errors: $unheld}
             else
               [$folds[] | . as $f
-               | (reduce $labels[] as $l ({rows: $f.stated, at: []};
+               | (if $f.mode == "unenforced" then {rows: {}, at: []} else reduce $labels[] as $l ({rows: $f.stated, at: []};
                    if .rows | has($l.path) then
                      (if .rows[$l.path].source == "statement" then .at += [{statement: (.rows[$l.path] | statement_object), label: {value: $l.value, origins: $l.origins}}] else . end)
                    else
@@ -362,7 +407,7 @@ joined($b[0]; $root) as $plan
                          else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["hidden"], origins: $l.origins, source: "label"} end
                        elif $above == "scratch" or ($above == "hidden" and $aboverow.source != "label") then .
                        else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["read-only"], origins: $l.origins, source: "label"} end
-                   end)) as $made
+                   end) end) as $made
                | ($made.rows | with_entries(
                    .key as $p
                    | if .value.source == "label" and .value.value[0] == "hidden"
@@ -407,6 +452,7 @@ joined($b[0]; $root) as $plan
                       seat, kind,
                       clearance: {value: .clearance.value, origin: (.clearance.origins[0] // null), origins: .clearance.origins, scope: .clearance.scope},
                       key}
+                     + (if $floored then {floor: floor_of(.seat[0]), enforced: (.mode == "enforced")} else {} end)
                      + (if .home == null then {} else {home} end)
                      + (if (.expects | length) == 0 then {} else {expects} end)
                      + (if .reach == null then {} else {reach: (.reach | map_values(map(.name)))} end)
@@ -419,6 +465,16 @@ joined($b[0]; $root) as $plan
                       exception_count: (.replacing | length),
                       distinct_replaced_statement_count: .distinct,
                       statements_at_labelled_paths: .at}]}
+                    + (if $floored | not then {}
+                       else {floors: [$floors[] | {key, name, houses, enforced, socket, conf, smallest, origins}],
+                             rooms: [$window_rooms[] as $rm | [$done[] | select(.seat[0:2] == $rm)] as $occ
+                               | select(($occ | length) > 0 and $occ[0].mode == "enforced")
+                               | {room: $rm, of: (if ($room_floor_keys | index($rm[0])) != null then "floor" else "office" end), floor: floor_of($rm[0]),
+                                  clearance: {value: $occ[0].clearance.value, origin: ($occ[0].clearance.origins[0] // null),
+                                              origins: $occ[0].clearance.origins, scope: $occ[0].clearance.scope},
+                                  occupants: [$occ[].name],
+                                  rows: [$occ[0].rows[] | {key: ($rm + [.key[3]]), value, origins, source}],
+                                  statements_at_labelled_paths: $occ[0].at}]} end)
                     + (if $mail == null then {} else {mail: $mail} end)
                     + (if $ssh | not then {} else {ssh: {keys: [$ssh_keys_e[] | {name: .term[1], path: .term[2], origins}]}} end)
                     + (if $logs | not then {}
@@ -430,6 +486,10 @@ joined($b[0]; $root) as $plan
                      wakes: [$wakes[] | {kind: .term[1], pattern: .term[2], origins}],
                      record_path_origins: [$rpaths[].origin],
                      reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,
+                     unnumbered: [$window_rooms[] as $rm | [$done[] | select(.seat[0:2] == $rm)] as $occ
+                       | select(($occ | length) > 0 and $occ[0].mode == "enforced" and $occ[0].clearance.value == null)
+                       | {room: $rm, floor: floor_of($rm[0])}],
+                     unenforced: [$floors[] | select(.enforced | not) | .key],
                      passages: [$labels[] | . as $l
                        | {label: $l, seats: [$done[] | select(any(.rows[]; .passage == true and .key[3] == $l.path)) | .name]}
                        | select((.seats | length) > 0)]}}

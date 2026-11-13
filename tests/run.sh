@@ -1202,7 +1202,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1549,6 +1549,164 @@ t_the_fold() {
   check "[C31] naming it" said "01 is not a whole number"
 }
 
+floors_clone() {
+  jq '. + {floors: [
+    {key: "bridge", name: "Bridge", houses: "offices", enforced: false, socket: "tmux-default", conf: "floors/bridge.conf", smallest: "80x24"},
+    {key: "deck", name: "Deck", houses: "offices", enforced: true, socket: "run", conf: "floors/deck.conf", smallest: "80x24"},
+    {key: "lodge", name: "Lodge", houses: "rooms", enforced: true, socket: "run", conf: "floors/lodge.conf", smallest: "80x24"}]}' \
+    "$clone/workplace.json" > "$scratch/w" && cp -- "$scratch/w" "$clone/workplace.json"
+  mkdir -p -- "$clone/floors"
+  : > "$clone/floors/bridge.conf"
+  : > "$clone/floors/deck.conf"
+  : > "$clone/floors/lodge.conf"
+  rm -f -- "$clone/tmux.conf"
+}
+floors_terms='.programs[-1].recorded |= map(select(.term[4] != "seat"))
+  | .programs[0].plan[0][1] as $name
+  | .programs[0].plan = [["workplace", $name],
+      ["floor", "bridge", "Bridge", "offices", "unenforced", "tmux-default", $root + "/config/floors/bridge.conf", "80x24"],
+      ["floor", "deck", "Deck", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"],
+      ["floor", "lodge", "Lodge", "rooms", "enforced", "run", $root + "/config/floors/lodge.conf", "80x24"]]
+  | (.programs[] | select(.path == "harbor/office.typify") | .plan) += [["house", "deck", "harbor"]]
+  | (.programs[] | select(.path == "orchard/office.typify") | .plan) += [["house", "bridge", "orchard"]]
+  | ([.programs[] | select(.path == "harbor/tower/room.typify")][0] | .path = "lodge/east/room.typify"
+      | .plan |= map(.[1] = "lodge" | .[2] = "east" | if .[0] == "window" then .[3] = "East" else . end)) as $room
+  | ([.programs[] | select(.path == "harbor/tower/watch/seat.typify")][0] | .path = "lodge/east/ida/seat.typify"
+      | .plan |= map(if type == "object" then .term[1:4] = ["lodge", "east", "ida"]
+                     else .[1:4] = ["lodge", "east", "ida"] | if .[0] == "pane" then .[4] = "Lodge Ida" else . end end)) as $seat
+  | .programs = .programs[0:-1] + [$room, $seat] + .programs[-1:]'
+
+t_floors() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "plan of a configuration with three floors of both kinds" exit_is 0 wplan
+  check "[C100] the root program is the root, the workplace and a line for each floor" \
+    cmp -s "$STUB_DIR/root-program" <(printf '%s\n' "workdir : $root" "workplace : $label" \
+      "floor : bridge : Bridge : offices : unenforced : tmux-default : config/floors/bridge.conf : 80x24" \
+      "floor : deck : Deck : offices : enforced : run : config/floors/deck.conf : 80x24" \
+      "floor : lodge : Lodge : rooms : enforced : run : config/floors/lodge.conf : 80x24")
+  check "[C29] with floors the root program's derivation is root-floors-v1" \
+    test "$(jq -r '.derivations["root-program"]' "$clone/PLAN/manifest.json")" = root-floors-v1
+  check "[C100] and each floor's file is an input, in the floors' order, where tmux.conf was" \
+    test "$(jq -r '[.inputs[].path][-3:] | join(" ")' "$clone/PLAN/manifest.json")" = "floors/bridge.conf floors/deck.conf floors/lodge.conf"
+  check "[C104] view.json names the floors" test "$(jq -c '[.floors[] | [.key, .houses, .enforced, .socket]]' "$clone/PLAN/view.json")" = \
+    '[["bridge","offices",false,"tmux-default"],["deck","offices",true,"run"],["lodge","rooms",true,"run"]]'
+  check "[C104] and each seat's floor" test "$(jq -c '[.seats[] | [.seat[2], .floor, .enforced]]' "$clone/PLAN/view.json")" = \
+    '[["keeper","deck",true],["pilot","deck",true],["watch","deck",true],["grower","bridge",false],["picker","bridge",false],["ida","lodge",true]]'
+  check "[C104] and each room of an enforced floor, in the order of the window terms, with its type and occupants" \
+    test "$(jq -c '[.rooms[] | [(.room | join("/")), .of, .floor, .occupants]]' "$clone/PLAN/view.json")" = \
+    '[["harbor/dock","office","deck",["Harbor Keeper","Harbor Pilot"]],["harbor/tower","office","deck",["Harbor Watch"]],["lodge/east","floor","lodge",["Lodge Ida"]]]'
+  check "[C104] an unenforced floor's seats carry no rows, and refuse nothing for it" test "$(seat_of grower .rows)" = 0
+  check "[C104] room-mates carry equal rows" test "$(rows_of keeper)" = "$(rows_of pilot)"
+  check "[C104] and the room's rows are theirs, keyed by the room" \
+    test "$(jq -r '.rooms[0].rows | map("\(.key | join("/")) \(.value[0])") | join(",")' "$clone/PLAN/view.json")" = "harbor/dock// read-only,harbor/dock/$root/harbor/berth read-write,harbor/dock/$root/harbor/ledger hidden"
+  check "[C104] plan says that the unenforced floor has no view" \
+    said "the unenforced floor bridge has no view: its occupants read the machine as the user does, and labels, closed paths and bans bind them as conduct (5.124 point 3)"
+  check "[C104] and names each room of an enforced floor that has no number (5.125 point 7)" \
+    said "room lodge/east, on the enforced floor lodge, has no number: it is cleared for no label, and least among its office's rooms (5.125 point 7)"
+
+  statements_plan "$floors_terms"' | .state["seat-kinds"] = [{key: ["harbor", "dock", "keeper"], value: ["navigator"], masked: false, origin: at(30)},
+      {key: ["harbor", "dock", "pilot"], value: ["gardener"], masked: false, origin: at(31)}]
+    | .programs[-1].recorded += [st("navigator"; "-"; "-"; "kind"; $root + "/tools"; "hidden"; 9), st("gardener"; "-"; "-"; "kind"; $root + "/tools"; "hidden"; 10)]'
+  check "plan with two kinds in one room that say the same" exit_is 0 wplan
+  check "[C104] 5.125 point 4: each kind's statement reaches the whole room, as one row with both origins" \
+    test "$(jq -c --arg p "$root/tools" '[.rows[] | select(.key[3] == $p) | [.key[2], .value[0], [.origins[].line]]]' "$clone/PLAN/view.json")" = \
+    '[["keeper","hidden",[9,10]],["pilot","hidden",[9,10]]]'
+  statements_plan "$floors_terms"' | .state["seat-kinds"] = [{key: ["harbor", "dock", "keeper"], value: ["navigator"], masked: false, origin: at(30)},
+      {key: ["harbor", "dock", "pilot"], value: ["gardener"], masked: false, origin: at(31)}]
+    | .programs[-1].recorded += [st("navigator"; "-"; "-"; "kind"; $root + "/tools"; "hidden"; 9), st("gardener"; "-"; "-"; "kind"; $root + "/tools"; "read-only"; 10)]'
+  check "[C104] 5.124 point 5: two statements of different states about one path at one room refuse the plan" exit_is 1 wplan
+  check "[C104] naming the room, the path and every origin" \
+    said "two statements about $root/tools at the room harbor/dock differ: hidden from programs/policy.typify:9, read-only from programs/policy.typify:10 (5.124 point 5)"
+
+  local refusals=(
+    'C104|.programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; $root + "/tools"; "hidden"; 9)]|programs/policy.typify:9: the statement speaks at the seat harbor/dock/keeper, on the enforced floor deck, where the room is one view and a seat'"'"'s statement would promise a wall that the room does not have (5.124 point 5)'
+    'C101|.programs[-1].recorded += [st("lodge"; "-"; "-"; "office"; $root + "/tools"; "hidden"; 9)]|programs/policy.typify:9: the statement names the office lodge, and lodge is a floor (5.125 point 1)'
+    'C103|.programs[-1].recorded += [st("harbor"; "-"; "-"; "floor"; $root + "/tools"; "hidden"; 9)]|programs/policy.typify:9: the statement names the floor harbor, and harbor is an office (5.125 point 1)'
+    'C103|.programs[-1].recorded += [cl("deck"; "-"; "-"; "floor"; "1"; 9), sc(20)]|programs/policy.typify:9: floor is not a scope of a clearance: a room'"'"'s number is its own line'"'"'s, else its office'"'"'s (5.122 point 1)'
+    'C104|.programs[-1].recorded += [{term: ["reach", "harbor", "dock", "keeper", "seat", "grab", "-", "-", "-", "workplace", "allowed"], origin: at(9)}]|programs/policy.typify:9: the reach asks for the seat harbor/dock/keeper, on the enforced floor deck, whose room holds 2 occupants: what one occupant of a room may ask, each of its room-mates may (5.118)'
+    'C101|(.programs[0].plan) += [["server", "x", $root + "/config/floors/deck.conf"]]|the plan holds 1 server terms and 3 floor terms: a plan holds one server and no floor, or no server, one workplace and at least one floor'
+    'C101|(.programs[0].plan) += [["workplace", "again"]]|the plan holds 2 workplace terms, and with floors it holds exactly one'
+    'C101|(.programs[] | select(.path == "orchard/office.typify") | .plan) += [["house", "lodge", "orchard"]]|the house of orchard names the floor lodge, which houses no offices (orchard/office.typify, term 3)'
+    'C101|(.programs[] | select(.path == "orchard/office.typify") | .plan) += [["house", "lodge", "orchard"]]|the office orchard stands in 2 houses, and it stands in one (orchard/office.typify, term 2; orchard/office.typify, term 3)'
+    'C101|(.programs[] | select(.path == "harbor/office.typify") | .plan) |= map(select(.[0] != "house"))|the office harbor stands on no floor: with floors every session stands in a house (harbor/office.typify, term 1)'
+    'C101|(.programs[] | select(.path == "orchard/office.typify") | .plan) += [["session", "lodge", "Lodge"]]|the floor lodge houses rooms, and the plan holds a session or a house for it (orchard/office.typify, term 3)'
+    'C101|(.programs[0].plan) += [["floor", "orchard", "Orchard", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the key orchard names a floor and an office'
+    'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the floor attic holds no office and no room'
+    'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "rooms", "enforced", "run", $root + "/config/floors/deck.conf", "80"]]|the floor attic says smallest "80": COLSxROWS'
+  )
+  local entry
+  local number rest
+  for entry in "${refusals[@]}"; do
+    number=${entry%%|*} rest=${entry#*|}
+    statements_plan "$floors_terms | ${rest%|*}"
+    check "[$number] plan refuses, with exit 1: ${rest##*|}" exit_is 1 wplan
+    check "[$number] naming it" said "${rest##*|}"
+  done
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [st("deck"; "-"; "-"; "floor"; $root + "/tools"; "hidden"; 9)]'
+  check "plan with a statement of a floor" exit_is 0 wplan
+  check "[C103] a floor's statement reaches the seats of the offices it houses" bash -c '[[ $1 == *"/tools hidden"* ]]' _ "$(rows_of watch)"
+  check "[C103] and no seat of another floor" bash -c '[[ $1 != *"/tools "* ]]' _ "$(rows_of ida)"
+  statements_plan '(.programs[0].plan) += [["workplace", "lonely"]]'
+  check "[C101] a workplace term in a plan without floors refuses it" exit_is 1 wplan
+  check "[C101] naming it" said "workplace speaks only in a plan with floors, and this plan holds none (workplace.typify, term 2)"
+
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [{term: ["key", "harbor", "dock", "keeper", "seat", "held"], origin: at(9)}]'
+  check "plan again, with a key held by a seat of the floor deck" exit_is 0 wplan
+  check "[C2] build of a configuration with floors" exit_is 0 wp build
+  local s=$HOME/.local/state/workplace/$label
+  check "[C102] each floor has a state directory of its own, mode 700, beneath the configuration's" \
+    bash -c 'for f in bridge deck lodge; do [[ -d $1/floors/$f && $(stat -c %a "$1/floors/$f") == 700 ]] || exit 1; done' _ "$s"
+  check "[C102] the seat's key home stands in its floor's state, by its place among that floor's panes" \
+    bash -c '[[ -d $1/floors/deck/keys/01 && ! -e $1/keys ]]' _ "$s"
+  check "[C102] and BUILD holds the floor's keys.json, which the MANIFEST lists" \
+    bash -c '[[ $(jq -r ".state + \" \" + .seats[0].name + \" \" + .seats[0].home" "$1/BUILD/floors/deck/keys.json") == "$2/floors/deck Harbor Keeper keys/01" ]] && grep -q "  floors/deck/keys.json$" "$1/BUILD/MANIFEST"' _ "$clone" "$s"
+  check "[C101] up refuses a build that stands on floors, which S2's stop 4 brings" exit_is 2 wp up
+  check "[C101] saying so" said "the build stands on floors; this frame plans and builds floors and does not yet stand them up, which comes with S2's stop 4"
+  check "[C102] unbuild" exit_is 0 wp unbuild
+  check "[C102] removes the key homes in every floor's state" \
+    bash -c '[[ ! -e $1/floors/deck/keys ]] && grep -qF "unbuild: removed the key homes in $1/floors/deck/keys, 1 homes" "$2"' _ "$s" "$scratch/out"
+}
+
+t_floors_assembly() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  local cases=(
+    '. + {socket: "default"}|workplace.json holds socket beside floors: with floors, each floor names its socket'
+    '.floors = []|workplace.json'"'"'s floors is not a list of one or more floors'
+    '.floors[0] += {colour: "red"}|the floor at index 0 holds colour, which the loop does not read'
+    '.floors[0] |= del(.smallest)|the floor at index 0 lacks smallest'
+    '.floors[0].key = "-x"|the floor key "-x" is refused: it begins with -'
+    '.floors[1].key = "bridge"|the floor key bridge is listed 2 times'
+    '.floors[0].houses = "halls"|the floor bridge houses "halls": offices or rooms'
+    '.floors[0].enforced = "no"|the floor bridge says enforced "no": true or false'
+    '.floors[0].socket = "tcp"|the floor bridge takes the socket "tcp": run or tmux-default'
+    '.floors[1].socket = "tmux-default"|the floor deck is enforced and takes tmux-default: an enforced floor stands on a socket of its run, so that no plain tmux command reaches it (5.124 point 2)'
+    '.floors[1].enforced = false | .floors[1].socket = "tmux-default"|2 floors take the socket tmux-default, and at most one may'
+    '.floors[0].conf = "../bridge.conf"|the floor bridge names its conf "../bridge.conf", which is not a relative path'
+    '.floors[0].smallest = "wide"|the floor bridge says smallest "wide": COLSxROWS'
+    '.floors[0].name = "Bridge: upper"|the floor bridge is named "Bridge: upper", which is refused: it holds a :, which separates the words of the root program'
+  )
+  local entry
+  for entry in "${cases[@]}"; do
+    jq "${entry%|*}" "$clone/workplace.json" > "$scratch/w2" && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json"
+    check "[C100] plan refuses, with exit 2: ${entry##*|}" exit_is 2 wplan
+    check "[C100] naming it" said "${entry##*|}"
+    cp -- "$scratch/w-saved" "$clone/workplace.json"
+  done
+  jq '.floors[0].conf = "floors/none.conf"' "$clone/workplace.json" > "$scratch/w2" && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json"
+  check "[C100] a floor whose conf is no file in the clone refuses plan, with exit 2" exit_is 2 wplan
+  check "[C100] naming it" said "the floor bridge names its conf floors/none.conf, which is not a file in the clone"
+  cp -- "$scratch/w-saved" "$clone/workplace.json"
+  : > "$clone/tmux.conf"
+  check "[C100] a tmux.conf beside floors refuses plan, with exit 2" exit_is 2 wplan
+  check "[C100] saying so" said "tmux.conf stands in the clone beside floors: each floor names its own file"
+  rm -f -- "$clone/tmux.conf"
+  check "[C100] and without it plan goes on" exit_is 0 wplan
+}
+
 t_plan_relative() {
   scoped_clone
   local extra='.programs[-1].recorded += [lb($root + "/orchard"; "2"; 9), cl("harbor"; "dock"; "-"; "room"; "3"; 10), sc(11)]'
@@ -1690,7 +1848,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -1710,7 +1868,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -1719,7 +1877,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -1963,7 +2121,7 @@ t_ssh_grants_fold() {
   check "[C85] and, for a seat of the scope that holds no key, that the grant does not reach it" \
     said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
   check "[C85] the fold's version is one that reads ssh grants" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
   statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "node", "keys/node"]; 10), s(["ssh-key", "tower", "keys/tower"]; 11), s(["ssh-grant", "harbor", "tower", "-", "room", "tower", "granted"]; 12)]'
   check "plan with a key that no grant takes, and one granted to a room whose seat holds no key" exit_is 0 wplan
   check "[C85] plan names a key that no grant takes to a seat that holds a key as reaching no seat" \
@@ -2181,7 +2339,7 @@ t_ssh_grants() {
   else
     skip "[C88] no smartcard daemon is installed here (gpgconf names ${scd:-none}), so that none runs after a listing is measured where one is"
   fi
-  local signed="$state/records/harbor dock keeper/signed"
+  local signed="$state/records/Harbor Keeper/signed"
   check "[C91] keeper's agent logs to signed in its record a line for each ssh signature, with the second in UTC" \
     bash -c 'n=0; while IFS= read -r line; do at=$(date -u -d "${line:0:19}" +%s 2> /dev/null) || continue; (( at >= $2 && at <= $3 + 1 )) && n=$(( n + 1 )); done < <(grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} gpg-agent\[[0-9]+\] ssh request handler for sign_request \(13\) started$" "$1"); (( n >= 3 ))' \
       _ "$signed" "$t0" "$t1"
@@ -2193,7 +2351,7 @@ t_ssh_grants() {
   for name in account node-ec node-rsa; do secrets+=("$(sed -n 2p "$keys/$name")"); done
   check "[C91] and nothing of the keys or of the data" bash -c 'for s in "${@:2}"; do ! grep -qF -- "$s" "$1" || exit 1; done' _ "$signed" "${secrets[@]}"
   check "[C72] [C91] the carrier chains signed among the kept files" \
-    eventually_long bash -c 'jq -e "select(.file == \"harbor dock keeper/signed\")" "$1" > /dev/null 2>&1' _ "$state/records/chain"
+    eventually_long bash -c 'jq -e "select(.file == \"Harbor Keeper/signed\")" "$1" > /dev/null 2>&1' _ "$state/records/chain"
   wp why "Harbor Keeper" "$state/gnupg/ssh" > "$scratch/out" 2>&1
   check "[C92] why names a seat's grants and the terms that give them" \
     said "ssh key account: granted, by the workplace's term, from programs/SSH.typify:4; the seat is shown its public file at $state/gnupg/ssh/account.pub"
@@ -2236,7 +2394,7 @@ t_ssh_grants() {
   check "down" exit_is 0 wp down
   check "[C87] no agent of a key home runs after down" no_agent_of "$state/keys"
   check "[C75] [C91] record verify reads keeper's signed against its chain, over its whole span" exit_is 0 wp record verify "Harbor Keeper" signed
-  check "[C75] and it agrees" said "harbor dock keeper/signed agrees with its chain up to byte "
+  check "[C75] and it agrees" said "Harbor Keeper/signed agrees with its chain up to byte "
 }
 
 home_terms='def h($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/HOMES.typify"}};
@@ -2302,7 +2460,7 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
   check "[C32] plan prints each seat's home and the names it expects" \
     bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; cleared for no label, since neither its room nor its office has a clearance; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; cleared for no label, since neither its room nor its office has a clearance; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
@@ -2358,7 +2516,7 @@ t_home_and_values_selection() {
   check "[C45] the names the frame keeps are the binding's kept-names, the very names its fixed part gives" \
     test "$(jq -c '.["kept-names"] as $k | [.tables[]["after-rows"]?[]? | (.environment // [])[] | .[0]] | unique == ($k | sort) and $k == ["GNUPGHOME", "SSH_AUTH_SOCK"]' "$tool/host/binding.json")" = true
   write_seed
-  local hk=$HOME/.local/state/workplace/$label/homes/navigator/harbor/dock/keeper
+  local hk="$HOME/.local/state/workplace/$label/homes/navigator/Harbor Keeper"
   statements_plan "$home_terms"' | .programs[-1].recorded += [h(["home-variable", "navigator", "WPT_b", "b/deep"]; 9), h(["home-variable", "navigator", "WPT_A", "a"]; 10), h(["home-variable", "navigator", "WPT__", "u"]; 11)]'
   check "plan with further variables written out of the code-point order of their names" exit_is 0 wplan
   check "[C47] build" exit_is 0 wp build
@@ -2380,9 +2538,9 @@ t_homes() {
   scoped_clone
   write_seed
   local w=$label s=$HOME/.local/state/workplace/$label
-  local hk=$HOME/.local/state/workplace/$label/homes/navigator/harbor/dock/keeper hp=$HOME/.local/state/workplace/$label/homes/navigator/harbor/dock/pilot
-  local hg=$HOME/.local/state/workplace/$label/homes/gardener/orchard/barn/grower
-  local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "home=WPT_HOME", "value=WPT_CACHE", "hidden=" + $s + "/homes/navigator/harbor/dock/pilot"])
+  local hk="$HOME/.local/state/workplace/$label/homes/navigator/Harbor Keeper" hp="$HOME/.local/state/workplace/$label/homes/navigator/Harbor Pilot"
+  local hg="$HOME/.local/state/workplace/$label/homes/gardener/Orchard Grower"
+  local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "home=WPT_HOME", "value=WPT_CACHE", "hidden=" + $s + "/homes/navigator/Harbor Pilot"])
     | add("harbor/tower/watch/seat.typify"; ["report=" + $root + "/harbor/charts/watch", "home=WPT_HOME", "hidden=" + $s])
     | add("orchard/barn/grower/seat.typify"; ["report=" + $root + "/orchard/almanac/grower", "home=WPT_HOME", "value=WPT_CACHE"])'
   statements_plan "$home_terms | $probe_args ${args//\$s/\"$s\"}"' | .programs[-1].recorded += [h(["record-directory", "harbor", "dock", "keeper", "harbor"]; 10)]'
@@ -2390,18 +2548,18 @@ t_homes() {
   check "[C46] build" exit_is 0 wp build
   check "[C46] it makes a kept home for keeper and for pilot, each seeded" \
     bash -c 'grep -qxF "home: $1 made for Harbor Keeper (harbor/dock/keeper), and seeded by $3" "$4" && grep -qxF "home: $2 made for Harbor Pilot (harbor/dock/pilot), and seeded by $3" "$4"' _ "$hk" "$hp" "$root/tools/seed" "$scratch/out"
-  check "[C46] a kept home is S/homes/KIND/A/B/C, named by its kind and its seat's keys; it, S/homes and each directory between are 0700, and nothing else stands there" \
-    test "$(cd "$s/homes" && find . -maxdepth 4 -type d -printf '%p %m\n' | LC_ALL=C sort | tr '\n' ',')" = ". 700,./navigator 700,./navigator/harbor 700,./navigator/harbor/dock 700,./navigator/harbor/dock/keeper 700,./navigator/harbor/dock/pilot 700,"
+  check "[C46] a kept home is S/homes/KIND/NAME, named by its kind and its seat's name; it, S/homes and the kind's directory are 0700, and nothing else stands there" \
+    test "$(cd "$s/homes" && find . -maxdepth 2 -type d -printf '%p %m\n' | LC_ALL=C sort | tr '\n' ',')" = ". 700,./navigator 700,./navigator/Harbor Keeper 700,./navigator/Harbor Pilot 700,"
   check "[C46] no directory stands for a scratch home, or for a seat of no kind" test ! -e "$s/homes/gardener"
   check "[C46] the frame's record names the seat of each kept home, by the home's name" \
-    test "$(jq -c 'map_values(del(.words))' "$s/homes.json")" = '{"navigator/harbor/dock/keeper":{"seat":"harbor/dock/keeper","state":"made"},"navigator/harbor/dock/pilot":{"seat":"harbor/dock/pilot","state":"made"}}'
+    test "$(jq -c 'map_values(del(.words))' "$s/homes.json")" = '{"navigator/Harbor Keeper":{"seat":"harbor/dock/keeper","state":"made"},"navigator/Harbor Pilot":{"seat":"harbor/dock/pilot","state":"made"}}'
   check "[C46] and only its owner may read it" test "$(stat -c %a "$s/homes.json")" = 600
   check "[C46] BUILD/homes.json, listed in the MANIFEST, holds each home with its variables" \
     bash -c 'grep -qE "^[0-9a-f]{64}  homes\.json$" "$1/MANIFEST" && [[ $(jq -c "[.seats[] | [.name, .state, .home, .environment]]" "$1/homes.json") == "$2" ]]' _ "$clone/BUILD" \
-    "$(jq -c -n --arg s "$s/homes" '[["Harbor Keeper", "kept", "homes/navigator/harbor/dock/keeper", [["WPT_HOME", "\($s)/navigator/harbor/dock/keeper"], ["WPT_CACHE", "\($s)/navigator/harbor/dock/keeper/cache"]]],
-      ["Harbor Pilot", "kept", "homes/navigator/harbor/dock/pilot", [["WPT_HOME", "\($s)/navigator/harbor/dock/pilot"], ["WPT_CACHE", "\($s)/navigator/harbor/dock/pilot/cache"]]],
-      ["Orchard Grower", "scratch", "homes/gardener/orchard/barn/grower", [["WPT_HOME", "\($s)/gardener/orchard/barn/grower"], ["WPT_CACHE", "\($s)/gardener/orchard/barn/grower"]]],
-      ["Orchard Picker", "scratch", "homes/gardener/orchard/barn/picker", [["WPT_HOME", "\($s)/gardener/orchard/barn/picker"], ["WPT_CACHE", "\($s)/gardener/orchard/barn/picker"]]]]')"
+    "$(jq -c -n --arg s "$s/homes" '[["Harbor Keeper", "kept", "homes/navigator/Harbor Keeper", [["WPT_HOME", "\($s)/navigator/Harbor Keeper"], ["WPT_CACHE", "\($s)/navigator/Harbor Keeper/cache"]]],
+      ["Harbor Pilot", "kept", "homes/navigator/Harbor Pilot", [["WPT_HOME", "\($s)/navigator/Harbor Pilot"], ["WPT_CACHE", "\($s)/navigator/Harbor Pilot/cache"]]],
+      ["Orchard Grower", "scratch", "homes/gardener/Orchard Grower", [["WPT_HOME", "\($s)/gardener/Orchard Grower"], ["WPT_CACHE", "\($s)/gardener/Orchard Grower"]]],
+      ["Orchard Picker", "scratch", "homes/gardener/Orchard Picker", [["WPT_HOME", "\($s)/gardener/Orchard Picker"], ["WPT_CACHE", "\($s)/gardener/Orchard Picker"]]]]')"
   check "[C47] the seed ran once for each new kept home" test "$(grep -c '' "$HOME/seed-log")" = 2
   check "[C47] with the home, then the seat's start directory, then its declared directories, joined and each once, as its words" \
     test "$(cat "$hk/seeded" | tr '\n' ' ')" = "$root/harbor $root/harbor/berth $root/harbor/vault "
@@ -2426,7 +2584,7 @@ t_homes() {
   check "[C48] it writes there" r "$report" "home write: ok"
   check "[C48] it sees what the seed wrote" r "$report" "home seeded: $root/harbor $root/harbor/berth $root/harbor/vault "
   check "[C48] a kept home is the machine's directory itself" r "$report" "home where: $(stat -c %d:%i "$hk")"
-  check "[C48] of the homes beside it, keeper sees its own alone" r "$report" "home siblings: keeper "
+  check "[C48] of the homes beside it, keeper sees its own alone" r "$report" "home siblings: Harbor Keeper "
   check "[C48] of S, the homes alone" r "$report" "home state: homes "
   check "[C48] and of the kinds, its own alone" r "$report" "home kinds: navigator "
   check "[C48] pilot's home is not shown to keeper" r "$report" "hidden $hp: unseen"
@@ -2476,7 +2634,7 @@ t_homes() {
   check "[C47] naming the seed, the kind, the seat and the exit, with the last five lines it said that are not empty, empty lines between and after them" \
     said "build refuses: the seed $root/tools/failing-seed of the kind navigator failed for Harbor Pilot (harbor/dock/pilot) with exit 3, and its new home is removed: two three four five the seed fails on purpose "
   check "[C47] its new home is removed, the old one kept, and the record names the old one alone" \
-    bash -c '[[ ! -e $2 && -d $3 && $(jq -c "keys" "$1/homes.json") == "[\"navigator/harbor/dock/keeper\"]" ]]' _ "$s" "$hp" "$hk"
+    bash -c '[[ ! -e $2 && -d $3 && $(jq -c "keys" "$1/homes.json") == "[\"navigator/Harbor Keeper\"]" ]]' _ "$s" "$hp" "$hk"
   check "[C47] and no BUILD is left" test ! -e "$clone/BUILD"
   statements_plan "$home_terms | $probe_args"' | (.programs[-1].recorded[] | select(.term[0] == "home-seed") | .term[2]) = "tools/nothing"'
   check "plan with a seed that is not there" exit_is 0 wplan
@@ -2484,7 +2642,7 @@ t_homes() {
   check "[C47] naming it" said "build refuses: the seed $root/tools/nothing of the kind navigator is not an executable file"
   statements_plan "$home_terms | $probe_args"
   check "plan" exit_is 0 wplan
-  local kh=navigator/harbor/dock/keeper
+  local kh="navigator/Harbor Keeper"
   jq --arg h "$kh" '.[$h].seat = "orchard/barn/picker"' "$s/homes.json" > "$scratch/h" && cp -- "$scratch/h" "$s/homes.json"
   check "[C46] a kept home that the record gives another seat refuses the build" exit_is 1 wp build
   check "[C46] naming both seats" said "build refuses: $s/homes.json gives the home $hk to the seat orchard/barn/picker, not to Harbor Keeper (harbor/dock/keeper); it is left alone"
@@ -2506,7 +2664,7 @@ t_homes() {
   statements_plan "$home_terms | $probe_args"' | .state["seat-kinds"] |= map(if .key == ["harbor", "dock", "pilot"] then .value = ["lookout"] else . end) | .programs[-1].recorded += [h(["home", "lookout", "WPT_HOME", "kept"]; 10)]'
   check "plan with pilot of another kind" exit_is 0 wplan
   check "[C46] build" exit_is 0 wp build
-  check "[C46] a seat whose kind changes is given another home, named by its new kind" said "home: $s/homes/lookout/harbor/dock/pilot made for Harbor Pilot (harbor/dock/pilot)"
+  check "[C46] a seat whose kind changes is given another home, named by its new kind" said "home: $s/homes/lookout/Harbor Pilot made for Harbor Pilot (harbor/dock/pilot)"
   check "[C46] and its old home stays as it was" test -f "$hp/seeded"
   check "[C47] the record keeps the words each home was seeded with" \
     test "$(jq -c --arg h "$kh" '.[$h].words' "$s/homes.json")" = "[\"$hk\",\"$root/harbor\",\"$root/harbor/berth\",\"$root/harbor/vault\"]"
@@ -2532,7 +2690,7 @@ t_values() {
   check "[C49] build" exit_is 0 wp build
   mkdir -p -- "$s"
   jq -n --arg k "$keeper_token" '{workplace: {WPT_TOKEN: "the workplace token"}, rooms: {"harbor/dock": {WPT_DOCK: "the dock value"}},
-    seats: {"harbor/dock/keeper": {WPT_TOKEN: $k}}}' > "$values"
+    seats: {"Harbor Keeper": {WPT_TOKEN: $k}}}' > "$values"
   chmod 0600 -- "$values"
   check "[C49] a value missing at every place of a seat refuses up, with exit 1" exit_is 1 wp up
   check "[C49] naming the value and each seat" \
@@ -2548,12 +2706,12 @@ t_values() {
   printf '%s\n' '{"workplace": {"WPT_TOKEN": 1}}' > "$scratch/bad" && cp -- "$scratch/bad" "$values"
   check "[C49] a run-time file of another form refuses up" exit_is 1 wp up
   check "[C49] naming what is wrong" said "$values: its workplace gives WPT_TOKEN a value that is not text"
-  jq -n '{workplace: {WPT_TOKEN: ""}, rooms: {"harbor/dock": {WPT_DOCK: "two\nlines"}}, seats: {"orchard/barn/picker": {WPT_NUL: "a\u0000b"}}}' > "$values"
+  jq -n '{workplace: {WPT_TOKEN: ""}, rooms: {"harbor/dock": {WPT_DOCK: "two\nlines"}}, seats: {"Orchard Picker": {WPT_NUL: "a\u0000b"}}}' > "$values"
   check "[C49] an empty value, one of two lines and one with a NUL byte refuse up" exit_is 1 wp up
   check "[C49] naming each name and no value" \
-    bash -c 'grep -qF "$2: its workplace gives WPT_TOKEN an empty value" "$1" && grep -qF "$2: its rooms entry \"harbor/dock\" gives WPT_DOCK a value of more than one line, or with a NUL byte" "$1" && grep -qF "$2: its seats entry \"orchard/barn/picker\" gives WPT_NUL a value of more than one line, or with a NUL byte" "$1" && ! grep -q lines "$1"' _ "$scratch/out" "$values"
+    bash -c 'grep -qF "$2: its workplace gives WPT_TOKEN an empty value" "$1" && grep -qF "$2: its rooms entry \"harbor/dock\" gives WPT_DOCK a value of more than one line, or with a NUL byte" "$1" && grep -qF "$2: its seats entry \"Orchard Picker\" gives WPT_NUL a value of more than one line, or with a NUL byte" "$1" && ! grep -q lines "$1"' _ "$scratch/out" "$values"
   jq -n --arg k "$keeper_token" '{workplace: {WPT_TOKEN: "the workplace token"}, rooms: {"harbor/dock": {WPT_DOCK: "the dock value"}},
-    offices: {orchard: {WPT_ORCHARD: "the orchard value"}}, seats: {"harbor/dock/keeper": {WPT_TOKEN: $k}}}' > "$values"
+    offices: {orchard: {WPT_ORCHARD: "the orchard value"}}, seats: {"Harbor Keeper": {WPT_TOKEN: $k}}}' > "$values"
   local old=$scratch/old-env
   mkdir -p -- "$old"
   printf '%s\n' '#!/usr/bin/env bash' 'if [[ ${1-} == --version ]]; then printf "%s\n" "env (GNU coreutils) 8.29"; exit 0; fi' "exec $(command -v env) \"\$@\"" > "$old/env"
@@ -2628,7 +2786,7 @@ t_values() {
   check "[C49] down" exit_is 0 wp down
   cp -- "$scratch/out" "$scratch/said-down"
   local new_token="a new keeper token"
-  jq --arg k "$new_token" '.seats["harbor/dock/keeper"].WPT_TOKEN = $k | .rooms = {"harbor/dock": {WPT_DOCK: "the dock value"}}' "$values" > "$scratch/v" && cp -- "$scratch/v" "$values"
+  jq --arg k "$new_token" '.seats["Harbor Keeper"].WPT_TOKEN = $k | .rooms = {"harbor/dock": {WPT_DOCK: "the dock value"}}' "$values" > "$scratch/v" && cp -- "$scratch/v" "$values"
   check "[C49] a value changed with no new plan and no new build" exit_is 0 wp up
   check "keeper ran with it" eventually bash -c 'grep -qxF "secret WPT_TOKEN: sha256 $2" "$1"' _ "$root/harbor/berth/keeper" "$(sha "$new_token")"
   check "[C49] reaches its seat at the next up" r "$root/harbor/berth/keeper" "secret WPT_TOKEN: sha256 $(sha "$new_token")"
@@ -2651,7 +2809,7 @@ t_the_clone_is_masked() {
   statements_plan "$home_terms | $probe_args $args"
   check "[C52] plan takes a hidden row beneath the clone, and a seed in the clone" exit_is 0 wplan
   check "[C52] build runs a seed that lies in the clone, outside every view" exit_is 0 wp build
-  check "[C52] it ran" said "home: $HOME/.local/state/workplace/$label/homes/navigator/harbor/dock/keeper made for Harbor Keeper (harbor/dock/keeper), and seeded by $clone/seed"
+  check "[C52] it ran" said "home: $HOME/.local/state/workplace/$label/homes/navigator/Harbor Keeper made for Harbor Keeper (harbor/dock/keeper), and seeded by $clone/seed"
   check "up" exit_is 0 wp up
   check "[C52] keeper's view masks the clone after its rows: the hidden row's closed file system, then the clone's" \
     test "$(view_ops "$(seat_command 'Harbor Keeper')" | grep -nE "^[a-z-]+ $clone(/|\$)" | cut -d: -f2 | tr '\n' ',')" = "tmpfs $clone/PLAN,tmpfs $clone,"
@@ -2807,11 +2965,11 @@ comms_reach='| .programs[-1].recorded += [
     m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "-", "-", "office", "allowed"]; 8)]'
 box_of() {
   case $1 in
-    keeper) printf '%s\n' "harbor dock keeper" ;;
-    pilot) printf '%s\n' "harbor dock pilot" ;;
-    watch) printf '%s\n' "harbor tower watch" ;;
-    grower) printf '%s\n' "orchard barn grower" ;;
-    picker) printf '%s\n' "orchard barn picker" ;;
+    keeper) printf '%s\n' "Harbor Keeper" ;;
+    pilot) printf '%s\n' "Harbor Pilot" ;;
+    watch) printf '%s\n' "Harbor Watch" ;;
+    grower) printf '%s\n' "Orchard Grower" ;;
+    picker) printf '%s\n' "Orchard Picker" ;;
   esac
 }
 state_of() { printf '%s\n' "$HOME/.local/state/workplace/$label"; }
@@ -2872,7 +3030,7 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
   check "[C54] with no reach term every seat mails every seat, and grabs and writes none; no clearance is read" \
@@ -2967,6 +3125,7 @@ t_keys_and_names() {
     ' Harbor Pilot|it begins or ends with white space'
     '.|it is .'
     '..|it is ..'
+    '.git|it begins with ., and the seat'"'"'s directories in the store and the records are named by it'
     'Harbor/Pilot|it holds a /'
     $'Harbor\tPilot|it holds a control character'
     '|it is empty'
@@ -2985,15 +3144,16 @@ t_keys_and_names() {
     | (.programs[-1].recorded[] | select(.term[3] == "keeper") | .term[3]) = ":(exclude).git"'
   check "[C67] a key such as :(exclude).git is a key: plan takes it" exit_is 0 wplan
   mkdir -p -- "$root/mailbox"
-  statements_plan "$comms_terms"' | walk(if . == "harbor" then ":(exclude).git" else . end)'
-  check "plan with mail, and harbor's key :(exclude).git" exit_is 0 wplan
+  statements_plan "$comms_terms"' | terms_of("harbor/dock/keeper/seat.typify"; if .[0] == "pane" then .[4] = ":(exclude).git keeper" else . end)
+    | walk(if . == "harbor" then ":(exclude).git" else . end)'
+  check "plan with mail, harbor's key :(exclude).git and keeper named :(exclude).git keeper" exit_is 0 wplan
   check "build" exit_is 0 wp build
   check "up" exit_is 0 wp up
-  printf '%s\n' "to: Harbor Keeper" "subject: s" --- "b" > "$scratch/req"
-  mv -- "$scratch/req" "$(state_of)/comms/orchard barn grower/out/k.md"
-  check "[C64] a mail to a seat whose office's key a pathspec would read as magic is served" answered_ok grower k.md
+  printf '%s\n' "to: :(exclude).git keeper" "subject: s" --- "b" > "$scratch/req"
+  mv -- "$scratch/req" "$(state_of)/comms/Orchard Grower/out/k.md"
+  check "[C64] a mail to a seat whose name a pathspec would read as magic is served" answered_ok grower k.md
   check "[C64] and its file is in the commit: paths reach git as literal paths" \
-    bash -c '[[ $(env -i PATH="$PATH" HOME="$1" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$2" ls-files) == *":(exclude).git dock keeper/in/"* ]]' _ "$scratch" "$(state_of)/mail"
+    bash -c '[[ $(env -i PATH="$PATH" HOME="$1" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$2" ls-files) == *":(exclude).git keeper/in/"* ]]' _ "$scratch" "$(state_of)/mail"
   check "down" exit_is 0 wp down
   rm -rf -- "$clone/BUILD"
 }
@@ -3010,21 +3170,21 @@ t_comms_store() {
   check "[C56] and says where each seat is shown its mailbox" said "mail: 5 mailboxes in $s/mail, shown at $root/mailbox"
   check "[C56] the store: the mail's repository, one directory for each seat named by its keys joined by a space, with in and sent; out and answers beside it; every directory 0700, the record 0600" \
     test "$(cd "$s" && find mail comms -path mail/.git -prune -o -printf '%p %m\n' | LC_ALL=C sort | tr '\n' ',')" = \
-    "comms 700,comms/harbor dock keeper 700,comms/harbor dock keeper/answers 700,comms/harbor dock keeper/out 700,comms/harbor dock pilot 700,comms/harbor dock pilot/answers 700,comms/harbor dock pilot/out 700,comms/harbor tower watch 700,comms/harbor tower watch/answers 700,comms/harbor tower watch/out 700,comms/orchard barn grower 700,comms/orchard barn grower/answers 700,comms/orchard barn grower/out 700,comms/orchard barn picker 700,comms/orchard barn picker/answers 700,comms/orchard barn picker/out 700,comms/record 600,comms/taken 700,mail 700,mail/harbor dock keeper 700,mail/harbor dock keeper/in 700,mail/harbor dock keeper/sent 700,mail/harbor dock pilot 700,mail/harbor dock pilot/in 700,mail/harbor dock pilot/sent 700,mail/harbor tower watch 700,mail/harbor tower watch/in 700,mail/harbor tower watch/sent 700,mail/orchard barn grower 700,mail/orchard barn grower/in 700,mail/orchard barn grower/sent 700,mail/orchard barn picker 700,mail/orchard barn picker/in 700,mail/orchard barn picker/sent 700,"
+    "comms 700,comms/Harbor Keeper 700,comms/Harbor Keeper/answers 700,comms/Harbor Keeper/out 700,comms/Harbor Pilot 700,comms/Harbor Pilot/answers 700,comms/Harbor Pilot/out 700,comms/Harbor Watch 700,comms/Harbor Watch/answers 700,comms/Harbor Watch/out 700,comms/Orchard Grower 700,comms/Orchard Grower/answers 700,comms/Orchard Grower/out 700,comms/Orchard Picker 700,comms/Orchard Picker/answers 700,comms/Orchard Picker/out 700,comms/record 600,comms/taken 700,mail 700,mail/Harbor Keeper 700,mail/Harbor Keeper/in 700,mail/Harbor Keeper/sent 700,mail/Harbor Pilot 700,mail/Harbor Pilot/in 700,mail/Harbor Pilot/sent 700,mail/Harbor Watch 700,mail/Harbor Watch/in 700,mail/Harbor Watch/sent 700,mail/Orchard Grower 700,mail/Orchard Grower/in 700,mail/Orchard Grower/sent 700,mail/Orchard Picker 700,mail/Orchard Picker/in 700,mail/Orchard Picker/sent 700,"
   check "[C65] the repository is made with no template, so it holds no hook and no hooks directory" test ! -e "$s/mail/.git/hooks"
   check "[C56] its branch is mail, with no commit yet" \
     test "$(env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" symbolic-ref HEAD)" = refs/heads/mail
   check "[C56] BUILD/mail.json holds each seat's mailbox and reach, and the MANIFEST lists it" \
-    bash -c 'jq -e --arg s "$1" "[.seats[] | [.name, .box, .in, .out, (.reach.write | length)]][0] == [\"Harbor Keeper\", \"harbor dock keeper\", \"\(\$s)/mail/harbor dock keeper/in\", \"\(\$s)/comms/harbor dock keeper/out\", 1]" "$2/BUILD/mail.json" > /dev/null && grep -q "  mail.json$" "$2/BUILD/MANIFEST"' _ "$s" "$clone"
+    bash -c 'jq -e --arg s "$1" "[.seats[] | [.name, .box, .in, .out, (.reach.write | length)]][0] == [\"Harbor Keeper\", \"Harbor Keeper\", \"\(\$s)/mail/Harbor Keeper/in\", \"\(\$s)/comms/Harbor Keeper/out\", 1]" "$2/BUILD/mail.json" > /dev/null && grep -q "  mail.json$" "$2/BUILD/MANIFEST"' _ "$s" "$clone"
   check "[C97] build copies the frame's page for a seat into BUILD/seat-page.md, the repository's share/seat-page.md byte for byte, and the MANIFEST lists it" \
     bash -c 'cmp -s "$1/share/seat-page.md" "$2/BUILD/seat-page.md" && grep -q "  seat-page.md$" "$2/BUILD/MANIFEST"' _ "$tool" "$clone"
   check "[C97] and says so" said "mail: 5 mailboxes in $s/mail, shown at $root/mailbox, each with the frame's page for a seat"
   check "[C56] status verifies the build with its mail.json" exit_is 0 wp status
-  printf '%s\n' kept > "$s/mail/harbor dock keeper/in/kept.md"
+  printf '%s\n' kept > "$s/mail/Harbor Keeper/in/kept.md"
   rm -rf -- "$clone/BUILD"
   check "[C56] a later build" exit_is 0 wp build
   check "[C56] keeps the store and its mail, and makes no new one" \
-    bash -c 'test -f "$1" && ! grep -q "the store .* is made" "$2"' _ "$s/mail/harbor dock keeper/in/kept.md" "$scratch/out"
+    bash -c 'test -f "$1" && ! grep -q "the store .* is made" "$2"' _ "$s/mail/Harbor Keeper/in/kept.md" "$scratch/out"
   rm -rf -- "$clone/BUILD"
   local bin=$scratch/bin program
   mkdir -p -- "$bin"
@@ -3109,7 +3269,7 @@ t_comms_carrier() {
     bash -c 'grep -qxF "gone    the carrier, pid $1" "$2" && grep -qxF "        requests wait in the seats'"'"' out, and none is lost, and the chain waits, until the workplace is brought down and up again" "$2"' _ "$pid" "$scratch/out"
   request watch "late.md" "to: Harbor Keeper" "subject: late" --- "while the carrier was gone"
   sleep 2
-  check "[C57] while it is gone a request waits in out" test -f "$s/comms/harbor tower watch/out/late.md"
+  check "[C57] while it is gone a request waits in out" test -f "$s/comms/Harbor Watch/out/late.md"
   wp status > "$scratch/out" 2>&1
   check "[C51] status counts the requests that wait" said "requests waiting in the seats' out: 1"
   check "[C51] and names the seat that left them" said "mail    Harbor Watch (harbor/tower/watch): 1 waiting in out"
@@ -3123,16 +3283,16 @@ t_comms_carrier() {
   check "[C57] which is gone" bash -c '! stat -L "/proc/$1/cwd" > /dev/null 2>&1' _ "$pid2"
   local delivered
   delivered=$(jq -r 'select(.request == "late.md") | .id' "$s/comms/record")
-  jq -n -c --arg id "$delivered" '{id: $id, box: "harbor tower watch", request: "again.md", action: "mail", seat: "Harbor Watch"}' > "$s/comms/serving"
+  jq -n -c --arg id "$delivered" '{id: $id, box: "Harbor Watch", request: "again.md", action: "mail", seat: "Harbor Watch"}' > "$s/comms/serving"
   check "[C57] up, after a carrier that stopped once it had delivered a mail" exit_is 0 wp up
   check "[C57] the mail it delivered is answered as delivered when the carrier starts again" answered watch again.md "ok $delivered"
   check "down" exit_is 0 wp down
-  printf '%s\n' stray > "$s/mail/harbor dock keeper/in/stray.md"
-  jq -n -c '{id: "20261112T000000Z-999999", box: "harbor dock keeper", request: "half.md", action: "mail", seat: "Harbor Keeper"}' > "$s/comms/serving"
+  printf '%s\n' stray > "$s/mail/Harbor Keeper/in/stray.md"
+  jq -n -c '{id: "20261112T000000Z-999999", box: "Harbor Keeper", request: "half.md", action: "mail", seat: "Harbor Keeper"}' > "$s/comms/serving"
   check "[C57] up, after a carrier that stopped while it delivered a mail" exit_is 0 wp up
   check "[C57] the mail is answered as delivered to none" \
     answered keeper half.md "refused the carrier stopped while it served this, and it went to none; leave it in out again"
-  check "[C57] and what it had written into the store is removed" test ! -e "$s/mail/harbor dock keeper/in/stray.md"
+  check "[C57] and what it had written into the store is removed" test ! -e "$s/mail/Harbor Keeper/in/stray.md"
   check "[C66] both are recorded" test "$(jq -r 'select(.request == "again.md" or .request == "half.md") | .outcome' "$s/comms/record" | tr '\n' ',')" = "ok,refused,"
   check "down" exit_is 0 wp down
   check "up again" exit_is 0 wp up
@@ -3142,7 +3302,7 @@ t_comms_carrier() {
   check "[C57] a carrier whose mark, RUN/carrier, is removed ends of itself at its next pass" \
     eventually_long bash -c '! kill -0 "$1" 2> /dev/null' _ "$pid3"
   check "down" exit_is 0 wp down
-  local box_out="$s/comms/harbor dock keeper/out"
+  local box_out="$s/comms/Harbor Keeper/out"
   if bwrap --dev-bind / / --tmpfs "$box_out" -- true 2> /dev/null; then
     check "[C61] up with a file system of its own over one seat's out, made in a private mount, refuses: the carrier does not start" \
       exit_is 1 bwrap --dev-bind / / --tmpfs "$box_out" -- "$BASH" "$loop" up
@@ -3200,8 +3360,8 @@ t_comms_mail() {
   id=${id#ok }
   check "[C59] one file is delivered to each reader's in, cc included, and to the writer's sent" \
     test "$(cd "$s/mail" && find . -path ./.git -prune -o -type f -printf '%p\n' | LC_ALL=C sort | tr '\n' ',')" = \
-    "./harbor dock keeper/in/$id.md,./harbor dock pilot/sent/$id.md,./harbor tower watch/in/$id.md,./orchard barn grower/in/$id.md,"
-  file="$s/mail/harbor dock keeper/in/$id.md"
+    "./Harbor Keeper/in/$id.md,./Harbor Pilot/sent/$id.md,./Harbor Watch/in/$id.md,./Orchard Grower/in/$id.md,"
+  file="$s/mail/Harbor Keeper/in/$id.md"
   at=$(sed -n 2p "$file")
   check "[C59] the frame writes the id and its own time as at" bash -c '[[ $1 =~ ^at\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]' _ "${at/:/}"
   { printf '%s\n' "id: $id" "$at" "from: Harbor Pilot" "to: Harbor Keeper, Harbor Watch" "subject: the first" "cc: Orchard Grower" \
@@ -3210,7 +3370,7 @@ t_comms_mail() {
   check "[C59] then the writer as from and its other lines as they stood, its own from, id and at dropped, and the body byte for byte" \
     cmp -s "$file" "$scratch/m1-wanted"
   check "[C59] every copy is the same" bash -c 'cmp -s "$1" "$2" && cmp -s "$1" "$3" && cmp -s "$1" "$4"' _ "$file" \
-    "$s/mail/harbor dock pilot/sent/$id.md" "$s/mail/harbor tower watch/in/$id.md" "$s/mail/orchard barn grower/in/$id.md"
+    "$s/mail/Harbor Pilot/sent/$id.md" "$s/mail/Harbor Watch/in/$id.md" "$s/mail/Orchard Grower/in/$id.md"
   check "[C59] the delivery is one commit of those four files" \
     test "$(store_commits) $(env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" show --name-only --format=%s HEAD | grep -c .)" = "1 5"
   check "[C66] the record holds one line for it, with no body" \
@@ -3358,7 +3518,7 @@ t_comms_mail() {
     bash -c '! grep -qE "line one|probe pilot|hello|world|kill-server|yyyy|body" "$1"' _ "$s/comms/record"
   local page=$tool/share/seat-page.md parts firsts words suffixes word sfx x f n=0 head=() answers=()
   local by_name="refused its name is not letters, digits, dot, dash and underscore ending in .md, .grab or .write; it is removed"
-  parts=$( { ls -A -- "$s/mail/orchard barn picker"; ls -A -- "$s/comms/orchard barn picker"; } | LC_ALL=C sort -u)
+  parts=$( { ls -A -- "$s/mail/Orchard Picker"; ls -A -- "$s/comms/Orchard Picker"; } | LC_ALL=C sort -u)
   firsts=$(for f in "$s"/comms/*/answers/*; do IFS=' ' read -r x _ < "$f" && printf '%s\n' "$x"; done | LC_ALL=C sort -u)
   words=$( { sed '/^## Other requests$/,$d' "$page" | grep -oE '`[a-z]+`' | tr -d '`'; sed '/^## Other requests$/,$d' "$page" | sed -n '/^```text$/,/^---$/p' | sed -n 's/^\([a-z][a-z]*\):.*/\1/p'; } \
     | LC_ALL=C sort -u | grep -vxF -f <(printf '%s\n' $parts $firsts))
@@ -3417,7 +3577,7 @@ t_comms_from_a_pane() {
   printf '%s\n' "seat: Orchard Grower" --- "#(touch $root/pwned7) \$(touch $root/pwned8) %n%s #{session_name} -t ; kill-server" > "$q/t1.write"
   printf '%s\n' "seat: Orchard Grower" --- "--" > "$q/t2.write"
   local args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "box=" + $root + "/mailbox", "hidden=" + $s,
-        "reach=" + $s + "/comms/harbor dock keeper/out", "link=a.md:" + $root + "/harbor/ledger/letter-keeper",
+        "reach=" + $s + "/comms/Harbor Keeper/out", "link=a.md:" + $root + "/harbor/ledger/letter-keeper",
         "node=d.md:dir", "node=f.md:fifo", "node=s.md:socket", "second=c.md:" + $q + "/c.md",
         "answer=a.md", "answer=d.md", "answer=f.md", "answer=s.md"])
     | add("harbor/dock/pilot/seat.typify"; ["report=" + $root + "/harbor/berth/pilot", "box=" + $root + "/mailbox",
@@ -3463,17 +3623,17 @@ t_comms_from_a_pane() {
   check "[C97] no seat can change the page or put another in its place: appending, removing, moving a file over it and making a link there are each refused, and the page stays the repository's" \
     bash -c 'for r in "${@:2}"; do for a in append remove replace link; do grep -qxF "box page $a: refused" "$r" || exit 1; done; grep -qxF "box page after: $1" "$r" || exit 1; done' _ "$page" "${reports[@]}"
   check "[C65] no seat can write into the store, which no view holds" \
-    bash -c 'grep -qxF "hidden $2: unseen" "$1" && grep -qxF "reach $2/comms/harbor dock keeper/out: write=refused" "$1"' _ "$report" "$s"
+    bash -c 'grep -qxF "hidden $2: unseen" "$1" && grep -qxF "reach $2/comms/Harbor Keeper/out: write=refused" "$1"' _ "$report" "$s"
   check "[C62] a link to a letter outside the seat's view, addressed to the seat itself, is refused and removed" \
     grep -qxF "answer a.md: refused it is a symbolic link, and the carrier takes a regular file alone; it is removed" "$report"
   check "[C62] a directory, a fifo and a socket are refused and removed, and the carrier goes on" \
     bash -c 'grep -qxF "answer d.md: refused it is a directory, and the carrier takes a regular file alone; it is removed" "$1" && grep -qxF "answer f.md: refused it is a fifo, and the carrier takes a regular file alone; it is removed" "$1" && grep -qxF "answer s.md: refused it is a socket, and the carrier takes a regular file alone; it is removed" "$1"' _ "$report"
   check "[C62] none of them is left in out, and the seat's draft is not taken" \
-    test "$(cd "$s/comms/harbor dock keeper/out" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | tr '\n' ',')" = ".c.md.second,"
+    test "$(cd "$s/comms/Harbor Keeper/out" && find . -mindepth 1 -printf '%P\n' | LC_ALL=C sort | tr '\n' ',')" = ".c.md.second,"
   check "[C63] the carrier opened the file a seat wrote once, through no name of the seat's, and the seat's change through its second name afterwards changed nothing" \
-    bash -c 'grep -qxF "second c.md: answered=yes opened=1 written=ok" "$1" && ! grep -rqF "changed through a second name" "$2/harbor dock keeper/in" "$2/harbor dock keeper/sent" && grep -rqF "as first written" "$2/harbor dock keeper/in"' _ "$report" "$s/mail"
+    bash -c 'grep -qxF "second c.md: answered=yes opened=1 written=ok" "$1" && ! grep -rqF "changed through a second name" "$2/Harbor Keeper/in" "$2/Harbor Keeper/sent" && grep -rqF "as first written" "$2/Harbor Keeper/in"' _ "$report" "$s/mail"
   check "[C57] a request written under its own name, a line every 300 ms for three seconds, rests until it is whole and is delivered whole" \
-    bash -c 'grep -qxF "slow w.md: answered=yes" "$1" && f=$(grep -rlx "subject: slow" "$2/orchard barn picker/in") && [[ $(sed "1,/^---\$/d" "$f" | tr "\n" ,) == "line 1,line 2,line 3,line 4,line 5,line 6,line 7,line 8,line 9,line 10," ]]' _ "$root/orchard/almanac/picker" "$s/mail"
+    bash -c 'grep -qxF "slow w.md: answered=yes" "$1" && f=$(grep -rlx "subject: slow" "$2/Orchard Picker/in") && [[ $(sed "1,/^---\$/d" "$f" | tr "\n" ,) == "line 1,line 2,line 3,line 4,line 5,line 6,line 7,line 8,line 9,line 10," ]]' _ "$root/orchard/almanac/picker" "$s/mail"
   report=$root/harbor/berth/pilot
   check "[C61] racing the carrier, the seat held its entry still for 2.5 s and then swapped it between a file and a link for 0.3 s, over and over for 12 s, and nothing opened it while it stood in out" \
     bash -c '[[ $(grep "^race r.md: " "$1") =~ ^race\ r\.md:\ swaps=([0-9]+)\ opened=0$ ]] && (( BASH_REMATCH[1] >= 100 ))' _ "$report"
@@ -3484,7 +3644,7 @@ t_comms_from_a_pane() {
     bash -c '! grep -rqF "the ledger" "$1" --exclude-dir=.git && ! grep -qF "ledger" "$2"' _ "$s/mail" "$s/comms/record"
   if grep -qx "lease l.md: lease=held answered=yes" "$report"; then
     check "[C63] a file held under a lease is refused at once, and nothing waits for it" \
-      grep -qxF "refused it could not be read at once; it is removed" "$s/comms/harbor dock pilot/answers/l.md"
+      grep -qxF "refused it could not be read at once; it is removed" "$s/comms/Harbor Pilot/answers/l.md"
   elif grep -q "^lease l.md: lease=refused" "$report"; then
     skip "[C63] this file system gives a seat no lease on its request, so a request held under one is not tried"
   else
@@ -3512,7 +3672,7 @@ t_comms_from_a_pane() {
     check "[C64] a name, a seat, a head or a text built as an option, a pattern, a format or a command: ${entry%%|*} is answered ${entry#*|}" \
       bash -c '[[ $(grep -F "answer $2: " "$1") == "answer $2: $3"* ]]' _ "$report" "${entry%%|*}" "${entry#*|}"
   done
-  check "[C64] the subject is delivered as it stood" grep -rqxF "subject: \$(touch $root/pwned4) \`touch $root/pwned5\` %n%s #{pane_id} #(touch $root/pwned6)" "$s/mail/harbor tower watch/in"
+  check "[C64] the subject is delivered as it stood" grep -rqxF "subject: \$(touch $root/pwned4) \`touch $root/pwned5\` %n%s #{pane_id} #(touch $root/pwned6)" "$s/mail/Harbor Watch/in"
   check "[C64] and the texts typed as they stood" \
     file_comes_to "$root/orchard/almanac/typed" "$(printf '%s\n' "#(touch $root/pwned7) \$(touch $root/pwned8) %n%s #{session_name} -t ; kill-server" --)"
   check "[C64] nothing a request named ran: no file was made, and the server stands" \
@@ -3541,7 +3701,7 @@ t_wake_fold() {
     bash -c '(( $(grep -cxF -- "$2" "$1") == 3 ))' _ "$scratch/out" \
     "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \"^waiting>\$\", by its kind's term (programs/COMMS.typify:9)"
   check "[C29] the fold's version is the one that reads the wake" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
   local planned entry
   planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
   local refusals=(
@@ -3598,7 +3758,7 @@ t_wake() {
   own=$(answer_of keeper own.md) own=${own#ok }
   sleep 3
   check "[C94] a mail that a seat sends itself stands in its in, and brings no pointer though its pane is ready" \
-    bash -c '[[ -f $1 && ! -e $2 ]]' _ "$s/mail/harbor dock keeper/in/$own.md" "$b/typed"
+    bash -c '[[ -f $1 && ! -e $2 ]]' _ "$s/mail/Harbor Keeper/in/$own.md" "$b/typed"
   check "[C95] nor does it put the seat in status' list" \
     bash -c '"$BASH" "$1" status > "$2" 2>&1; ! grep -q "^wake    Harbor Keeper" "$2"' _ "$loop" "$scratch/out"
   request pilot mail-9-new-newest-x.md "to: Harbor Keeper" "subject: mail: 9 new, newest 20991231T235959Z-999999.md" "re: waiting>" --- \
@@ -3631,14 +3791,14 @@ t_wake() {
     file_is "$b/typed" "$(pointer 1 "$id1")"
   check "[C94] a pane that is not ready gets none" test ! -e "$c/typed"
   check "[C94] a pane that shows a numbered menu gets none" test ! -e "$a/typed"
-  at1=$(sed -n 's/^at: //p' "$s/mail/harbor tower watch/in/$p1.md")
+  at1=$(sed -n 's/^at: //p' "$s/mail/Harbor Watch/in/$p1.md")
   check "[C95] status does not exit 1 for mail to be pointed out" exit_is 0 wp status
   check "[C95] it lists each seat with mail to be pointed out, how many and since when: a seat at work stands in the list" \
     said "wake    Harbor Watch (harbor/tower/watch): 2 delivered and not yet pointed out, the first at $at1"
   check "[C95] and so do a seat whose pane waits out the minute and one at a question of its program" \
     bash -c 'grep -q "^wake    Harbor Keeper (harbor/dock/keeper): 3 delivered and not yet pointed out, the first at " "$1" && grep -qxF "wake    Orchard Grower (orchard/barn/grower): 1 delivered and not yet pointed out, the first at $2" "$1"' _ "$scratch/out" "$at1"
   check "[C56] the carrier keeps what is to be pointed out in S/comms/wake.json, mode 0600" \
-    bash -c '[[ $(stat -c %a "$1") == 600 ]] && jq -e ".seats[\"harbor tower watch\"].count == 2" "$1" > /dev/null' _ "$s/comms/wake.json"
+    bash -c '[[ $(stat -c %a "$1") == 600 ]] && jq -e ".seats[\"Harbor Watch\"].count == 2" "$1" > /dev/null' _ "$s/comms/wake.json"
   pane=$(pane_by_title "Harbor Watch")
   T copy-mode -t "$pane"
   check "watch's pane is put in copy mode" test "$(T display-message -p -t "$pane" '#{pane_in_mode} #{pane_mode}')" = "1 copy-mode"
@@ -3775,7 +3935,7 @@ t_records_fold() {
   check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
   check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
   check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; cleared for no label, since neither its room nor its office has a clearance; its pane not kept; 1 rows"
-  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-v10
   statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
   check "plan with a record and no chain" exit_is 0 wplan
   check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"
@@ -3868,7 +4028,7 @@ t_records_in_panes() {
     grep -qxF "entries $root/records: " "$pilot_report"
   check "[C76] nor to one that may read no record under a read-only row" screen_has "Harbor Watch" "entries $root/records: "
   check "[C70] build made S/records, and in it a directory for each seat, named by its keys joined by a space, all 0700" \
-    test "$(cd "$s/records" && find . -maxdepth 1 -type d -printf '%P %m\n' | LC_ALL=C sort | tr '\n' ',')" = " 700,harbor dock keeper 700,harbor dock pilot 700,harbor tower watch 700,orchard barn grower 700,orchard barn picker 700,"
+    test "$(cd "$s/records" && find . -maxdepth 1 -type d -printf '%P %m\n' | LC_ALL=C sort | tr '\n' ',')" = " 700,Harbor Keeper 700,Harbor Pilot 700,Harbor Watch 700,Orchard Grower 700,Orchard Picker 700,"
   check "[C70] and BUILD/records.json, listed in the MANIFEST, with each seat's directory, pane and reading" \
     bash -c 'grep -q "  records.json$" "$1/MANIFEST" && [[ $(jq -c "[.seats[0] | .name, .pane, .reads]" "$1/records.json") == "[\"Harbor Keeper\",\"kept\",[\"Harbor Pilot\"]]" ]]' _ "$clone/BUILD"
   check "[C70] a day's file is named by its UTC day, and only its owner reads it" test "$(stat -c %a "$(record_of keeper)/$day.pane")" = 600
@@ -3978,7 +4138,7 @@ t_records_day_and_limit() {
   check "down" exit_is 0 wp down
   check "[C82] after down, what was not stored is counted exactly, once: 3,000" eventually_long bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 3000
   check "[C75] record verify reads watch's unstored against its chain, over its whole span" exit_is 0 wp record verify "Harbor Watch" unstored
-  check "[C75] its whole length" said "harbor tower watch/unstored agrees with its chain up to byte $(stat -c %s "$(record_of watch)/unstored"), its whole length"
+  check "[C75] its whole length" said "Harbor Watch/unstored agrees with its chain up to byte $(stat -c %s "$(record_of watch)/unstored"), its whole length"
 }
 
 t_records_keys_that_tmux_expands() {
@@ -3986,15 +4146,15 @@ t_records_keys_that_tmux_expands() {
   day=$(date -u +%F)
   scoped_clone
   mkdir -p -- "$root/records"
-  statements_plan "$records_terms"' | terms_of("orchard/barn/picker/seat.typify"; .[3] = "p%s#{pane_id}")
+  statements_plan "$records_terms"' | terms_of("orchard/barn/picker/seat.typify"; .[3] = "p%s#{pane_id}" | if .[0] == "pane" then .[4] = "Orchard p%s#{pane_id}" else . end)
     | .state.environment |= map(if .key[0:3] == ["orchard", "barn", "picker"] then .key[2] = "p%s#{pane_id}" else . end)'
   check "plan with a seat whose key holds % and #" exit_is 0 wplan
   check "build" exit_is 0 wp build
   check "up" exit_is 0 wp up
-  check "picker ran" wait_for_probe "Orchard Picker" picker
+  check "picker ran" wait_for_probe "Orchard p%s#{pane_id}" picker
   check "down" exit_is 0 wp down
   check "[C71] the seat's pane is kept in its own directory, since the pipe's command doubles the % and # that tmux would expand" \
-    grep -qa "probe picker done" "$(state_of)/records/orchard barn p%s#{pane_id}/$day.pane"
+    grep -qa "probe picker done" "$(state_of)/records/Orchard p%s#{pane_id}/$day.pane"
 }
 
 t_records_verify() {
@@ -4016,16 +4176,16 @@ t_records_verify() {
   check "down" exit_is 0 wp down
   d=$(record_of keeper)
   file=$d/$day.pane
-  mapfile -t entries < <(jq -c --arg f "harbor dock keeper/$day.pane" 'select(.file == $f) | [.offset, .length, .at]' "$(state_of)/records/chain")
+  mapfile -t entries < <(jq -c --arg f "Harbor Keeper/$day.pane" 'select(.file == $f) | [.offset, .length, .at]' "$(state_of)/records/chain")
   check "[C72] the chain holds an entry for each run's bytes, the file sink a line of JSON each" test "${#entries[@]}" -ge 2
   check "[C72] each entry names the workplace, the seat, the file, the offset, the length, and the hash of the bytes with the hash sent before" \
-    test "$(jq -c --arg f "harbor dock keeper/$day.pane" 'select(.file == $f) | [.workplace, .seat, (.previous | length), (.hash | length)]' "$(state_of)/records/chain" | head -n 1)" = "[\"$label\",\"Harbor Keeper\",64,64]"
+    test "$(jq -c --arg f "Harbor Keeper/$day.pane" 'select(.file == $f) | [.workplace, .seat, (.previous | length), (.hash | length)]' "$(state_of)/records/chain" | head -n 1)" = "[\"$label\",\"Harbor Keeper\",64,64]"
   local first second o l
-  first=$(jq -r --arg f "harbor dock keeper/$day.pane" 'select(.file == $f) | .hash' "$(state_of)/records/chain" | head -n 1)
+  first=$(jq -r --arg f "Harbor Keeper/$day.pane" 'select(.file == $f) | .hash' "$(state_of)/records/chain" | head -n 1)
   check "[C72] the first hash is SHA-256 over 64 zeros and the bytes it covers" \
     test "$({ printf '%064d' 0; head -c "$(jq -r '.[1]' <<< "${entries[0]}")" "$file"; } | sha256sum | cut -d' ' -f1)" = "$first"
   check "[C75] record verify says that the file agrees with its chain" exit_is 0 wp record verify "Harbor Keeper" "$day"
-  check "[C75] up to its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file"), its whole length"
+  check "[C75] up to its whole length" said "Harbor Keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file"), its whole length"
   cp -- "$file" "$scratch/kept"
   o=$(jq -r '.[0]' <<< "${entries[1]}") l=$(jq -r '.[1]' <<< "${entries[1]}")
   printf 'Z' | dd of="$file" bs=1 seek=$(( o + l / 2 )) conv=notrunc status=none
@@ -4041,12 +4201,12 @@ t_records_verify() {
   check "[C80] at the first entry it shows in" said "differs from its chain in the $(jq -r '.[1]' <<< "${entries[0]}") bytes from byte 0"
   rm -f -- "$file"
   check "[C80] a file removed is named" exit_is 1 wp record verify "Harbor Keeper" "$day"
-  check "[C80] saying how much its chain covers" said "harbor dock keeper/$day.pane is gone; its chain covers"
+  check "[C80] saying how much its chain covers" said "Harbor Keeper/$day.pane is gone; its chain covers"
   cp -- "$scratch/kept" "$file"
   check "[C80] and with the file as it was, it agrees again" exit_is 0 wp record verify "Harbor Keeper" "$day"
   local chain=$(state_of)/records/chain
   cp -- "$chain" "$scratch/chain-kept"
-  jq -c --arg f "harbor dock keeper/$day.pane" 'select(.file != $f or .offset != 0)' "$scratch/chain-kept" > "$chain"
+  jq -c --arg f "Harbor Keeper/$day.pane" 'select(.file != $f or .offset != 0)' "$scratch/chain-kept" > "$chain"
   check "[C80] an entry missing from the sink, as one the journal dropped or removed, is named as a skip" exit_is 1 wp record verify "Harbor Keeper" "$day"
   check "[C80] at the entry after it" said "the chain skips from byte 0 to byte $(jq -r '.[1]' <<< "${entries[0]}") at its entry of $(jq -r '.[2]' <<< "${entries[1]}")"
   cp -- "$scratch/chain-kept" "$chain"
@@ -4151,10 +4311,10 @@ t_records_journal() {
   check "[C72] stopping the unit signals the carrier alone" test "$(systemctl --user show -p KillMode --value "$unit")" = mixed
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   local before sent
-  sent=$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -cF "\"harbor dock keeper/$day.pane\"")
+  sent=$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -cF "\"Harbor Keeper/$day.pane\"")
   T send-keys -t "$(pane_by_title "Harbor Keeper")" x
   check "[C72] a key typed into the kept pane is echoed into its record, and a pass of the carrier sends an entry for it" \
-    eventually_long bash -c '(( $(journalctl --user _SYSTEMD_USER_UNIT="$1" -o cat --no-pager | grep -cF "\"harbor dock keeper/$2.pane\"") > $3 ))' _ "$unit" "$day" "$sent"
+    eventually_long bash -c '(( $(journalctl --user _SYSTEMD_USER_UNIT="$1" -o cat --no-pager | grep -cF "\"Harbor Keeper/$2.pane\"") > $3 ))' _ "$unit" "$day" "$sent"
   before=$(stat -c %s "$(record_of keeper)/$day.pane")
   T send-keys -t "$(pane_by_title "Harbor Keeper")" y
   check "[C72] a second key, typed as soon as that entry is seen, is echoed too: the next pass is some ten seconds away, so only the carrier's last entries at down can cover it" \
@@ -4162,25 +4322,25 @@ t_records_journal() {
   check "down" exit_is 0 wp down
   check "[C72] down ends the unit through its manager: it is inactive when down returns" bash -c '! systemctl --user is-active --quiet "$1"' _ "$unit"
   check "[C83] record verify reads the chain from the journal, and the file agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
-  check "[C83] its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
+  check "[C83] its whole length" said "Harbor Keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
   check "[C72] every entry the carrier sent, the last ones at down among them, carries a hash and a previous of 64 hexadecimal digits" \
     test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | jq -R -s '[split("\n")[] | try fromjson catch empty | select(type == "object" and .chain == "workplace-record")] | length > 0 and all(.hash + .previous | test("^[0-9a-f]{128}$"))')" = true
   local ident size
   ident=$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o json --no-pager | jq -r 'select(.MESSAGE | strings | test("workplace-record")) | .SYSLOG_IDENTIFIER' | head -n 1)
   check "[C72] the carrier's entries carry the identifier workplace-carrier" test "$ident" = workplace-carrier
   size=$(stat -c %s "$(record_of keeper)/$day.pane")
-  forged=$(jq -n -c --arg w "$label" --arg f "harbor dock keeper/$day.pane" --argjson o "$size" \
+  forged=$(jq -n -c --arg w "$label" --arg f "Harbor Keeper/$day.pane" --argjson o "$size" \
     '{chain: "workplace-record", at: "2030-01-01T00:00:00Z", workplace: $w, seat: "Harbor Keeper", file: $f, offset: $o, length: 1, hash: ("f" * 64), previous: ("0" * 64)}')
   printf '%s\n' "$forged" | systemd-cat -t "$ident"
   check "[C83] an entry that another process sends under the carrier's words reaches the journal" \
     eventually_long bash -c 'journalctl --user -t "$1" -o cat --no-pager | grep -qF "2030-01-01T00:00:00Z"' _ "$ident"
   check "[C83] and is not taken as the carrier's: the file still agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
-  check "[C83] its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
+  check "[C83] its whole length" said "Harbor Keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
   check "[C83] the run wrote $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c .) lines of the carrier's to the journal, $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record) of them entries of the chain, beside the manager's own lines of the unit and the one forged" \
     test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record)" -ge 1
   local s2=$scratch/state2 mark1 mark2 file1 file2
   file1=$(record_of keeper)/$day.pane
-  file2="$s2/workplace/$label/records/harbor dock keeper/$day.pane"
+  file2="$s2/workplace/$label/records/Harbor Keeper/$day.pane"
   mark1=$(jq -r '.mark // ""' "$clone/BUILD/records.json")
   mkdir -p -- "$s2"
   export XDG_STATE_HOME=$s2
@@ -4194,15 +4354,15 @@ t_records_journal() {
   check "keeper ran there" wait_for_probe "Harbor Keeper" keeper
   check "down" exit_is 0 wp down
   check "[C75] under the one unit, the journal holds entries of the keeper's file from both state directories, each with its mark" \
-    test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | jq -R -r --arg f "harbor dock keeper/$day.pane" 'try fromjson catch empty | select(type == "object" and .chain == "workplace-record" and .file == $f) | .mark // "none"' | LC_ALL=C sort -u | tr '\n' ' ')" = "$(printf '%s\n' "$mark1" "$mark2" | LC_ALL=C sort | tr '\n' ' ')"
+    test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | jq -R -r --arg f "Harbor Keeper/$day.pane" 'try fromjson catch empty | select(type == "object" and .chain == "workplace-record" and .file == $f) | .mark // "none"' | LC_ALL=C sort -u | tr '\n' ' ')" = "$(printf '%s\n' "$mark1" "$mark2" | LC_ALL=C sort | tr '\n' ' ')"
   check "[C75] record verify in the second state directory passes over the first's entries" exit_is 0 wp record verify "Harbor Keeper" "$day"
-  check "[C75] and its file agrees with its own chain, its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file2"), its whole length"
+  check "[C75] and its file agrees with its own chain, its whole length" said "Harbor Keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file2"), its whole length"
   unset XDG_STATE_HOME
   rm -rf -- "$clone/BUILD"
   check "[C75] build again in the first state directory" exit_is 0 wp build
   check "[C75] which keeps its mark across builds" test "$(jq -r '.mark // ""' "$clone/BUILD/records.json")" = "$mark1"
   check "[C75] record verify there passes over the second's entries" exit_is 0 wp record verify "Harbor Keeper" "$day"
-  check "[C75] and its file agrees with its own chain, its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file1"), its whole length"
+  check "[C75] and its file agrees with its own chain, its whole length" said "Harbor Keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file1"), its whole length"
   printf 'not a mark' > "$(state_of)/records/mark"
   rm -rf -- "$clone/BUILD"
   check "[C72] build refuses a mark that is not 32 hexadecimal digits" exit_is 1 wp build
@@ -4255,9 +4415,9 @@ t_restart() {
   check "[C98] and so does the seat's gaps, which the chain covers" grep -q "the pane's program had ended, and restart started it again, asked by $(id -un) (uid $EUID) at " "$(record_of keeper)/gaps"
   check "down" exit_is 0 wp down
   check "[C75] the day file, which holds both runs of keeper, agrees with its chain" exit_is 0 wp record verify "Harbor Keeper" "$day"
-  check "[C75] its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
+  check "[C75] its whole length" said "Harbor Keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
   check "[C75] record verify reads keeper's gaps against its chain, over its whole span" exit_is 0 wp record verify "Harbor Keeper" gaps
-  check "[C75] its whole length" said "harbor dock keeper/gaps agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/gaps"), its whole length"
+  check "[C75] its whole length" said "Harbor Keeper/gaps agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/gaps"), its whole length"
   check "[C98] restart refuses when nothing is up, with exit 2" exit_is 2 wp restart
   sum=$(sha256sum < "$clone/BUILD/MANIFEST")
   check "[C99] unbuild removes the build while the workplace is down" exit_is 0 wp unbuild
@@ -4399,10 +4559,10 @@ t_records_by_day() {
   check "down" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" down
   d=$(record_of keeper)
   check "keeper's record holds the day 2030-01-01, and the file sink holds entries for it, all sent today" \
-    bash -c 'test -s "$1/2030-01-01.pane" && [[ $(jq -r "select(.file == \"harbor dock keeper/2030-01-01.pane\") | .at[0:10]" "$2" | sort -u) == "$3" ]]' _ "$d" "$(state_of)/records/chain" "$(date -u +%F)"
+    bash -c 'test -s "$1/2030-01-01.pane" && [[ $(jq -r "select(.file == \"Harbor Keeper/2030-01-01.pane\") | .at[0:10]" "$2" | sort -u) == "$3" ]]' _ "$d" "$(state_of)/records/chain" "$(date -u +%F)"
   check "[C75] record verify takes from the file sink only the entries sent within the file's day and ten minutes on either side: a file of 2030-01-01 whose entries were all sent today finds none of them" \
     exit_is 0 wp record verify "Harbor Keeper" 2030-01-01
-  check "[C75] and says that no entry covers it" said "harbor dock keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
+  check "[C75] and says that no entry covers it" said "Harbor Keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
   check "[C75] a day that is not a date is refused, with exit 2" exit_is 2 wp record verify "Harbor Keeper" 2030-02-30
   check "[C75] naming it" said "the day 2030-02-30 is not written YYYY-MM-DD, and is not unstored, gaps or signed"
   check "[C75] --requests is refused where the workplace holds no mail, with exit 2" exit_is 2 wp record verify --requests
@@ -4424,12 +4584,12 @@ t_records_by_day() {
     check "keeper ran" wait_for_probe "Harbor Keeper" keeper
     check "down" exit_is 0 env XDG_STATE_HOME="$states" PATH="$clock:$PATH" "$BASH" "$loop" down
     check "the file sink holds entries for keeper's file of 2030-01-01, each sent at $sent" \
-      bash -c '[[ $(jq -r "select(.file == \"harbor dock keeper/2030-01-01.pane\") | .at" "$1" | sort -u) == "$2" ]]' _ "$states/workplace/$label/records/chain" "$sent"
+      bash -c '[[ $(jq -r "select(.file == \"Harbor Keeper/2030-01-01.pane\") | .at" "$1" | sort -u) == "$2" ]]' _ "$states/workplace/$label/records/chain" "$sent"
     check "record verify" exit_is 0 env XDG_STATE_HOME="$states" "$BASH" "$loop" record verify "Harbor Keeper" 2030-01-01
     if [[ $round == taken ]]; then
-      check "[C75] an entry sent $when is taken: the file agrees with its chain" said "harbor dock keeper/2030-01-01.pane agrees with its chain up to byte"
+      check "[C75] an entry sent $when is taken: the file agrees with its chain" said "Harbor Keeper/2030-01-01.pane agrees with its chain up to byte"
     else
-      check "[C75] an entry sent $when is not taken: no entry covers the file" said "harbor dock keeper/2030-01-01.pane: no entry of the chain covers it yet"
+      check "[C75] an entry sent $when is not taken: no entry covers the file" said "Harbor Keeper/2030-01-01.pane: no entry of the chain covers it yet"
     fi
   done
   rm -rf -- "$clone/BUILD"
@@ -4446,10 +4606,10 @@ t_records_by_day() {
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   check "down" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" down
   check "the journal holds entries of the carrier's unit for keeper's file of 2030-01-01, sent today" \
-    bash -c '(( $(journalctl --user _SYSTEMD_USER_UNIT="$1" -o cat --no-pager | grep -cF "\"harbor dock keeper/2030-01-01.pane\"") > 0 ))' _ "$unit"
+    bash -c '(( $(journalctl --user _SYSTEMD_USER_UNIT="$1" -o cat --no-pager | grep -cF "\"Harbor Keeper/2030-01-01.pane\"") > 0 ))' _ "$unit"
   check "[C75] record verify asks the journal for the file's day and ten minutes on either side alone, and finds none of them" \
     exit_is 0 wp record verify "Harbor Keeper" 2030-01-01
-  check "[C75] and says that no entry covers it" said "harbor dock keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
+  check "[C75] and says that no entry covers it" said "Harbor Keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
 }
 
 tests=(
@@ -4487,6 +4647,8 @@ tests=(
   t_plan_refusals
   t_the_fold
   t_plan_relative
+  t_floors
+  t_floors_assembly
   t_the_folded_view_in_the_panes
   t_plan_end_to_end
   t_identity_selection

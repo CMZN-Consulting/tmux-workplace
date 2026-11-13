@@ -180,7 +180,7 @@
 
 - **C45.** The fold reads four terms of the plan's `recorded` lists.
   - `home KIND VARIABLE STATE`: a seat of the kind has a home, named to its program through VARIABLE. STATE is `kept` or `scratch`.
-  - `home-variable KIND NAME SUBPATH`: a further variable, given the path SUBPATH inside the home. SUBPATH is relative to the home, with no empty, `.` or `..` component; `.` alone is the home.
+  - `home-variable KIND NAME SUBPATH`: a further variable, given the directory SUBPATH inside the home. SUBPATH is relative to the home, with no empty, `.` or `..` component; `.` alone is the home.
   - `home-seed KIND PATH`: a program that `build` runs for each kept home it makes. PATH is a path position of C4.
   - `expect A B C SCOPE NAME`, with SCOPE `workplace`, `office`, `room` or `seat`: the seats of that scope expect the value NAME, an environment variable, at their start. A seat expects the union of the names that the workplace, its office, its room and its own terms state; none takes a name away, and equal terms count once with all their origins.
   - `view.json` gives a seat of a kind with a home `home: {kind, variable, state, variables, seed, origins}`, and a seat that expects a value `expects: [{name, scopes, origins}]`, by name. A seat with neither has neither member, so the view of a plan without these terms is the one the fold gave before.
@@ -392,6 +392,7 @@
 - The journal keeps what it is sent within its own rate limit and retention, which are the administrator's. On this machine they are the defaults: a rate limit of 10,000 entries in 30 seconds for a unit, and removal by size and not by age. The carrier sends an entry only for a file that grew in the last ten seconds, so a house of 28 seats sends a few hundred in 30 seconds at the most. An entry that the journal dropped, or has since removed, shows to `record verify` as a skip.
 - A seat's home (C47, C48):
   - **A scratch home's further directories.** The frame makes no further variable's directory in a scratch home. The home is empty when its pane starts, and the seat's program makes them. The frame would need an entry of the fixed part that makes a list of directories, which it does not have.
+  - **A further variable names a directory, never a file.** `build` makes each further variable's path a directory in a kept home (C47), so a further variable cannot name a file. A variable that names a file would be a term of its own, which the fold does not have.
   - **A home changed while `build` runs.** `build` checks each name below a kept home before it makes the next. A seat that runs while `build` does, and puts a link there between the check and the making, has `build` make the directory where the link points.
 - A seat's program has no session bus, and so no notification, no secret service and no portal, and it has no manager of the user's (C84).
 - A granted key (C85 to C92):

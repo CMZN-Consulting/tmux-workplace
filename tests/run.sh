@@ -3888,6 +3888,11 @@ t_records_day_and_limit() {
     test "$lines" = "$(seq -s ' ' 0 2999) "
   rm -rf -- "$clone/BUILD"
   statements_plan "$records_terms"' | .programs[-1].recorded += [r(["record-limit", "2000"]; 9)] | (.programs[] | select(.path == "harbor/tower/watch/seat.typify") | .plan[1].term[5]) = (["/usr/bin/head", "-c", "5000", "/dev/zero"] | tojson)'
+  local proc
+  for proc in /proc/[0-9]*; do
+    [[ $(tr '\0' ' ' 2> /dev/null < "$proc/cmdline") == *" keep $(record_of watch) "* ]] || continue
+    note "  a keeper of watch's record runs before the second up: pid ${proc#/proc/}, started $(ps -o lstart= -p "${proc#/proc/}" 2> /dev/null), limit $(tr '\0' '\n' 2> /dev/null < "$proc/cmdline" | tail -n 1)"
+  done
   check "plan with a limit of 2,000 bytes a day" exit_is 0 wplan
   check "build" exit_is 0 wp build
   check "up" exit_is 0 wp up
@@ -3902,8 +3907,13 @@ t_records_day_and_limit() {
       eventually_long bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 3000
   else
     note "  this tmux, $(T -V), keeps the dead pane's pipe open (C98)"
-    check "[C98] the pipe stays open, so watch's keeper still runs" bash -c "$keepers (( f == 0 ))" _ "$(record_of watch)"
-    check "[C98] and has written no count yet, since its input has not ended" bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 0
+    check "[C98] the pipe stays open, and a keeper of watch's record still runs" bash -c "$keepers (( f == 0 ))" _ "$(record_of watch)"
+    note "  the server: pid $(T display-message -p '#{pid}'); watch's pane: $(T display-message -p -t "$(pane_by_title "Harbor Watch")" 'pid #{pane_pid}, dead #{pane_dead} since #{t:pane_dead_time}, pipe #{pane_pipe}')"
+    note "  watch's unstored before down: $(tr '\n' '|' 2> /dev/null < "$(record_of watch)/unstored"), changed $(stat -c %y "$(record_of watch)/unstored" 2> /dev/null)"
+    for proc in /proc/[0-9]*; do
+      [[ $(tr '\0' ' ' 2> /dev/null < "$proc/cmdline") == *" keep $(record_of watch) "* ]] || continue
+      note "  a keeper of watch's record: pid ${proc#/proc/}, parent $(awk '{ print $4 }' "$proc/stat" 2> /dev/null), started $(ps -o lstart= -p "${proc#/proc/}" 2> /dev/null), limit $(tr '\0' '\n' 2> /dev/null < "$proc/cmdline" | tail -n 1)"
+    done
   fi
   check "down" exit_is 0 wp down
   check "[C82] after down, what was not stored is counted exactly, once: 3,000" eventually_long bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 3000
@@ -4287,6 +4297,22 @@ t_unbuild_keys() {
   check "[C99] saying that there is no build" said "unbuild: there is no build under $clone"
   check "[C99] and naming the homes, found by the plan's name" said "unbuild: removed the key homes in $s/keys, 3 homes, "
   check "[C99] and no file stands beneath S/keys" test ! -e "$s/keys"
+  check "build again" exit_is 0 wp build
+  rm -rf -- "$clone/BUILD"
+  local other=${s%/*}/another-workplace
+  mkdir -p -m 0700 -- "$other/keys/01"
+  printf '%s\n' "another workplace's key" > "$other/keys/01/key"
+  cp -- "$clone/PLAN/plan.json" "$scratch/plan-kept.json"
+  jq '.programs |= map(.plan |= map(if type == "array" and .[0] == "server" then .[1] = "another-workplace"
+                                     elif type == "object" and .term[0]? == "server" then .term[1] = "another-workplace" else . end))' \
+    "$scratch/plan-kept.json" > "$clone/PLAN/plan.json"
+  check "the plan's server term now names another-workplace" \
+    test "$(jq -r '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "server") | .[1]] | unique | join(",")' "$clone/PLAN/plan.json")" = another-workplace
+  check "[C99] with no BUILD and a PLAN that names a workplace that is neither default nor the clone's, unbuild takes the clone's name" exit_is 0 wp unbuild
+  check "[C99] and removes this workplace's key homes" \
+    bash -c 'grep -qF "unbuild: removed the key homes in $2/keys, 3 homes, " "$1" && test ! -e "$2/keys"' _ "$scratch/out" "$s"
+  check "[C99] and leaves those of the workplace that the plan names" test -s "$other/keys/01/key"
+  cp -- "$scratch/plan-kept.json" "$clone/PLAN/plan.json"
   check "build again" exit_is 0 wp build
   rm -rf -- "$clone/BUILD"
   mv -- "$clone/PLAN" "$scratch/PLAN"

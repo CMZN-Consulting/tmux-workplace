@@ -61,5 +61,6 @@ the line to type
 ```
 
 - The workplace types the line into that seat's pane as it stands, then a second later the key: `Enter` unless you give `Escape`, `C-c`, `Tab` or `none`.
+- A `C-c` ends a pane whose program is plain, and its seat with it: do not send it to such a pane.
 - The line holds at most 4,096 bytes of UTF-8, and no control character.
 - Its answer is `ok` with an id, or `refused` with the reason. A write refused once its line was typed says that the line stands typed and its key was not sent.

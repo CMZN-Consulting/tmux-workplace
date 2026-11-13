@@ -22,6 +22,7 @@ LOG_PROGRAMS=(dd date tail head)
 JOURNAL_PROGRAMS=(systemd-run systemctl journalctl)
 CHAIN_PERIOD=10
 WAKE_PERIOD=60
+KEY_REST=1
 MAIL_LIMIT=256000
 TEXT_LIMIT=4096
 
@@ -968,6 +969,9 @@ make_mail() {
   need_mail_programs || exit $?
   origins=$(jq -c '.view.mail.origins // []' <<< "$folded")
   at=$(origins_at <<< "$origins")
+  if jq -e -n --arg p "$path" '$p | explode | any(. < 32 or (. >= 127 and . < 160) or . == 65533 or . == 1564 or . == 8206 or . == 8207 or . == 8232 or . == 8233 or (. >= 8234 and . <= 8238) or (. >= 8294 and . <= 8297))' > /dev/null; then
+    die "build refuses: the mail path holds a control character, a character that moves or breaks a line, or bytes that are not UTF-8, as no head of a mail may, and the pointer types it into every seat's pane (the mail at $at)"
+  fi
   [[ -d $path ]] || die "build refuses: the mail path $path is not a directory on the machine, and the frame shows each seat its mailbox there (the mail at $at)"
   state_dir=$(state_root) || die "build needs the workplaces' state directory for the mail, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
   if [[ $path == "$state_dir" || $path == "$state_dir"/* || $state_dir == "$path"/* ]]; then
@@ -2091,25 +2095,48 @@ carrier_git() {
 
 carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 9>&-; }
 
+carrier_look() {
+  local mark
+  mark=$(carrier_tmux display-message -p -t "$1" '#{pane_in_mode}:#{pane_pid}:#{pane_mode}:#{@workplace}' 2> /dev/null) || return 1
+  carrier_pid=${mark#*:} carrier_pid=${carrier_pid%%:*}
+  carrier_mode=${mark#*:*:} carrier_mode=${carrier_mode%%:*}
+  [[ ${mark#*:*:*:} == "$carrier_run" ]] || return 2
+  [[ ${mark%%:*} == 0 ]] || return 4
+  return 0
+}
+
+carrier_rest() {
+  local until=$(( ${EPOCHREALTIME/./} + $1 * 1000000 ))
+  while (( ${EPOCHREALTIME/./} < until )); do carrier_pause 0.1; done
+}
+
 carrier_type() {
-  local pane=$1 text=$2 key=$3 mark
-  local -a args=()
+  local pane=$1 text=$2 key=$3 pid
+  carrier_look "$pane" || return
+  pid=$carrier_pid
   if [[ -n $text ]]; then
     [[ $text == *';' ]] && text=${text%;}'\;'
-    args+=(send-keys -t "$pane" -l -- "$text")
+    carrier_tmux send-keys -t "$pane" -l -- "$text" > /dev/null 2>&1 || return 3
+    [[ $key == none ]] && return 0
+    carrier_rest "$KEY_REST"
+    carrier_look "$pane"
+    case $? in
+      0) [[ $carrier_pid == "$pid" ]] || return 7 ;;
+      4) return 6 ;;
+      *) return 5 ;;
+    esac
   fi
-  if [[ $key != none ]]; then
-    (( ${#args[@]} )) && args+=(';')
-    args+=(send-keys -t "$pane" "$key")
-  fi
-  mark=$(carrier_tmux display-message -p -t "$pane" '#{pane_in_mode}:#{pane_mode}:#{@workplace}' 2> /dev/null) || return 1
-  carrier_mode=${mark#*:} carrier_mode=${carrier_mode%%:*}
-  [[ ${mark#*:*:} == "$carrier_run" ]] || return 2
-  [[ ${mark%%:*} == 0 ]] || return 4
-  if (( ${#args[@]} )); then
-    carrier_tmux "${args[@]}" > /dev/null 2>&1 || return 3
-  fi
+  [[ $key == none ]] || carrier_tmux send-keys -t "$pane" "$key" > /dev/null 2>&1 || { [[ -n $text ]] && return 8; return 3; }
   return 0
+}
+
+carrier_apart() {
+  case $1 in
+    5) printf '%s\n' "the text was typed into the pane of $2, and its key was not sent: the pane is gone, or no longer carries this run's mark" ;;
+    6) printf '%s\n' "the text was typed into the pane of $2, and its key was not sent: the pane is now in ${carrier_mode:-a mode}" ;;
+    7) printf '%s\n' "the text was typed into the pane of $2, and its key was not sent: another program now runs in it" ;;
+    *) printf '%s\n' "the text was typed into the pane of $2, and tmux did not take its key" ;;
+  esac
 }
 
 carrier_next_id() {
@@ -2222,7 +2249,7 @@ carrier_journal() {
 }
 
 carrier_serve() {
-  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied changed now
+  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied changed now typed why
   local -a entries readers keep paths
   entries=("${seat_out[i]}"/[!.]*)
   (( ${#entries[@]} )) || return 0
@@ -2312,13 +2339,19 @@ carrier_serve() {
             sum=$(printf '%s' "$text" | sha256sum)
             written="${#text} ${sum%% *}"
             carrier_type "$pane" "$text" "$key"
-            case $? in
+            typed=$?
+            case $typed in
               1) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not answer" ;;
               2) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone" ;;
               4) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} is in ${carrier_mode:-a mode}, so its program would not read what is typed" ;;
               3)
                 carrier_answer "${seat_answers[i]}" "$name" "refused tmux did not take the line"
                 carrier_record "${seat_names[i]}" "$name" write "$targets" refused "tmux did not take the line" "$written"
+                ;;
+              5 | 6 | 7 | 8)
+                why=$(carrier_apart "$typed" "${seat_names[j]}")
+                carrier_answer "${seat_answers[i]}" "$name" "refused $why"
+                carrier_record "${seat_names[i]}" "$name" write "$targets" refused "$why" "$written"
                 ;;
               *)
                 carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
@@ -2387,7 +2420,7 @@ carrier_wake_record() {
 }
 
 carrier_wake() {
-  local i n count ready out mark text sum outcome reason
+  local i n count ready out mark text sum outcome reason typed
   local -a shown
   (( wake_any )) || return 0
   for i in "${!seat_names[@]}"; do
@@ -2409,11 +2442,13 @@ carrier_wake() {
     text="mail: ${wake_n[i]} new, newest ${wake_ids[i]##* }.md, in $mail_path/in, and the page $mail_path/README.md says what this line is"
     sum=$(printf '%s' "$text" | sha256sum)
     carrier_type "${seat_pane[i]}" "$text" Enter
-    case $? in
+    typed=$?
+    case $typed in
       0) outcome=ok reason="" ;;
       1) outcome=refused reason="the pane of ${seat_names[i]} does not answer" ;;
       2) outcome=refused reason="the pane of ${seat_names[i]} does not carry this run's mark, or is gone" ;;
       4) outcome=refused reason="the pane of ${seat_names[i]} is in ${carrier_mode:-a mode}, so its program would not read what is typed" ;;
+      5 | 6 | 7 | 8) outcome=refused reason=$(carrier_apart "$typed" "${seat_names[i]}") ;;
       *) outcome=refused reason="tmux did not take the line" ;;
     esac
     wake_last[i]=$EPOCHSECONDS

@@ -69,7 +69,7 @@ setup() {
   printf '%s\n' page > "$root/harbor/charts/page"
   printf '%s\n' page > "$root/harbor/scratch/page"
   printf '%s\n' page > "$root/orchard/almanac/page"
-  cp -- "$fixtures/probe" "$fixtures/racer" "$fixtures/forge" "$root/tools/"
+  cp -- "$fixtures/probe" "$fixtures/racer" "$fixtures/paster" "$fixtures/forge" "$root/tools/"
   clone=$root/config
   make_clone "$clone"
   export WORKPLACE_ROOT=$root
@@ -2761,7 +2761,7 @@ request() {
 answer_of() {
   local file i
   file=$(state_of)/comms/$(box_of "$1")/answers/$2
-  for (( i = 0; i < 300; i++ )); do
+  for (( i = 0; i < 1200; i++ )); do
     [[ -s $file ]] && { cat -- "$file"; return 0; }
     sleep 0.05
   done
@@ -2998,6 +2998,13 @@ t_comms_store() {
   check "[C97] up refuses a build with mail that holds no page, as one made before the page does, with exit 1" exit_is 1 wp up
   check "[C97] naming it" said "$clone/BUILD holds no page for a seat's mailbox; build again"
   check "[C97] and starts nothing" test ! -e "$clone/BUILD/RUN"
+  rm -rf -- "$clone/BUILD"
+  mkdir -p -- "$root/mail"$'\xe2\x80\xae'"box"
+  statements_plan "$comms_terms $comms_reach | (.programs[-1].recorded[] | select(.term[0] == \"mail\") | .term[1]) = \"mail\\u202ebox\""
+  check "plan, with a mail path that holds a character that turns the line's direction" exit_is 0 wplan
+  check "[C55] build refuses a mail path with a character that moves or breaks a line, with exit 1" exit_is 1 wp build
+  check "[C55] naming the mail term's origin" said "build refuses: the mail path holds a control character, a character that moves or breaks a line, or bytes that are not UTF-8, as no head of a mail may, and the pointer types it into every seat's pane (the mail at programs/COMMS.typify:1)"
+  check "[C55] and leaves no BUILD" test ! -e "$clone/BUILD"
 }
 
 t_comms_carrier() {
@@ -3608,6 +3615,68 @@ t_wake() {
   check "down" exit_is 0 wp down
 }
 
+t_typing_apart() {
+  scoped_clone
+  mkdir -p -- "$root/mailbox"
+  local s a=$root/orchard/almanac id why
+  s=$(state_of)
+  local args='| add("orchard/barn/grower/seat.typify"; ["paste=" + $root + "/orchard/almanac/pasted"])
+    | add("orchard/barn/picker/seat.typify"; ["paste-quit=" + $root + "/orchard/almanac/quit"])'
+  statements_plan "$comms_terms $comms_reach | .programs[-1].recorded += [m([\"reach\", \"harbor\", \"dock\", \"keeper\", \"seat\", \"write\", \"orchard\", \"barn\", \"picker\", \"seat\", \"allowed\"]; 10)] $wake_kinds $wake_terms | $probe_args $args"
+  check "plan" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "up" exit_is 0 wp up
+  check "grower's program, which takes a burst as a paste and Enter alone as a line's end, waits" eventually_long screen_has "Orchard Grower" "waiting>"
+  check "picker's, which ends at its first byte, waits" eventually_long screen_has "Orchard Picker" "waiting>"
+  local f
+  for f in "$a/pasted.err" "$a/quit.err"; do
+    [[ -s $f ]] && note "    $f holds: $(head -c 400 "$f" | tr '\n' '|')"
+  done
+  request keeper w1.write "seat: Orchard Grower" --- "hello apart"
+  check "[C60] a write to it is served" answered_ok keeper w1.write
+  check "[C60] the text and its key go in two calls, a rest apart, so a program that takes a burst as a paste takes one submitted line" \
+    file_comes_to "$a/pasted" "line: hello apart"
+  request pilot m1.md "to: Orchard Grower" "subject: s" --- "b"
+  check "a mail to it is served" answered_ok pilot m1.md
+  id=$(answer_of pilot m1.md) id=${id#ok }
+  check "[C94] the pointer goes the same way, and the program takes it as one submitted line" \
+    file_comes_to "$a/pasted" "$(printf '%s\n' "line: hello apart" "line: mail: 1 new, newest $id.md, in $root/mailbox/in, and the page $root/mailbox/README.md says what this line is")"
+  why="the text was typed into the pane of Orchard Picker, and its key was not sent: the pane is gone, or no longer carries this run's mark"
+  request keeper w2.write "seat: Orchard Picker" --- "the last"
+  check "[C60] a pane whose program ends between the text and its key gets no key, and the answer says that the text was typed" \
+    answered keeper w2.write "refused $why"
+  check "[C60] its program had read the text" file_is "$a/quit" "ended at its first byte"
+  check "[C66] the record holds the refusal, with the length and the SHA-256 of the text typed" \
+    test "$(jq -c 'select(.request == "w2.write") | [.outcome, .reason, .length, .sha256]' "$s/comms/record")" = \
+    "[\"refused\",\"$why\",8,\"$(printf '%s' "the last" | sha256sum | cut -d' ' -f1)\"]"
+  local pane reads
+  pane=$(pane_by_title "Orchard Grower")
+  reads=$(cat -- "$a/pasted.read" 2> /dev/null | grep -c .)
+  request keeper w3.write "seat: Orchard Grower" --- "into a mode"
+  check "the text reaches grower's program" read_more "$a/pasted.read" "$reads"
+  T copy-mode -t "$pane"
+  check "[C60] a pane put in a mode between the text and its key gets no key, and the answer says so" \
+    answered keeper w3.write "refused the text was typed into the pane of Orchard Grower, and its key was not sent: the pane is now in copy-mode"
+  T copy-mode -q -t "$pane"
+  reads=$(cat -- "$a/pasted.read" 2> /dev/null | grep -c .)
+  request keeper w4.write "seat: Orchard Grower" --- "into another"
+  check "the text reaches grower's program again" read_more "$a/pasted.read" "$reads"
+  T respawn-pane -k -t "$pane" "exec sleep 600"
+  check "[C60] a pane whose program is started anew between the text and its key gets no key, and the answer says so" \
+    answered keeper w4.write "refused the text was typed into the pane of Orchard Grower, and its key was not sent: another program now runs in it"
+  check "[C60] neither text was submitted" file_is "$a/pasted" "$(printf '%s\n' "line: hello apart" "line: mail: 1 new, newest $id.md, in $root/mailbox/in, and the page $root/mailbox/README.md says what this line is")"
+  check "down" exit_is 0 wp down
+}
+
+read_more() {
+  local i
+  for (( i = 0; i < 250; i++ )); do
+    (( $(cat -- "$1" 2> /dev/null | grep -c .) > $2 )) && return 0
+    sleep 0.02
+  done
+  return 1
+}
+
 records_terms='def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}};
   .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1), r(["record-path", "records"]; 2), r(["record-chain", "file"]; 3),
     r(["reach", "harbor", "dock", "keeper", "seat", "record", "harbor", "dock", "pilot", "seat", "allowed"]; 4)]'
@@ -3978,6 +4047,15 @@ t_records_journal() {
   check "[C72] the unit runs under no-new-privileges" test "$(systemctl --user show -p NoNewPrivileges --value "$unit")" = yes
   check "[C72] stopping the unit signals the carrier alone" test "$(systemctl --user show -p KillMode --value "$unit")" = mixed
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  local before sent
+  sent=$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -cF "\"harbor dock keeper/$day.pane\"")
+  T send-keys -t "$(pane_by_title "Harbor Keeper")" x
+  check "[C72] a key typed into the kept pane is echoed into its record, and a pass of the carrier sends an entry for it" \
+    eventually_long bash -c '(( $(journalctl --user _SYSTEMD_USER_UNIT="$1" -o cat --no-pager | grep -cF "\"harbor dock keeper/$2.pane\"") > $3 ))' _ "$unit" "$day" "$sent"
+  before=$(stat -c %s "$(record_of keeper)/$day.pane")
+  T send-keys -t "$(pane_by_title "Harbor Keeper")" y
+  check "[C72] a second key, typed as soon as that entry is seen, is echoed too: the next pass is some ten seconds away, so only the carrier's last entries at down can cover it" \
+    eventually bash -c '(( $(stat -c %s "$1") > $2 ))' _ "$(record_of keeper)/$day.pane" "$before"
   check "down" exit_is 0 wp down
   check "[C72] down ends the unit through its manager: it is inactive when down returns" bash -c '! systemctl --user is-active --quiet "$1"' _ "$unit"
   check "[C83] record verify reads the chain from the journal, and the file agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
@@ -4096,6 +4174,7 @@ tests=(
   t_comms_from_a_pane
   t_wake_fold
   t_wake
+  t_typing_apart
   t_records_fold
   t_records_in_panes
   t_records_day_and_limit

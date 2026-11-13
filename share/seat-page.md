@@ -38,4 +38,4 @@ the body
 
 ## Other requests
 
-A file that ends in `.grab` asks for what another seat's screen shows, and one that ends in `.write` asks to type one line into another seat's pane. Most seats are allowed neither. A request that is not allowed is refused, with the reason.
+A file that ends in `.grab` asks for what another seat's screen shows, and one that ends in `.write` asks to type one line into another seat's pane. A seat is allowed neither unless its workplace allows it. A request that is not allowed is refused, with the reason.

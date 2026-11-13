@@ -30,6 +30,8 @@ term_checks() {
 }
 term_file=""
 typed_file=""
+paste_file=""
+paste_mode=""
 screen_file=""
 box=""
 await_answer() {
@@ -243,6 +245,8 @@ for argument in "$@"; do
       ;;
     term=*) term_file=${argument#term=} ;;
     typed=*) typed_file=${argument#typed=} ;;
+    paste=*) paste_mode=paste paste_file=${argument#paste=} ;;
+    paste-quit=*) paste_mode=quit paste_file=${argument#paste-quit=} ;;
     screen=*) screen_file=${argument#screen=} ;;
     print=*) cat -- "${argument#print=}" ;;
     wait=*)
@@ -359,6 +363,9 @@ if [[ -n $term_file ]]; then
   say "probe $name term done"
   tput smcup
   say "full screen"
+fi
+if [[ -n $paste_file ]]; then
+  exec python3 -I "${0%/*}/paster" "$paste_mode" "$paste_file" 2>> "$paste_file.err"
 fi
 if [[ -n $screen_file ]]; then
   shown=""

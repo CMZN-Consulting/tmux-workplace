@@ -1,0 +1,46 @@
+import os
+import select
+import sys
+import time
+import tty
+
+mode, out = sys.argv[1], sys.argv[2]
+quiet = 0.2
+fd = sys.stdin.fileno()
+tty.setraw(fd)
+
+
+def show():
+    os.write(1, b"\x1b[H\x1b[2Jwaiting>\r\n")
+
+
+def note(line):
+    with open(out, "ab") as f:
+        f.write(line + b"\n")
+
+
+show()
+held = b""
+last = 0.0
+while True:
+    select.select([fd], [], [])
+    chunk = os.read(fd, 65536)
+    now = time.monotonic()
+    if not chunk:
+        break
+    if mode == "quit":
+        note(b"ended at its first byte")
+        sys.exit(0)
+    with open(out + ".read", "ab") as f:
+        f.write(b"read %d\n" % len(chunk))
+    for b in chunk:
+        if b in (13, 10):
+            if len(chunk) == 1 and now - last >= quiet:
+                note(b"line: " + held)
+                held = b""
+                show()
+            else:
+                held += b"<newline>"
+        else:
+            held += bytes([b])
+    last = now

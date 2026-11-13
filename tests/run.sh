@@ -428,7 +428,7 @@ t_structure_and_order() {
   done
   check "[C8] the calls followed the binding's order: server, sessions, windows, panes, arrangements, starts" \
     test "$(jq -r --argjson n "$(jq '.programs.tmux.argv | length' "$tool/host/binding.json")" '.[$n]' "$run/calls.jsonl" | tr '\n' ' ')" = \
-    "start-server new-session set-option new-session set-option rename-window new-window rename-window display-message select-pane split-window select-pane display-message select-pane display-message select-pane split-window select-pane select-layout select-layout select-layout respawn-pane respawn-pane respawn-pane respawn-pane respawn-pane "
+    "start-server new-session set-option new-session set-option rename-window new-window rename-window display-message select-pane split-window select-pane display-message select-pane display-message select-pane split-window select-pane select-layout select-layout select-layout set-option set-option set-option set-option set-option "
   check "[C8] the dock's seats stand side by side" \
     test "$(for t in "Harbor Pilot" "Harbor Keeper"; do T display -p -t "$(pane_by_title "$t")" '#{pane_top}'; done | sort -u | wc -l)" = 1
   check "[C8] no pane reaches past its window" \
@@ -2175,6 +2175,8 @@ t_ssh_grants() {
   check "[C89] up, the home's file mended" exit_is 0 wp up
   check "down" exit_is 0 wp down
   check "[C87] no agent of a key home runs after down" no_agent_of "$state/keys"
+  check "[C75] [C91] record verify reads keeper's signed against its chain, over its whole span" exit_is 0 wp record verify "Harbor Keeper" signed
+  check "[C75] and it agrees" said "harbor dock keeper/signed agrees with its chain up to byte "
 }
 
 home_terms='def h($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/HOMES.typify"}};
@@ -3093,7 +3095,8 @@ t_comms_carrier() {
 }
 
 file_is() { [[ $(cat -- "$1" 2> /dev/null) == "$2" ]]; }
-no_pane() { [[ -z $(pane_by_title "$1") ]]; }
+dead_pane() { [[ $(T display-message -p -t "$(pane_by_title "$1")" '#{pane_dead}' 2> /dev/null) == 1 ]]; }
+pane_state() { T display-message -p -t "$1" '#{pane_id} #{pane_dead} #{pane_pipe}' 2> /dev/null; }
 file_comes_to() {
   eventually_long file_is "$1" "$2" && return 0
   note "    $1 holds:"
@@ -3278,7 +3281,7 @@ t_comms_mail() {
   check "[C66] and recorded with its length" test "$(jq -c 'select(.request == "w15.write") | [.outcome, .length]' "$s/comms/record")" = '["ok",4096]'
   request keeper wz.write "seat: Orchard Grower" "key: C-c" --- "c"
   check "[C60] the key C-c is sent" answered_ok keeper wz.write
-  check "[C60] and interrupts the pane's program, which ends" eventually_long no_pane "Orchard Grower"
+  check "[C60] [C98] and interrupts the pane's program, which ends, its pane staying dead" eventually_long dead_pane "Orchard Grower"
   check "[C64] nothing a text named ran: no file was made, and the server stands" \
     bash -c 'test ! -e "$1/pwned" && test ! -e "$1/pwned2" && "${@:2}" list-sessions > /dev/null' _ "$root" setpriv --no-new-privs tmux -S "$run/$label" -u
   sum=$(printf '%s' hello | sha256sum)
@@ -3873,11 +3876,13 @@ t_records_day_and_limit() {
   check "plan with a limit of 2,000 bytes a day" exit_is 0 wplan
   check "build" exit_is 0 wp build
   check "up" exit_is 0 wp up
-  check "watch's program wrote 5,000 bytes and ended" eventually_long no_pane "Harbor Watch"
+  check "watch's program wrote 5,000 bytes and ended, its pane staying dead" eventually_long dead_pane "Harbor Watch"
   check "[C82] at the limit nothing more is stored: the day holds 2,000 bytes" eventually_long bash -c '[[ $(stat -c %s "$1") == 2000 ]]' _ "$(record_of watch)/$(date -u +%F).pane"
   check "[C82] and what was not stored is counted exactly, when the day's file ends: 3,000" \
     eventually_long bash -c '[[ $(awk -v d="$2" "\$1 == d { n += \$2 } END { print n + 0 }" "$1/unstored" 2> /dev/null) == 3000 ]]' _ "$(record_of watch)" "$(date -u +%F)"
   check "down" exit_is 0 wp down
+  check "[C75] record verify reads watch's unstored against its chain, over its whole span" exit_is 0 wp record verify "Harbor Watch" unstored
+  check "[C75] its whole length" said "harbor tower watch/unstored agrees with its chain up to byte $(stat -c %s "$(record_of watch)/unstored"), its whole length"
 }
 
 t_records_keys_that_tmux_expands() {
@@ -3908,6 +3913,8 @@ t_records_verify() {
   check "down: the carrier chains what is left as it ends" exit_is 0 wp down
   check "[C72] the frame's own record of requests is chained among the kept files" \
     test "$(jq -c 'select(.file == "comms/record") | [.seat, .offset]' "$(state_of)/records/chain" | head -n 1)" = '["the frame",0]'
+  check "[C75] record verify --requests reads the frame's record of requests against its chain, over its whole span" exit_is 0 wp record verify --requests
+  check "[C75] its whole length" said "comms/record agrees with its chain up to byte $(stat -c %s "$(state_of)/comms/record"), its whole length"
   check "up again, the same day" exit_is 0 wp up
   check "keeper ran again" wait_for_probe "Harbor Keeper" keeper
   check "down" exit_is 0 wp down
@@ -4118,6 +4125,119 @@ t_records_journal() {
   check "[C75] naming it" said "$premark"
 }
 
+t_restart() {
+  local s day pane seen others sum carrier args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "entries=" + $root + "/records"])'
+  s=$(state_of)
+  day=$(date -u +%F)
+  check "up, every pane kept, keeper's probe listing the record path" records_up "| $probe_args $args"
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  seen=$(grep "^entries $root/records: " "$root/harbor/berth/keeper")
+  check "keeper's view shows it the record path" test -n "$seen"
+  pane=$(pane_by_title "Harbor Keeper")
+  others=$(T list-panes -a -F '#{pane_id} #{pane_pid}' | grep -v "^$pane " | LC_ALL=C sort)
+  T send-keys -t "$pane" C-c
+  check "[C98] a seat whose program ends keeps its pane, dead" eventually_long dead_pane "Harbor Keeper"
+  check "[C98] with the same id" test "$(pane_by_title "Harbor Keeper")" = "$pane"
+  check "[C98] status names the seat as gone, and exits 1" exit_is 1 wp status
+  check "[C98] naming it" said "gone    seat/Harbor Keeper"
+  sleep 3
+  check "[C98] the carrier does not set the pipe of a dead pane again" bash -c '! grep -q "the carrier set it again" "$1/gaps" 2> /dev/null' _ "$(record_of keeper)"
+  check "[C98] restart refuses a seat whose program runs, with exit 1" exit_is 1 wp restart "Harbor Pilot"
+  check "[C98] saying so" said "restart refuses: the program in the pane of Harbor Pilot runs, and restart starts only a seat whose program has ended"
+  check "[C98] restart refuses a seat the workplace does not make, with exit 2" exit_is 2 wp restart Ghost
+  check "[C98] and neither refusal started anything" dead_pane "Harbor Keeper"
+  check "[C98] restart, with no name, starts again each seat whose program ended" exit_is 0 wp restart
+  check "[C98] saying who asked" said "restart: Harbor Keeper is started again in its pane $pane, asked by $(id -un) (uid $EUID) at "
+  check "[C98] in the same pane, alive, with its record's pipe set" eventually test "$(pane_state "$pane")" = "$pane 0 1"
+  check "keeper ran again" wait_for_probe "Harbor Keeper" keeper
+  check "[C98] in its view as up made it: it is shown the same record path" test "$(grep "^entries $root/records: " "$root/harbor/berth/keeper")" = "$seen"
+  check "[C98] every other pane is as it was, the same process in each" test "$(T list-panes -a -F '#{pane_id} #{pane_pid}' | grep -v "^$pane " | LC_ALL=C sort)" = "$others"
+  check "[C98] status is whole again" exit_is 0 wp status
+  check "[C98] S/restarts records who asked, mode 0600" \
+    bash -c '[[ $(stat -c %a "$1") == 600 ]] && jq -e --arg p "$2" --arg u "$3" --argjson id "$4" "select(.seat == \"Harbor Keeper\" and .pane == \$p and .asked.user == \$u and .asked.uid == \$id and (.asked.terminal | type) == \"string\")" "$1" > /dev/null' \
+    _ "$s/restarts" "$pane" "$(id -un)" "$EUID"
+  check "[C98] and so does the seat's gaps, which the chain covers" grep -q "the pane's program had ended, and restart started it again, asked by $(id -un) (uid $EUID) at " "$(record_of keeper)/gaps"
+  check "down" exit_is 0 wp down
+  check "[C75] the day file, which holds both runs of keeper, agrees with its chain" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C75] its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
+  check "[C75] record verify reads keeper's gaps against its chain, over its whole span" exit_is 0 wp record verify "Harbor Keeper" gaps
+  check "[C75] its whole length" said "harbor dock keeper/gaps agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/gaps"), its whole length"
+  check "[C98] restart refuses when nothing is up, with exit 2" exit_is 2 wp restart
+  sum=$(sha256sum < "$clone/BUILD/MANIFEST")
+  check "[C99] unbuild removes the build while the workplace is down" exit_is 0 wp unbuild
+  check "[C99] naming it and its MANIFEST's hash" said "unbuild: removed $clone/BUILD, "
+  check "[C99] the hash" said " files, whose MANIFEST had the hash ${sum%% *}:"
+  check "[C99] and each file it removed" bash -c 'grep -qxF "  MANIFEST" "$1" && grep -qxF "  bin/workplace" "$1" && grep -qxF "  records.json" "$1" && grep -qxF "  plan.json" "$1"' _ "$scratch/out"
+  check "[C99] and the state directory it keeps" said "unbuild: the state directory $s is kept"
+  check "[C99] BUILD is gone, and the state directory stands with the records" test ! -e "$clone/BUILD" -a -s "$(record_of keeper)/$day.pane"
+  check "[C99] a second unbuild finds no build, says so, and exits 0" exit_is 0 wp unbuild
+  check "[C99] saying so" said "unbuild: there is no build under $clone"
+  check "[C99] build again" exit_is 0 wp build
+  check "up" exit_is 0 wp up
+  check "[C99] unbuild refuses while the workplace is up, with exit 1" exit_is 1 wp unbuild
+  check "[C99] saying so" said "unbuild refuses: the workplace is up, since $clone/BUILD/RUN stands; run workplace down first"
+  check "[C99] and the build stands" test -f "$clone/BUILD/MANIFEST"
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  pane=$(pane_by_title "Harbor Keeper")
+  T send-keys -t "$pane" C-c
+  check "keeper's program ends again" eventually_long dead_pane "Harbor Keeper"
+  cp -p -- "$clone/BUILD/plan.json" "$scratch/plan.json"
+  chmod u+w -- "$clone/BUILD/plan.json"
+  printf ' ' >> "$clone/BUILD/plan.json"
+  check "[C98] restart refuses what up refuses, and starts nothing: a build that does not verify, with exit 1" exit_is 1 wp restart "Harbor Keeper"
+  check "[C98] saying so" said "restart starts a seat only from a verified build, as up does"
+  cp -p -- "$scratch/plan.json" "$clone/BUILD/plan.json"
+  carrier=$(carrier_pid)
+  kill -KILL "$carrier"
+  eventually bash -c '! stat -L "/proc/$1/cwd" > /dev/null 2>&1' _ "$carrier"
+  check "[C98] and a line of the run's checks that status names as gone, here the carrier's, with exit 1" exit_is 1 wp restart "Harbor Keeper"
+  check "[C98] saying so" said "restart refuses: status names this as gone, and only down and up make it again: the carrier, pid $carrier"
+  check "[C98] and the seat's pane is still dead" dead_pane "Harbor Keeper"
+  check "down" exit_is 0 wp down
+}
+
+t_records_by_day() {
+  local fake=$scratch/fake-date d
+  mkdir -p -- "$fake"
+  printf '%s\n' '#!/usr/bin/env bash' "if [[ \$# == 2 && \$1 == -u && \$2 == +%F ]]; then echo 2030-01-01; else exec '$(command -v date)' \"\$@\"; fi" > "$fake/date"
+  chmod +x -- "$fake/date"
+  scoped_clone
+  mkdir -p -- "$root/records"
+  statements_plan "$records_terms"
+  check "plan" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "up, the keepers' day being 2030-01-01" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" up
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  check "down" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" down
+  d=$(record_of keeper)
+  check "keeper's record holds the day 2030-01-01, and the file sink holds entries for it, all sent today" \
+    bash -c 'test -s "$1/2030-01-01.pane" && [[ $(jq -r "select(.file == \"harbor dock keeper/2030-01-01.pane\") | .at[0:10]" "$2" | sort -u) == "$3" ]]' _ "$d" "$(state_of)/records/chain" "$(date -u +%F)"
+  check "[C75] record verify takes from the file sink only the entries sent within the file's day and ten minutes on either side: a file of 2030-01-01 whose entries were all sent today finds none of them" \
+    exit_is 0 wp record verify "Harbor Keeper" 2030-01-01
+  check "[C75] and says that no entry covers it" said "harbor dock keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
+  check "[C75] a day that is not a date is refused, with exit 2" exit_is 2 wp record verify "Harbor Keeper" 2030-02-30
+  check "[C75] naming it" said "the day 2030-02-30 is not written YYYY-MM-DD, and is not unstored, gaps or signed"
+  check "[C75] --requests is refused where the workplace holds no mail, with exit 2" exit_is 2 wp record verify --requests
+  check "[C75] naming it" said "this workplace holds no mail, so it keeps no record of requests"
+  if ! systemctl --user show-environment > /dev/null 2>&1; then
+    skip "[C75] no user manager answers here, so the journal's span of a day is tried where one answers"
+    return 0
+  fi
+  local unit=workplace-carrier-$label.service
+  rm -rf -- "$clone/BUILD"
+  statements_plan "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-chain") | .term[1]) = "journal"'
+  check "plan, the chain going to the journal" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "up, the keepers' day being 2030-01-01" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" up
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  check "down" exit_is 0 env PATH="$fake:$PATH" "$BASH" "$loop" down
+  check "the journal holds entries of the carrier's unit for keeper's file of 2030-01-01, sent today" \
+    bash -c '(( $(journalctl --user _SYSTEMD_USER_UNIT="$1" -o cat --no-pager | grep -cF "\"harbor dock keeper/2030-01-01.pane\"") > 0 ))' _ "$unit"
+  check "[C75] record verify asks the journal for the file's day and ten minutes on either side alone, and finds none of them" \
+    exit_is 0 wp record verify "Harbor Keeper" 2030-01-01
+  check "[C75] and says that no entry covers it" said "harbor dock keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
+}
+
 tests=(
   t_inputs_and_refusals
   t_program_floors
@@ -4181,6 +4301,8 @@ tests=(
   t_records_keys_that_tmux_expands
   t_records_verify
   t_records_journal
+  t_records_by_day
+  t_restart
   t_the_runtime_directory
   t_source_and_contract
 )

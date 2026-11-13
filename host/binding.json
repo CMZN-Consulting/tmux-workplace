@@ -1608,6 +1608,26 @@
       },
       "call": [
         "tmux",
+        "set-option",
+        "-p",
+        "-t",
+        {
+          "slot": [
+            "pane",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ]
+        },
+        "remain-on-exit",
+        "on",
+        ";",
         "respawn-pane",
         "-k",
         "-t",

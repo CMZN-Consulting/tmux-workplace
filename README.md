@@ -9,10 +9,13 @@ bin/workplace plan
 bin/workplace build
 bin/workplace up
 bin/workplace status
+bin/workplace restart ['Seat Name' ...]
 bin/workplace exec 'Seat Name'
 bin/workplace why 'Seat Name' /some/path
-bin/workplace record verify 'Seat Name' [YYYY-MM-DD]
+bin/workplace record verify 'Seat Name' [YYYY-MM-DD | unstored | gaps | signed]
+bin/workplace record verify --requests
 bin/workplace down
+bin/workplace unbuild
 bin/workplace doctor
 ```
 
@@ -20,9 +23,10 @@ bin/workplace doctor
 - `build` checks `PLAN/` in the configuration's clone against its sources and against the machine, then writes `BUILD/`.
 - `up` starts a verified build under no-new-privileges, and never builds.
 - A pane's command is `workplace exec SEAT`. The same command run by hand gives a seat its view and its environment in any terminal.
-- `down` removes what `up` made and nothing else.
+- `down` removes what `up` made and nothing else. `unbuild` then removes `BUILD`, and keeps the workplace's state directory.
+- A seat whose program has ended keeps its pane, dead, until `restart` starts it again in that pane, as `up` started it, or the workplace goes down.
 - The workplace's tmux server listens in the clone's `BUILD/RUN`, where no seat's view reaches, and every call names it by that path. `status` prints the line that attaches to it.
-- `record verify` reads a seat's kept record against its chain and names the first place where they differ.
+- `record verify` reads a seat's kept record of a day, or its `unstored`, `gaps` or `signed`, or the frame's record of requests, against its chain, and names the first place where they differ.
 
 What each term does is one entry of `host/binding.json`. What the loop does with any entry is `CONTRACT.md`. What a seat is told about its mailbox is `share/seat-page.md`, which every mailbox holds as `README.md`.
 

@@ -495,7 +495,7 @@ joined($b[0]; $root) as $plan
                      reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,
                      unnumbered: [$window_rooms[] as $rm | [$done[] | select(.seat[0:2] == $rm)] as $occ
                        | select(($occ | length) > 0 and $occ[0].mode == "enforced" and $occ[0].clearance.value == null)
-                       | {room: $rm, floor: floor_of($rm[0])}],
+                       | {room: $rm, floor: floor_of($rm[0]), of: (if ($room_floor_keys | index($rm[0])) != null then "floor" else "office" end)}],
                      unenforced: [$floors[] | select(.enforced | not) | .key],
                      passages: [$labels[] | . as $l
                        | {label: $l, seats: [$done[] | select(any(.rows[]; .passage == true and .key[3] == $l.path)) | .name]}

@@ -1152,6 +1152,7 @@ path_without_reader() {
   printf '%s\n' "$out"
 }
 wplan() { env PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan; }
+loose_wplan() { local loop=$scratch/loose/bin/workplace; wplan; }
 statements_plan() {
   local filter=${1:-.}
   jq --arg root "$root" '
@@ -1421,10 +1422,10 @@ t_the_fold() {
   check "[C31] clearance or label terms with no clearance-scale refuse the plan" exit_is 1 wplan
   check "[C31] saying that 0 is the most cleared now, and naming the terms" \
     said "the plan holds clearance or label terms and no clearance-scale term: since 5.122 the number 0 is the most cleared, and a plan numbered before that turn is refused until it is renumbered and says clearance-scale turned (the clearance or label at programs/policy.typify:9, programs/policy.typify:10)"
-  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), lb($root + "/orchard"; "2"; 10), lb($root + "/harbor/charts"; "2"; 11), lb($root + "/orchard/almanac"; "3"; 12)]'
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard"; "2"; 9), lb($root + "/harbor/charts"; "2"; 10), cl("harbor"; "-"; "-"; "office"; "1"; 11), lb($root + "/orchard/almanac"; "3"; 12)]'
   check "[C31] four clearance or label terms with no clearance-scale refuse the plan" exit_is 1 wplan
-  check "[C31] naming the first three origins, and no more" \
-    bash -c 'grep -qF "(the clearance or label at programs/policy.typify:9, programs/policy.typify:10, programs/policy.typify:11)" "$1" && ! grep -qF "policy.typify:12" "$1"' _ "$scratch/out"
+  check "[C31] naming the first three origins, the clearance before the labels though it stands third, and no more" \
+    bash -c 'grep -qF "(the clearance or label at programs/policy.typify:11, programs/policy.typify:9, programs/policy.typify:10)" "$1" && ! grep -qF "policy.typify:12" "$1"' _ "$scratch/out"
   statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/harbor/ledger"; "hidden"; 9), sc(20)]'
   check "[C30] a clearance-scale with no number to read refuses nothing" exit_is 0 wplan
   statements_plan '.programs[-1].recorded += [{term: ["clearance-scale", "turned", "twice"], origin: at(20)}]'
@@ -1634,7 +1635,29 @@ t_floors() {
   check "[C104] plan says that the unenforced floor has no view" \
     said "the unenforced floor bridge has no view: its occupants read the machine as the user does, and labels, closed paths and bans bind them as conduct (5.124 point 3)"
   check "[C104] and names each room of an enforced floor that has no number (5.125 point 7)" \
-    said "room lodge/east, on the enforced floor lodge, has no number: it is cleared for no label, and least among its office's rooms (5.125 point 7)"
+    said "room lodge/east, on the enforced floor lodge, has no number: it is cleared for no label, and least among its floor's rooms (5.125 point 7)"
+  check "[C104] a room of a floor of offices is least among its office's rooms" \
+    said "room harbor/dock, on the enforced floor deck, has no number: it is cleared for no label, and least among its office's rooms (5.125 point 7)"
+
+  local planned loose
+  planned=$(cat "$clone/PLAN/manifest.json" "$clone/PLAN/view.json" | sha256sum)
+  statements_plan "$floors_terms"' | .programs[-1].recorded = []'
+  check "[C104] 5.129 point 4: a plan with enforced floors and no fold term refuses at plan, with exit 1" exit_is 1 wplan
+  check "[C104] naming each enforced floor" bash -c 'grep -qxF "workplace: the floor deck is enforced, and the plan holds no fold term: an enforced floor'"'"'s rooms are folded from statements, and the plan'"'"'s view cell, which gives each seat rows of its own, is refused there (5.129 point 4)" "$1" && grep -qF "workplace: the floor lodge is enforced, and the plan holds no fold term" "$1"' _ "$scratch/out"
+  check "[C104] in the plan's order, the unenforced floor not among them, and closing that PLAN/ is as it was" \
+    test "$(grep -o 'the floor [a-z]* is enforced' "$scratch/out" | tr '\n' ,)$(grep -c 'PLAN/ is as it was$' "$scratch/out")" = "the floor deck is enforced,the floor lodge is enforced,1"
+  check "[C104] and PLAN/ is as it was" test "$(cat "$clone/PLAN/manifest.json" "$clone/PLAN/view.json" | sha256sum)" = "$planned"
+  statements_plan "$floors_terms"' | .programs[-1].recorded = [] | .programs[0].plan |= map(if .[0] == "floor" then .[4] = "unenforced" else . end)'
+  check "[C104] a plan whose floors are all unenforced takes its view cell, as a plan with no fold term does" exit_is 0 wplan
+  rm -rf -- "$scratch/loose" && mkdir -- "$scratch/loose" && cp -R -- "$tool/." "$scratch/loose/"
+  loose=$(< "$scratch/loose/bin/workplace")
+  printf '%s\n' "${loose/'folds "$work/plan.json" "$tool/host/binding.json" || refuse_unfolded "$work/plan.json"'/true}" > "$scratch/loose/bin/workplace"
+  statements_plan "$floors_terms"' | .programs[-1].recorded = []'
+  check "a loop that does not refuse it plans an enforced floor with no fold term" exit_is 0 loose_wplan
+  check "[C104] build refuses it, with exit 1" exit_is 1 wp build
+  check "[C104] naming each enforced floor as plan does, and saying so" bash -c 'grep -qF "workplace: the floor deck is enforced, and the plan holds no fold term" "$1" && grep -qF "workplace: the floor lodge is enforced" "$1" && grep -qxF "workplace: build refuses: PLAN/plan.json holds an enforced floor and no fold term" "$1"' _ "$scratch/out"
+  check "[C104] and makes nothing" test ! -e "$clone/BUILD"
+  rm -rf -- "$scratch/loose" "$clone/PLAN"
 
   statements_plan "$floors_terms"' | .programs[-1].recorded += [st("orchard"; "-"; "-"; "office"; "/"; "searchable-only"; 9)]'
   check "plan with a statement of an office on the unenforced floor" exit_is 0 wplan
@@ -1670,6 +1693,14 @@ t_floors() {
     'C101|(.programs[0].plan) += [["floor", "orchard", "Orchard", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the key orchard names a floor and an office'
     'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the floor attic holds no office and no room'
     'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "rooms", "enforced", "run", $root + "/config/floors/deck.conf", "80"]]|the floor attic says smallest "80": COLSxROWS'
+    'C101|(.programs[0].plan) += [["floor", "orchard", "Orchard", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the key orchard names a floor and an office (orchard/office.typify, term 1; orchard/office.typify, term 2; workplace.typify, term 5)'
+    'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "rooms", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the floor attic holds no office and no room'
+    'C101|(.programs[0].plan) += [["floor", "deck", "Deck", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the floor deck is declared 2 times (workplace.typify, term 3; workplace.typify, term 5)'
+    'C101|(.programs[0].plan) += [["window", "ghost", "w", "Ghost"]]|the window term for ghost has no session term (workplace.typify, term 5)'
+    'C101|(.programs[0].plan) += [["window", "deck", "w", "W"]]|the window term for deck has no session term (workplace.typify, term 5)'
+    'C101|.programs[-1].recorded += [cl("lodge"; "-"; "-"; "office"; "1"; 9), sc(20)]|programs/policy.typify:9: the clearance names the office lodge, and lodge is a floor (5.125 point 1)'
+    'C103|.programs[-1].recorded += [{term: ["key", "harbor", "-", "-", "floor", "held"], origin: at(9)}]|programs/policy.typify:9: the key names the floor harbor, and harbor is an office (5.125 point 1)'
+    'C103|.programs[-1].recorded += [st("nowhere"; "-"; "-"; "floor"; $root + "/tools"; "hidden"; 9)]|programs/policy.typify:9: the statement names the floor nowhere, which the plan does not make'
   )
   local entry
   local number rest
@@ -1683,6 +1714,21 @@ t_floors() {
   check "plan with a statement of a floor" exit_is 0 wplan
   check "[C103] a floor's statement reaches the seats of the offices it houses" bash -c '[[ $1 == *"/tools hidden"* ]]' _ "$(rows_of watch)"
   check "[C103] and no seat of another floor" bash -c '[[ $1 != *"/tools "* ]]' _ "$(rows_of ida)"
+  mkdir -p -- "$root/records"
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [{term: ["key", "deck", "-", "-", "floor", "held"], origin: at(9)},
+      {term: ["expect", "deck", "-", "-", "floor", "WPT_DECK"], origin: at(10)},
+      {term: ["record", "deck", "-", "-", "floor", "pane", "kept"], origin: at(11)}, {term: ["record-path", "records"], origin: at(12)},
+      {term: ["ssh-key", "node", "keys/node"], origin: at(13)}, {term: ["ssh-grant", "deck", "-", "-", "floor", "node", "granted"], origin: at(14)},
+      st("-"; "-"; "-"; "workplace"; $root + "/keys"; "hidden"; 15)]'
+  check "plan with a key, an expect, a record and an ssh-grant at the floor deck's scope" exit_is 0 wplan
+  check "[C103] a floor's key reaches the seats of its offices" test "$(seat_of keeper '[.key.state, .key.scope]')" = '["held","floor"]'
+  check "[C103] and no seat of another floor" test "$(seat_of ida .key.state)" = '"none"'
+  check "[C103] a floor's expect reaches the seats of its offices" test "$(seat_of watch '[.expects[] | [.name, .scopes]]')" = '[["WPT_DECK",["floor"]]]'
+  check "[C103] and no seat of another floor" test "$(seat_of ida '.expects // [] | length')" = 0
+  check "[C103] a floor's record reaches the seats of its offices" test "$(seat_of pilot '[.record.pane, .record.scope]')" = '["kept","floor"]'
+  check "[C103] and no seat of another floor" test "$(seat_of ida .record.pane)" = '"none"'
+  check "[C103] a floor's ssh-grant reaches the seats of its offices, which hold its key" test "$(seat_of keeper '[.ssh.granted[] | [.name, .scope]]')" = '[["node","floor"]]'
+  check "[C103] and no seat of another floor" test "$(seat_of ida '[.ssh.granted[]?] | length')" = 0
   statements_plan '(.programs[0].plan) += [["workplace", "lonely"]]'
   check "[C101] a workplace term in a plan without floors refuses it" exit_is 1 wplan
   check "[C101] naming it" said "workplace speaks only in a plan with floors, and this plan holds none (workplace.typify, term 2)"
@@ -1697,6 +1743,18 @@ t_floors() {
     bash -c '[[ -d $1/floors/deck/keys/01 && ! -e $1/keys ]]' _ "$s"
   check "[C102] and BUILD holds the floor's keys.json, which the MANIFEST lists" \
     bash -c '[[ $(jq -r ".state + \" \" + .seats[0].name + \" \" + .seats[0].home" "$1/BUILD/floors/deck/keys.json") == "$2/floors/deck Harbor Keeper keys/01" ]] && grep -q "  floors/deck/keys.json$" "$1/BUILD/MANIFEST"' _ "$clone" "$s"
+  chmod 0750 -- "$s/floors/deck"
+  rm -rf -- "$clone/BUILD"
+  check "[C102] a floor's state directory that stands with a mode other than 700 refuses the build, with exit 2" exit_is 2 wp build
+  check "[C102] naming it and its mode" said "the state directory $s/floors/deck has the mode 750, not 700"
+  chmod 0700 -- "$s/floors/deck"
+  chmod 0750 -- "$s/floors"
+  rm -rf -- "$clone/BUILD"
+  check "[C102] and so does the directory of the floors" exit_is 2 wp build
+  check "[C102] naming it" said "the state directory $s/floors has the mode 750, not 700"
+  chmod 0700 -- "$s/floors"
+  rm -rf -- "$clone/BUILD"
+  check "build again" exit_is 0 wp build
   check "[C101] up refuses a build that stands on floors, which S2's stop 4 brings" exit_is 2 wp up
   check "[C101] saying so" said "the build stands on floors; this frame plans and builds floors and does not yet stand them up, which comes with S2's stop 4"
   check "[C102] unbuild" exit_is 0 wp unbuild
@@ -3203,7 +3261,7 @@ t_comms_store() {
   check "[C56] build" exit_is 0 wp build
   check "[C56] makes the store" said "mail: the store $s/mail is made"
   check "[C56] and says where each seat is shown its mailbox" said "mail: 5 mailboxes in $s/mail, shown at $root/mailbox"
-  check "[C56] the store: the mail's repository, one directory for each seat named by its keys joined by a space, with in and sent; out and answers beside it; every directory 0700, the record 0600" \
+  check "[C56] the store: the mail's repository, one directory for each seat named by its name, with in and sent; out and answers beside it; every directory 0700, the record 0600" \
     test "$(cd "$s" && find mail comms -path mail/.git -prune -o -printf '%p %m\n' | LC_ALL=C sort | tr '\n' ',')" = \
     "comms 700,comms/Harbor Keeper 700,comms/Harbor Keeper/answers 700,comms/Harbor Keeper/out 700,comms/Harbor Pilot 700,comms/Harbor Pilot/answers 700,comms/Harbor Pilot/out 700,comms/Harbor Watch 700,comms/Harbor Watch/answers 700,comms/Harbor Watch/out 700,comms/Orchard Grower 700,comms/Orchard Grower/answers 700,comms/Orchard Grower/out 700,comms/Orchard Picker 700,comms/Orchard Picker/answers 700,comms/Orchard Picker/out 700,comms/record 600,comms/taken 700,mail 700,mail/Harbor Keeper 700,mail/Harbor Keeper/in 700,mail/Harbor Keeper/sent 700,mail/Harbor Pilot 700,mail/Harbor Pilot/in 700,mail/Harbor Pilot/sent 700,mail/Harbor Watch 700,mail/Harbor Watch/in 700,mail/Harbor Watch/sent 700,mail/Orchard Grower 700,mail/Orchard Grower/in 700,mail/Orchard Grower/sent 700,mail/Orchard Picker 700,mail/Orchard Picker/in 700,mail/Orchard Picker/sent 700,"
   check "[C65] the repository is made with no template, so it holds no hook and no hooks directory" test ! -e "$s/mail/.git/hooks"
@@ -4068,7 +4126,7 @@ t_records_in_panes() {
   check "[C76] a file, and a directory under a seat's name, that stand in the machine's directory at the record path are shown to no seat: not to one that may read no record under a read-write row" \
     grep -qxF "entries $root/records: " "$pilot_report"
   check "[C76] nor to one that may read no record under a read-only row" screen_has "Harbor Watch" "entries $root/records: "
-  check "[C70] build made S/records, and in it a directory for each seat, named by its keys joined by a space, all 0700" \
+  check "[C70] build made S/records, and in it a directory for each seat, named by its name, all 0700" \
     test "$(cd "$s/records" && find . -maxdepth 1 -type d -printf '%P %m\n' | LC_ALL=C sort | tr '\n' ',')" = " 700,Harbor Keeper 700,Harbor Pilot 700,Harbor Watch 700,Orchard Grower 700,Orchard Picker 700,"
   check "[C70] and BUILD/records.json, listed in the MANIFEST, with each seat's directory, pane and reading" \
     bash -c 'grep -q "  records.json$" "$1/MANIFEST" && [[ $(jq -c "[.seats[0] | .name, .pane, .reads]" "$1/records.json") == "[\"Harbor Keeper\",\"kept\",[\"Harbor Pilot\"]]" ]]' _ "$clone/BUILD"

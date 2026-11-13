@@ -147,7 +147,7 @@
   - `clearance-scale` is not a fold word: it states nothing to fold (5.126 point 3). A plan whose only such term is `clearance-scale turned` is not folded, and the fold reads the scale only beside the terms it folds.
   - `view.json` holds the rows and, for each seat in the order of the `pane` terms, its kind, clearance (with `null` for none), key, count of rows, replacement statements and their counts, and its statements at labelled paths.
   - `why` names the statement or the label behind a folded row, and what that statement replaced.
-- **C34.** The fold reads `key A B C SCOPE STATE`, with SCOPE `workplace`, `office`, `room` or `seat` and STATE `held` or `none`. A seat holds a key by the narrowest scope that speaks: its own, else its room's, else its office's, else the workplace's, else none. `view.json` gives each seat `key: {state, scope, origins}`.
+- **C34.** The fold reads `key A B C SCOPE STATE`, with SCOPE `workplace`, `floor`, `office`, `room` or `seat` and STATE `held` or `none`. A seat holds a key by the narrowest scope that speaks: its own, else its room's, else its office's, else its floor's (C103), else the workplace's, else none. `view.json` gives each seat `key: {state, scope, origins}`.
   - It refuses, naming the origins, two keys of one scope with different states, a key that names an office, room or seat the plan does not make, and any other state.
   - A plan that holds a key term is folded, so every seat of it has a view.
 - **C35.** The workplaces' state directory R is `${XDG_STATE_HOME:-$HOME/.local/state}/workplace`, and a workplace's own is S = `R/NAME`, with mode 0700, made by `build`.
@@ -190,15 +190,15 @@
   - `home KIND VARIABLE STATE`: a seat of the kind has a home, named to its program through VARIABLE. STATE is `kept` or `scratch`.
   - `home-variable KIND NAME SUBPATH`: a further variable, given the directory SUBPATH inside the home. SUBPATH is relative to the home, with no empty, `.` or `..` component; `.` alone is the home.
   - `home-seed KIND PATH`: a program that `build` runs for each kept home it makes. PATH is a path position of C4.
-  - `expect A B C SCOPE NAME`, with SCOPE `workplace`, `office`, `room` or `seat`: the seats of that scope expect the value NAME, an environment variable, at their start. A seat expects the union of the names that the workplace, its office, its room and its own terms state; none takes a name away, and equal terms count once with all their origins.
+  - `expect A B C SCOPE NAME`, with SCOPE `workplace`, `floor`, `office`, `room` or `seat`: the seats of that scope expect the value NAME, an environment variable, at their start. A seat expects the union of the names that the workplace, its floor, its office, its room and its own terms state; none takes a name away, and equal terms count once with all their origins.
   - `view.json` gives a seat of a kind with a home `home: {kind, variable, state, variables, seed, origins}`, and a seat that expects a value `expects: [{name, scopes, origins}]`, by name. A seat with neither has neither member, so the view of a plan without these terms is the one the fold gave before.
   - It refuses, naming the origins: a kind no seat has and the plan does not declare; a name that is not a variable name; a state other than `kept` or `scratch`; two homes, two variables of one name or two seeds of one kind that differ; a variable or a seed for a kind with no home; a variable that is the home's own; a seed for a scratch home; an expect of a place the plan does not make or of another scope. A refusal that rests on two terms names the origin of both: a variable that is the home's own names the variable and the home, and a seed for a scratch home names the seed and the home.
-  - A kind's name and a seat's keys are each one directory of its home's name, since none is empty, `.` or `..` or holds `/` (C67).
+  - A kind's name and a seat's name are each one directory of its home's name, since neither is empty, `.` or `..` or holds `/` (C67).
   - The names the frame keeps are the binding's `kept-names`, the names its fixed part gives a seat itself: `GNUPGHOME` and `SSH_AUTH_SOCK`. A home's variable, a further variable or an expected name that is one of them is refused. So is an expected name that the binding passes on from the caller, such as `HOME`, since that would cover the value; a home may use such a name.
   - It refuses a seat that expects a name its kind's home gives it, naming the seat and both origins.
 - **C46.** A home is named by its seat's kind and name, never by the seat's place among the panes or its coordinate (5.124 point 2): `S/homes/KIND/NAME`, where S is a floor's state with floors (C102). No two seats share it, since a name is one seat's, holds no `/` and is not `.` or `..` (C67). `build` makes a kept home with mode 0700, each directory above it in `S/homes`, and `S/homes` itself, also 0700, and keeps it across builds.
   - A new order of the panes moves no home. A seat whose kind changes is given the home of its new kind, and its old home stays where it was, shown to no seat.
-  - `S/homes.json`, the frame's record with mode 0600, names the seat of each kept home by the home's name, `KIND/A/B/C`. `build` refuses, naming both, a home that the record gives another seat, and a directory that the record does not name, which it leaves alone.
+  - `S/homes.json`, the frame's record with mode 0600, names the seat of each kept home by the home's name, `KIND/NAME`. `build` refuses, naming both, a home that the record gives another seat, and a directory that the record does not name, which it leaves alone.
   - A scratch home has the same path and nothing on the machine.
   - `BUILD/homes.json`, listed in `BUILD/MANIFEST`, holds for each seat with a home its keys, name, kind, state, home's name, path and variables.
 - **C47.** For each kept home that `build` makes new, it runs the kind's seed once, under `setpriv --no-new-privs`, in the home, with nothing on standard input. Its words are the home, then the seat's start directory, then its declared directories, joined, each once: the start's directory is the seat primitive's, and the declared ones are the recorded term that the binding's `directories` names, `record-directory`. A directory that is both the start and a declared one stands once, first, and a seed is given no mark of which word is which. Its environment is the inherited names and the home's variables.
@@ -307,7 +307,7 @@
     - two `record` terms of one scope and one WHAT with different states, and two `record-limit`, `record-chain` or `record-path` terms that differ;
     - `reach … record` with no `record-path`;
     - for the record path, everything it refuses for the mail path (C55), each naming the origins of the `record-path` term where C55's names those of the `mail` term, and a record path at, above or beneath the mail path;
-    - a kept record of a seat with no view, since such a seat could reach its own record.
+    - a kept record of a seat with no view, since such a seat could reach its own record, except on an unenforced floor, whose seats have no view by design and read the machine as the user does (C104).
   - `plan` prints the records, whether each seat's pane is kept, and whose records it may read.
 - **C70.** `build` makes `S/records`, and in it one directory for each seat, named by its name, each the user's with mode 0700. With floors S is the seat's floor's state (C102).
   - A seat's directory holds one file for each day by UTC, `DAY.pane`, and `unstored` and `gaps`, which only grow. `S/records` holds the carrier's `chain.state` and the file sink's `chain`.
@@ -430,7 +430,7 @@
   - **Every floor** holds an office or a room.
   - **Without floors,** a `workplace` or `house` term is refused.
   - **`up` refuses a build that stands on floors** until S2's stop 4 brings floors up.
-- **C102.** With floors, a floor's state is `S/floors/F`, mode 0700.
+- **C102.** With floors, a floor's state is `S/floors/F`, mode 0700. `build` makes `S/floors` and `S/floors/F` with mode 0700, and refuses with exit 2 either one that stands with another mode, naming it and its mode, as it refuses S (5.129 point 6).
   - **What stands in it.** Its seats' key homes (`keys/NN`, NN their place among that floor's panes), kept homes and records stand there, and the build's files for them stand in `BUILD/floors/F` and in the MANIFEST.
   - **What stays in S.** The store, the comms and the values stay in S, one for the configuration (5.125 point 13).
   - **`unbuild`** removes the key homes of S and of every floor's state.
@@ -445,7 +445,8 @@
     - Every occupant of a room carries the same rows.
     - An asking `reach` at a seat's scope, in a room of several, refuses (5.118).
   - **`view.json`** gains `floors`, each seat's `floor` and `enforced`, and `rooms`, one entry for each room of an enforced floor. Each entry holds the room, `of` (`office` or `floor`), its floor, its clearance, its occupants and its rows keyed by the room.
-  - **`plan` prints** each unenforced floor, and each room of an enforced floor that has no number (5.125 point 7).
+  - **`plan` prints** each unenforced floor, and each room of an enforced floor that has no number (5.125 point 7), least among its office's rooms, or its floor's on a floor of rooms.
+  - **A plan that holds an enforced floor and no fold term** refuses at `plan` and at `build`, with exit 1, one line for each enforced floor in the plan's order: `the floor F is enforced, and the plan holds no fold term: an enforced floor's rooms are folded from statements, and the plan's view cell, which gives each seat rows of its own, is refused there (5.129 point 4)`. `plan` closes with `the plan holds an enforced floor and no fold term; PLAN/ is as it was`, and `build` with `build refuses: PLAN/plan.json holds an enforced floor and no fold term`. A plan whose floors are all unenforced and that holds no fold term takes its view cell, as C33 says.
 
 ## Limits, stated and not checked
 

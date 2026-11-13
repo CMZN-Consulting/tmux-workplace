@@ -377,6 +377,16 @@ folds() {
   jq -e -L "$tool/libexec" --slurpfile b "$2" 'include "table"; . as $plan | any($b[0].tables[]; folded($plan; .))' "$1" > /dev/null 2>&1
 }
 
+refuse_unfolded() {
+  local -a faults
+  mapfile -t faults < <(jq -r '.programs[] | (.plan // [])[] | (if type == "object" then .term else . end)
+    | select(type == "array" and .[0] == "floor" and .[4] == "enforced")
+    | "the floor \(.[1]) is enforced, and the plan holds no fold term: an enforced floor'"'"'s rooms are folded from statements, and the plan'"'"'s view cell, which gives each seat rows of its own, is refused there (5.129 point 4)"' "$1")
+  (( ${#faults[@]} == 0 )) && return 0
+  printf 'workplace: %s\n' "${faults[@]}" >&2
+  return 1
+}
+
 refuse_clone() {
   local -a faults
   mapfile -t faults < <(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --slurpfile b "$tool/host/binding.json" \
@@ -500,7 +510,7 @@ print_fold_report() {
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
       (.report.passages[] | "label \(.label.path) (\(.label.value)) is searchable only, a passage to the labels beneath it that a seat is cleared for (5.124 point 7), for: \(.seats | join(", ")) (\(ats(.label.origins)))"),
-      (.report.unnumbered[]? | "room \(.room | join("/")), on the enforced floor \(.floor), has no number: it is cleared for no label, and least among its office'"'"'s rooms (5.125 point 7)"),
+      (.report.unnumbered[]? | "room \(.room | join("/")), on the enforced floor \(.floor), has no number: it is cleared for no label, and least among its \(.of)'"'"'s rooms (5.125 point 7)"),
       (.report.unenforced[]? | "the unenforced floor \(.) has no view: its occupants read the machine as the user does, and labels, closed paths and bans bind them as conduct (5.124 point 3)")
   ' <<< "$folded"
 }
@@ -574,6 +584,8 @@ cmd_plan() {
   refuse_paths "$work/plan.json" || die "the plan refuses a path; PLAN/ is as it was"
   refuse_clone "$work/plan.json" || die "the plan places a seat in the clone; PLAN/ is as it was"
   refuse_terms "$work/plan.json" || die "the plan refuses a key, a name or its mail path; PLAN/ is as it was"
+  folds "$work/plan.json" "$tool/host/binding.json" || refuse_unfolded "$work/plan.json" \
+    || die "the plan holds an enforced floor and no fold term; PLAN/ is as it was"
   local -a outputs=(plan.json)
   folded=""
   if folds "$work/plan.json" "$tool/host/binding.json"; then
@@ -774,7 +786,7 @@ remove_key_homes() {
 }
 
 make_keys() {
-  local holders=$1 workplace=$2 state_dir granted
+  local holders=$1 workplace=$2 state_dir granted dir
   local -A ssh_file=() ssh_line=() ssh_fpr=() ssh_kind=()
   [[ $holders == '[]' ]] || check_ssh_keys "$holders"
   if ! state_dir=$(state_root); then
@@ -788,6 +800,9 @@ make_keys() {
   if [[ -n $floor_sub ]]; then
     { [[ -d $state_dir/floors ]] || mkdir -m 0700 -- "$state_dir/floors"; } && { [[ -d $state_dir/$floor_sub ]] || mkdir -m 0700 -- "$state_dir/$floor_sub"; } \
       || die "cannot make the floor's state directory $state_dir/$floor_sub" 2
+    for dir in "$state_dir/floors" "$state_dir/$floor_sub"; do
+      [[ $(stat -c %a -- "$dir") == 700 ]] || die "the state directory $dir has the mode $(stat -c %a -- "$dir"), not 700" 2
+    done
     state_dir=$state_dir/$floor_sub
   fi
   remove_key_homes "$state_dir" || die "cannot remove the old key homes in $state_dir/keys" 2
@@ -1207,6 +1222,8 @@ cmd_build() {
   folded=""
   refuse_paths "$plan_dir/plan.json" || die "build refuses: PLAN/plan.json holds a path that cannot be joined"
   refuse_clone "$plan_dir/plan.json" || die "build refuses: PLAN/plan.json places a seat in the clone"
+  folds "$plan_dir/plan.json" "$tool/host/binding.json" || refuse_unfolded "$plan_dir/plan.json" \
+    || die "build refuses: PLAN/plan.json holds an enforced floor and no fold term"
   if folds "$plan_dir/plan.json" "$tool/host/binding.json"; then
     [[ -f $plan_dir/view.json ]] || die "the plan holds statements, and PLAN/view.json, its folded view, is missing" 2
     fold_plan "$plan_dir/plan.json" || die "build refuses: the fold refuses PLAN/plan.json"

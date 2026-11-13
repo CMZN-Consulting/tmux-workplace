@@ -701,6 +701,17 @@ load_ssh_keys() {
   done
 }
 
+remove_key_homes() {
+  local keys=$1/keys old
+  [[ -d $keys ]] || return 0
+  if command -v gpgconf > /dev/null; then
+    for old in "$keys"/*; do
+      [[ -d $old ]] && gpgconf --homedir "$old" --remove-socketdir > /dev/null 2>&1
+    done
+  fi
+  rm -rf -- "$keys"
+}
+
 make_keys() {
   local holders=$1 workplace=$2 state_dir granted
   local -A ssh_file=() ssh_line=() ssh_fpr=() ssh_kind=()
@@ -713,15 +724,7 @@ make_keys() {
   mkdir -p -- "${state_dir%/*/*}" && { [[ -d ${state_dir%/*} ]] || mkdir -m 0700 -- "${state_dir%/*}"; } \
     && { [[ -d $state_dir ]] || mkdir -m 0700 -- "$state_dir"; } || die "cannot make the state directory $state_dir" 2
   [[ $(stat -c %a -- "$state_dir") == 700 ]] || die "the state directory $state_dir has the mode $(stat -c %a -- "$state_dir"), not 700" 2
-  local old
-  if [[ -d $state_dir/keys ]]; then
-    if command -v gpgconf > /dev/null; then
-      for old in "$state_dir"/keys/*; do
-        [[ -d $old ]] && gpgconf --homedir "$old" --remove-socketdir > /dev/null 2>&1
-      done
-    fi
-    rm -rf -- "$state_dir/keys" || die "cannot remove the old key homes in $state_dir/keys" 2
-  fi
+  remove_key_homes "$state_dir" || die "cannot remove the old key homes in $state_dir/keys" 2
   [[ $holders == '[]' ]] && return 0
   need_version gpg --version "$GPG_FLOOR"
   local program
@@ -3354,31 +3357,77 @@ cmd_restart() {
   done
 }
 
+unbuild_state() {
+  local name state plan derived default term arg
+  for name in keys.json homes.json mail.json records.json; do
+    [[ -f $build_dir/$name && ! -L $build_dir/$name ]] || continue
+    state=$(jq -r '.state // empty' "$build_dir/$name" 2> /dev/null) || state=""
+    [[ -n $state ]] && { printf '%s\n' "$state"; return 0; }
+  done
+  derived=$(derive_name sha256-path-prefix12-v1) || return 1
+  default=$(jq -r '.name.default // ""' "$tool/host/binding.json") || return 1
+  term=$(jq -r '.name.term // ""' "$tool/host/binding.json") || return 1
+  arg=$(jq -r '.name.arg // 1' "$tool/host/binding.json") || return 1
+  for plan in "$build_dir/plan.json" "$clone/PLAN/plan.json"; do
+    [[ -f $plan && ! -L $plan ]] || continue
+    name=$(jq -r --arg t "$term" --argjson a "$arg" '
+      [.programs[]?.plan[]? | (if type == "object" then .term else . end)
+       | select(type == "array" and .[0] == $t) | .[$a] | strings] | first // empty' "$plan" 2> /dev/null) || name=""
+    if [[ -n $name && ( $name == "$default" || $name == "$derived" ) ]]; then
+      workplace_state "$name"
+      return
+    fi
+  done
+  workplace_state "$derived"
+}
+
 cmd_unbuild() {
   (( $# == 0 )) || die "unbuild takes no arguments" 2
   need_jq
   locate
+  local -a files homes
+  local name state_dir="" sum=none home n total=0
   if [[ ! -e $build_dir && ! -L $build_dir ]]; then
     say "unbuild: there is no build under $clone"
+  else
+    [[ -d $build_dir && ! -L $build_dir ]] || die "unbuild refuses: $build_dir is not a directory" 2
+    [[ ! -e $run_dir && ! -L $run_dir ]] || die "unbuild refuses: the workplace is up, since $run_dir stands; run workplace down first"
+  fi
+  state_dir=$(unbuild_state) || state_dir=""
+  if [[ -d $build_dir && ! -L $build_dir ]]; then
+    [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]] && sum=$(sha_of "$build_dir/MANIFEST")
+    mapfile -t files < <(cd -- "$build_dir" && find . -mindepth 1 ! -type d -printf '%P\n' | LC_ALL=C sort)
+    rm -rf -- "$build_dir"
+    [[ ! -e $build_dir && ! -L $build_dir ]] || die "cannot remove $build_dir" 2
+    say "unbuild: removed $build_dir, ${#files[@]} files, whose MANIFEST had the hash $sum:"
+    for name in "${files[@]}"; do say "  $name"; done
+  fi
+  if [[ -z $state_dir ]]; then
+    say "unbuild: the plan kept nothing in a state directory"
     return 0
   fi
-  [[ -d $build_dir && ! -L $build_dir ]] || die "unbuild refuses: $build_dir is not a directory" 2
-  [[ ! -e $run_dir && ! -L $run_dir ]] || die "unbuild refuses: the workplace is up, since $run_dir stands; run workplace down first"
-  local -a files
-  local name kept="" sum=none
-  for name in keys.json homes.json mail.json records.json; do
-    [[ -z $kept && -f $build_dir/$name && ! -L $build_dir/$name ]] && kept=$(jq -r '.state // empty' "$build_dir/$name" 2> /dev/null)
-  done
-  [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]] && sum=$(sha_of "$build_dir/MANIFEST")
-  mapfile -t files < <(cd -- "$build_dir" && find . -mindepth 1 ! -type d -printf '%P\n' | LC_ALL=C sort)
-  rm -rf -- "$build_dir"
-  [[ ! -e $build_dir && ! -L $build_dir ]] || die "cannot remove $build_dir" 2
-  say "unbuild: removed $build_dir, ${#files[@]} files, whose MANIFEST had the hash $sum:"
-  for name in "${files[@]}"; do say "  $name"; done
-  if [[ -n $kept ]]; then
-    say "unbuild: the state directory $kept is kept"
+  if [[ -d $state_dir/keys && ! -L $state_dir/keys ]]; then
+    homes=()
+    for home in "$state_dir"/keys/*; do
+      [[ -d $home && ! -L $home ]] || continue
+      n=$(find "$home" ! -type d -printf . | wc -c)
+      homes+=("  ${home##*/}: $n files")
+      total=$(( total + n ))
+    done
+    remove_key_homes "$state_dir"
+    [[ ! -e $state_dir/keys && ! -L $state_dir/keys ]] || die "cannot remove the key homes in $state_dir/keys" 2
+    say "unbuild: removed the key homes in $state_dir/keys, ${#homes[@]} homes, $total files, first removing their runtime socket directories, which ends any agent of them:"
+    for name in "${homes[@]}"; do say "$name"; done
   else
-    say "unbuild: the plan kept nothing in a state directory"
+    say "unbuild: no key home stands in $state_dir/keys"
+  fi
+  if [[ -d $state_dir ]]; then
+    local kept=""
+    mapfile -t files < <(cd -- "$state_dir" && find . -mindepth 1 -maxdepth 1 -printf '%P\n' | LC_ALL=C sort)
+    for name in "${files[@]}"; do kept+=${kept:+, }$name; done
+    say "unbuild: the state directory $state_dir is kept, with everything in it but the key homes: ${kept:-nothing}"
+  else
+    say "unbuild: the state directory $state_dir does not stand"
   fi
 }
 

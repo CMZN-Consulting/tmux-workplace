@@ -148,7 +148,7 @@
   - The user id is `NAME <A.B.C@WORKPLACE>`: the seat's name, and its place at the workplace. A user id that gpg does not make as asked refuses the build by name. The user id is passed after `--`, since gpg reads one that begins with `-` as its options.
   - The agent of the home has `pinentry-program` set to `false`, `enable-ssh-support` and `disable-scdaemon` (C88). The home holds the subkey's keygrip in `sshcontrol`, which is read-only (0444), and `no-autostart` in `gpg.conf`.
 - **C36.** No key outlives its build.
-  - Every build removes the old homes of `S/keys`, first removing their runtime socket directories, which ends any agent of them.
+  - Every build removes the old homes of `S/keys`, first removing their runtime socket directories, which ends any agent of them. `unbuild` removes them the same way (C99), so that none outlives a build that is gone.
   - It removes the revocation certificate that gpg writes unasked, and ends the agent that made the key.
 - **C37.** `BUILD/keys.json`, listed in `BUILD/MANIFEST`, holds the workplace's name and S. For each holding seat it holds:
   - its place and name, its home and its user id;
@@ -402,7 +402,10 @@
   - It refuses what `up` refuses, and then starts nothing: a build that does not verify; a missing program; a server that is not the run's; a seat whose start `exec --print` refuses; values, homes, mail and records as `up` checks them; and any other line of the run's checks that `status` names as gone, the carrier's and the agents' among them. It refuses with exit 2 a seat it does not know, a pane that is gone or lacks the run's mark, and a workplace that is not up, and with exit 1 a seat whose program runs.
   - It records who asked: one line of JSON in `S/restarts`, mode 0600, with the time, the seat, its pane, and the user, the uid and the terminal of the shell that asked, and, for a kept pane, a line in the seat's `gaps`, which the chain covers. It says the same on its output.
   - The mail that waits to be pointed out to the seat stays (C94). Its count and newest id come with the next pointer, once the new program's pane is ready.
-- **C99.** `workplace unbuild` removes `BUILD` while the workplace is down. It refuses with exit 1 while `RUN` stands. It names each file it removes and the MANIFEST's hash, and names the state directory, which it keeps. With no `BUILD` it says so and exits 0.
+- **C99.** `workplace unbuild` removes `BUILD` while the workplace is down. It refuses with exit 1 while `RUN` stands. It names each file it removes and the MANIFEST's hash. With no `BUILD` it says so, and goes on.
+  - Then it removes the homes of `S/keys` as every build does before it makes new ones (C36): their runtime socket directories first, which ends any agent of them, then the homes. It names each home and how many files it held. It does so also when no `BUILD` stands and key homes do.
+  - It finds S where the build's records name it while `BUILD` stands, and otherwise by the workplace's name (C25): the one that `BUILD/plan.json` or else `PLAN/plan.json` gives when it is `default` or the clone's derived name, and else the clone's derived name.
+  - It names the state directory and keeps everything else in it: the seats' homes, the records, the mail's store, the values file and `restarts`. It exits 0.
 
 ## Limits, stated and not checked
 

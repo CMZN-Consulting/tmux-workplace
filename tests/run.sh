@@ -4196,6 +4196,82 @@ t_restart() {
   check "down" exit_is 0 wp down
 }
 
+state_but_keys() {
+  (cd -- "$1" && find . -path ./keys -prune -o -printf '%y %m %p\n' | LC_ALL=C sort \
+    && find . -path ./keys -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum)
+}
+files_under() { find "$1" ! -type d 2> /dev/null | grep -c ''; }
+
+t_unbuild_keys() {
+  local program
+  for program in gpg gpg-agent gpgconf ssh-keygen ssh-add setsid base64; do
+    command -v "$program" > /dev/null || { skip "[C99] $program is not on PATH here, so no key home is made for unbuild to remove"; return; }
+  done
+  scoped_clone
+  local s homes before pane home n
+  s=$(state_of)
+  mkdir -m 0700 -- "$root/keys"
+  mkdir -p -- "$root/records" "$root/mailbox"
+  ssh-keygen -q -t ed25519 -N '' -C account-comment -f "$root/keys/account" < /dev/null
+  rm -f -- "$root/keys/account.pub"
+  statements_plan "$key_terms | $home_terms | $value_terms | $comms_terms | $records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "home-seed"))
+    | .programs[-1].recorded += [{term: ["ssh-key", "account", "keys/account"], origin: {kind: "program", line: 40, path: "programs/SSH.typify"}},
+                                 {term: ["ssh-grant", "-", "-", "-", "workplace", "account", "granted"], origin: {kind: "program", line: 41, path: "programs/SSH.typify"}},
+                                 st("-"; "-"; "-"; "workplace"; $root + "/keys"; "hidden"; 42)]'
+  check "plan" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  jq -n '{workplace: {WPT_TOKEN: "the token"}, rooms: {"harbor/dock": {WPT_DOCK: "the dock"}}, offices: {orchard: {WPT_ORCHARD: "the orchard"}}}' > "$s/values.json"
+  chmod 0600 -- "$s/values.json"
+  check "up" exit_is 0 wp up
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  pane=$(pane_by_title "Harbor Keeper")
+  T send-keys -t "$pane" C-c
+  check "keeper's program ends" eventually_long dead_pane "Harbor Keeper"
+  check "restart" exit_is 0 wp restart "Harbor Keeper"
+  check "down" exit_is 0 wp down
+  n=$(files_under "$s/keys")
+  check "[C99] the state directory holds the build's key homes, $n files with the grants' copies, beside the seats' homes, the records, the mail's store, the values file and restarts" \
+    bash -c '(( $2 > 0 )) && [[ -n $(find "$1/keys" -path "*/ssh/*" ! -type d -print -quit) ]] && for p in homes records mail values.json restarts; do [[ -e $1/$p ]] || exit 1; done' _ "$s" "$n"
+  home=$(find "$s/keys" -mindepth 1 -maxdepth 1 -type d | LC_ALL=C sort | head -n 1)
+  gpgconf --homedir "$home" --launch gpg-agent > /dev/null 2>&1
+  local agent=1
+  if ! eventually agent_of "$home"; then
+    agent=0
+    skip "[C99] no agent of a key home could be started here, so that unbuild ends one is shown where one can"
+  fi
+  local socket
+  socket=$(gpgconf --homedir "$home" --list-dirs socketdir 2> /dev/null)
+  n=$(files_under "$s/keys")
+  before=$(state_but_keys "$s")
+  check "[C99] unbuild" exit_is 0 wp unbuild
+  check "[C99] it names the key homes it removed" said "unbuild: removed the key homes in $s/keys, 3 homes, $n files, first removing their runtime socket directories, which ends any agent of them:"
+  check "[C99] and no file stands beneath S/keys" test ! -e "$s/keys"
+  (( agent )) && check "[C99] the agent of a key home has ended" eventually_long no_agent_of "$home"
+  if (( agent )) && [[ $socket == /run/user/* && -d /run/user/$EUID/gnupg && -r /run/user/$EUID/gnupg ]]; then
+    check "[C99] and its runtime socket directory, which stood while it ran, is gone: removing the home alone ends the agent and leaves the directory" test ! -e "$socket"
+  else
+    skip "[C99] no agent's socket directory stood in a readable /run/user/$EUID/gnupg here, so that unbuild leaves none is measured where one does"
+  fi
+  check "[C99] everything else in the state directory stands as before, byte for byte" test "$(state_but_keys "$s")" = "$before"
+  check "[C99] which unbuild names as kept, the seats' homes, the records, the mail's store, the values file and restarts among it" \
+    bash -c 'l=$(grep -F "unbuild: the state directory $2 is kept, with everything in it but the key homes: " "$1") || exit 1; l=", ${l#*key homes: }, "; for p in homes mail records restarts values.json; do [[ $l == *", $p, "* ]] || exit 1; done' _ "$scratch/out" "$s"
+  check "build again" exit_is 0 wp build
+  rm -rf -- "$clone/BUILD"
+  check "[C99] with no BUILD, unbuild still removes the key homes that stand" exit_is 0 wp unbuild
+  check "[C99] saying that there is no build" said "unbuild: there is no build under $clone"
+  check "[C99] and naming the homes, found by the plan's name" said "unbuild: removed the key homes in $s/keys, 3 homes, "
+  check "[C99] and no file stands beneath S/keys" test ! -e "$s/keys"
+  check "build again" exit_is 0 wp build
+  rm -rf -- "$clone/BUILD"
+  mv -- "$clone/PLAN" "$scratch/PLAN"
+  check "[C99] with neither BUILD nor PLAN, unbuild finds them by the name the clone gives" exit_is 0 wp unbuild
+  check "[C99] naming them" said "unbuild: removed the key homes in $s/keys, 3 homes, "
+  check "[C99] and no file stands beneath S/keys" test ! -e "$s/keys"
+  check "[C99] a further unbuild finds no key home, and says so" exit_is 0 wp unbuild
+  check "[C99] saying so" said "unbuild: no key home stands in $s/keys"
+  mv -- "$scratch/PLAN" "$clone/PLAN"
+}
+
 t_records_by_day() {
   local fake=$scratch/fake-date d
   mkdir -p -- "$fake"
@@ -4303,6 +4379,7 @@ tests=(
   t_records_journal
   t_records_by_day
   t_restart
+  t_unbuild_keys
   t_the_runtime_directory
   t_source_and_contract
 )

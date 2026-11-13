@@ -3951,6 +3951,35 @@ t_records_journal() {
   check "[C83] and is not taken as the carrier's: the file still agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
   check "[C83] the run wrote $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c .) lines of the carrier's to the journal, $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record) of them entries of the chain, beside the manager's own lines of the unit and the one forged" \
     test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record)" -ge 1
+  local s2=$scratch/state2 mark1 mark2 file1 file2
+  file1=$(record_of keeper)/$day.pane
+  file2="$s2/workplace/$label/records/harbor dock keeper/$day.pane"
+  mark1=$(jq -r '.mark // ""' "$clone/BUILD/records.json")
+  mkdir -p -- "$s2"
+  export XDG_STATE_HOME=$s2
+  rm -rf -- "$clone/BUILD"
+  check "[C75] build again, for the workplace of the same name in a second state directory" exit_is 0 wp build
+  mark2=$(jq -r '.mark // ""' "$clone/BUILD/records.json")
+  check "[C75] build gives each state directory a mark of its own, kept in S/records/mark" \
+    bash -c '[[ $1 =~ ^[0-9a-f]{32}$ && $2 =~ ^[0-9a-f]{32}$ && $1 != "$2" && $(cat "$3") == "$2" ]]' _ "$mark1" "$mark2" "$s2/workplace/$label/records/mark"
+  check "[C75] up there, its carrier a unit of the same name" exit_is 0 wp up
+  check "[C75] the unit is the one of the first run's name" systemctl --user is-active --quiet "$unit"
+  check "keeper ran there" wait_for_probe "Harbor Keeper" keeper
+  check "down" exit_is 0 wp down
+  check "[C75] under the one unit, the journal holds entries of the keeper's file from both state directories, each with its mark" \
+    test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | jq -R -r --arg f "harbor dock keeper/$day.pane" 'try fromjson catch empty | select(type == "object" and .chain == "workplace-record" and .file == $f) | .mark // "none"' | LC_ALL=C sort -u | tr '\n' ' ')" = "$(printf '%s\n' "$mark1" "$mark2" | LC_ALL=C sort | tr '\n' ' ')"
+  check "[C75] record verify in the second state directory passes over the first's entries" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C75] and its file agrees with its own chain, its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file2"), its whole length"
+  unset XDG_STATE_HOME
+  rm -rf -- "$clone/BUILD"
+  check "[C75] build again in the first state directory" exit_is 0 wp build
+  check "[C75] which keeps its mark across builds" test "$(jq -r '.mark // ""' "$clone/BUILD/records.json")" = "$mark1"
+  check "[C75] record verify there passes over the second's entries" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C75] and its file agrees with its own chain, its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file1"), its whole length"
+  printf 'not a mark' > "$(state_of)/records/mark"
+  rm -rf -- "$clone/BUILD"
+  check "[C72] build refuses a mark that is not 32 hexadecimal digits" exit_is 1 wp build
+  check "[C72] and says why" said "build refuses: $(state_of)/records/mark is not a file that holds 32 hexadecimal digits, the mark of this state directory"
 }
 
 tests=(

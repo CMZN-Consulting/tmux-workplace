@@ -309,7 +309,8 @@
   - The keeper stores what the pane's program wrote, byte for byte, with `dd`, a chunk at each read. It takes the day from `date -u` whenever the second changes, and changes the file itself at a change of day, so the pipe is set once. Setting it again loses lines: 2 in 20, measured.
   - At the limit it stores nothing more that day and counts what it does not store. When that day's file ends, at a change of day or at the pane's end, it appends `DAY COUNT` to `unstored`.
 - **C72.** With a sink, the carrier sends one entry for each kept file, every ten seconds and twice as it ends: for what was appended since that file's last entry. The kept files are each seat's day files, `unstored`, `gaps` and `signed` (C91), and the frame's record of requests (C66).
-  - An entry is `{chain: "workplace-record", at, workplace, seat, file, offset, length, hash, previous}`.
+  - An entry is `{chain: "workplace-record", at, workplace, mark, seat, file, offset, length, hash, previous}`.
+  - `mark` is the state directory's: 32 hexadecimal digits that `build` draws at random into `S/records/mark` when it is missing, and keeps across builds. `build` refuses a mark that is not a file holding 32 hexadecimal digits.
   - Its hash is the SHA-256 of `previous`, written as 64 lowercase hex digits, followed by the bytes from `offset` for `length`. Before a file's first entry, `previous` is 64 zeros.
   - The carrier keeps each file's offset and last hash in `chain.state`, across runs.
   - **The file sink:** appends each entry, one line of JSON, to `S/records/chain`.
@@ -324,7 +325,8 @@
 - **C75.** `status` names, for each kept seat, its day file, its size against the limit and the byte the chain has reached, and, with the run up, its pane's pipe. It exits 1 for a pane without its pipe and while the sink's last entry was refused.
   - A refused entry moves nothing forward: the next entry the sink takes covers the same bytes, so a refusal leaves no hole.
   - Once the sink takes an entry again, `status` exits 0 for it, and names the time of the last refusal for the rest of the run.
-  - `record verify NAME [DAY]` reads the seat's day file, today's by UTC by default, against its chain, taken from the plan's sink. From the journal, it takes only the entries whose `_SYSTEMD_USER_UNIT` is the carrier's unit.
+  - `record verify NAME [DAY]` reads the seat's day file, today's by UTC by default, against its chain, taken from the plan's sink. From the journal, it takes only the entries whose `_SYSTEMD_USER_UNIT` is the carrier's unit and whose `mark` is the state directory's.
+  - The carrier's unit is named by the workplace's name alone, so a workplace of the same name with another state directory sends its entries under the same unit. Its entries carry its own mark, and `record verify` passes over them. The file sink stands in S, so its entries are the state directory's by their place.
   - It names the first place where file and chain differ, or says that they agree and up to which byte.
   - It exits 1 where they differ, and 2 for a seat it does not know, a day not written YYYY-MM-DD, or a workplace with no chain.
 - **C76.** In a plan that holds a record path, the fixed part puts the frame's read-only file system at the record path in every seat's view, after the rows, whatever the machine holds there and whatever a row says above it. It holds one read-only directory for each seat whose record the seat may read, under that seat's name, and for a seat that may read none it is empty. `why` names it, and says for a seat that may read none that it is empty.

@@ -1020,7 +1020,7 @@ need_programs_for() {
 carrier_unit() { printf 'workplace-carrier-%s.service\n' "$1"; }
 
 make_records() {
-  local workplace=$1 path state_dir dir entries='[]' seat box rel chain origins at
+  local workplace=$1 path state_dir dir entries='[]' seat box rel chain origins at state_mark
   [[ $(jq -r '.view.records // empty | type' <<< "$folded") == object ]] || return 0
   path=$(jq -r '.view.records.path // empty' <<< "$folded")
   origins=$(jq -c '.report.record_path_origins // []' <<< "$folded")
@@ -1041,15 +1041,20 @@ make_records() {
   [[ -e $dir || -L $dir ]] || mkdir -m 0700 -- "$dir" || die "cannot make $dir" 2
   [[ -d $dir && ! -L $dir && $(stat -c %a -- "$dir") == 700 && $(stat -c %u -- "$dir") == "$EUID" ]] \
     || die "build refuses: $dir is not a directory of this user's with mode 700, where the frame keeps the records"
+  if [[ ! -e $dir/mark && ! -L $dir/mark ]]; then
+    od -An -N16 -tx1 /dev/urandom | tr -d ' \n' > "$dir/mark.$$" && mv -- "$dir/mark.$$" "$dir/mark" || die "cannot make $dir/mark" 2
+  fi
+  [[ -f $dir/mark && ! -L $dir/mark ]] && state_mark=$(< "$dir/mark") && [[ $state_mark =~ ^[0-9a-f]{32}$ ]] \
+    || die "build refuses: $dir/mark is not a file that holds 32 hexadecimal digits, the mark of this state directory"
   while IFS= read -r seat; do
     box=$(jq -r '.seat | join(" ")' <<< "$seat")
     make_dirs "$state_dir" "records/$box" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the record of $(jq -r '.name' <<< "$seat") stands"
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg dir "$dir" '. + [$s + {box: $box, dir: "\($dir)/\($box)"}]' <<< "$entries")
   done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], pane: .record.pane, reads: (.reach.record // [])}' <<< "$folded")
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --argjson o "$origins" --arg c "$chain" --arg u "$(carrier_unit "$workplace")" \
-    --argjson limit "$(jq '.view.records.limit' <<< "$folded")" --argjson seats "$entries" \
+    --arg m "$state_mark" --argjson limit "$(jq '.view.records.limit' <<< "$folded")" --argjson seats "$entries" \
     '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), origins: $o, limit: $limit,
-      chain: (if $c == "" then null else $c end), unit: $u, seats: $seats}' > "$build_dir/records.json" \
+      chain: (if $c == "" then null else $c end), unit: $u, mark: $m, seats: $seats}' > "$build_dir/records.json" \
     || die "cannot write $build_dir/records.json" 2
   say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
 }
@@ -2468,9 +2473,9 @@ chain_one() {
   length=$(( size - offset ))
   hash=$({ printf '%s' "$prev"; tail -c "+$(( offset + 1 ))" -- "$file" | head -c "$length"; } | sha256sum)
   hash=${hash%% *}
-  entry=$(jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$chain_workplace" --arg s "$seat" --arg f "$rel" \
+  entry=$(jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg w "$chain_workplace" --arg m "$chain_mark" --arg s "$seat" --arg f "$rel" \
     --argjson o "$offset" --argjson l "$length" --arg h "$hash" --arg p "$prev" \
-    '{chain: "workplace-record", at: $at, workplace: $w, seat: $s, file: $f, offset: $o, length: $l, hash: $h, previous: $p}')
+    '{chain: "workplace-record", at: $at, workplace: $w, mark: $m, seat: $s, file: $f, offset: $o, length: $l, hash: $h, previous: $p}')
   if chain_put "$entry"; then
     chain_offset[$rel]=$size
     chain_hash[$rel]=$hash
@@ -2560,7 +2565,7 @@ cmd_carry() {
       record_kept+=("$(jq -r '.pane // "none"' <<< "$entry")")
     done < <(jq -c '.seats[]' "$records")
     records_dir=$(jq -r '.dir' "$records") record_limit=$(jq -r '.limit' "$records")
-    chain_sink=$(jq -r '.chain // empty' "$records") chain_workplace=$(jq -r '.workplace' "$records")
+    chain_sink=$(jq -r '.chain // empty' "$records") chain_workplace=$(jq -r '.workplace' "$records") chain_mark=$(jq -r '.mark // ""' "$records")
     [[ -n $chain_sink ]] && chain_load
   fi
   : > "$run_dir/carrier/ready"
@@ -2603,7 +2608,7 @@ record_entries() {
     jq -c --arg f "$rel" 'select(.chain? == "workplace-record" and .file == $f)' "$(jq -r '.dir' "$records")/chain"
   else
     journalctl --user _SYSTEMD_USER_UNIT="$(jq -r '.unit' "$records")" -o json --no-pager 2> /dev/null \
-      | jq -c --arg f "$rel" '.MESSAGE | strings | (try fromjson catch null) | select(type == "object" and .chain == "workplace-record" and .file == $f)'
+      | jq -c --arg f "$rel" --arg m "$(jq -r '.mark // ""' "$records")" '.MESSAGE | strings | (try fromjson catch null) | select(type == "object" and .chain == "workplace-record" and .mark == $m and .file == $f)'
   fi
 }
 

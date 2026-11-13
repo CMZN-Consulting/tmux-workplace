@@ -2221,10 +2221,10 @@ refused_by() {
 }
 write_seed() {
   printf '%s\n' '#!/usr/bin/env bash' 'home=$1' 'shift' 'printf "%s\n" "$@" > "$home/seeded"' \
-    '{ printf "%s\n" "pwd $PWD" "$(grep "^NoNewPrivs" /proc/self/status | tr -d " \t")" "names $(tr "\0" "\n" < /proc/$$/environ | cut -d= -f1 | LC_ALL=C sort | tr "\n" " ")" "WPT_HOME=${WPT_HOME-} WPT_CACHE=${WPT_CACHE-}" "stdin $(readlink /proc/$$/fd/0)"; } > "$home/seeded.how"' \
+    '{ printf "%s\n" "order $(tr "\0" "\n" < /proc/$$/environ | cut -d= -f1 | grep "^WPT_" | tr "\n" " ")" "pwd $PWD" "$(grep "^NoNewPrivs" /proc/self/status | tr -d " \t")" "names $(tr "\0" "\n" < /proc/$$/environ | cut -d= -f1 | LC_ALL=C sort | tr "\n" " ")" "WPT_HOME=${WPT_HOME-} WPT_CACHE=${WPT_CACHE-}" "cache $(if [[ -d $WPT_CACHE && ! -L $WPT_CACHE ]]; then stat -c %a "$WPT_CACHE"; else echo missing; fi)" "stdin $(readlink /proc/$$/fd/0)"; } > "$home/seeded.how"' \
     'printf "%s\n" "$home" >> "$HOME/seed-log"' > "$root/tools/seed"
   chmod +x -- "$root/tools/seed"
-  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "the seed fails on purpose" >&2' 'exit 3' > "$root/tools/failing-seed"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" one two "" three four "" five' 'printf "%s\n" "the seed fails on purpose" "" >&2' 'exit 3' > "$root/tools/failing-seed"
   chmod +x -- "$root/tools/failing-seed"
 }
 
@@ -2295,6 +2295,23 @@ t_home_and_values_selection() {
   check "[C48] and leaves no BUILD" test ! -e "$clone/BUILD"
   check "[C45] the names the frame keeps are the binding's kept-names, the very names its fixed part gives" \
     test "$(jq -c '.["kept-names"] as $k | [.tables[]["after-rows"]?[]? | (.environment // [])[] | .[0]] | unique == ($k | sort) and $k == ["GNUPGHOME", "SSH_AUTH_SOCK"]' "$tool/host/binding.json")" = true
+  write_seed
+  local hk=$HOME/.local/state/workplace/$label/homes/navigator/harbor/dock/keeper
+  statements_plan "$home_terms"' | .programs[-1].recorded += [h(["home-variable", "navigator", "WPT_b", "b/deep"]; 9), h(["home-variable", "navigator", "WPT_A", "a"]; 10), h(["home-variable", "navigator", "WPT__", "u"]; 11)]'
+  check "plan with further variables written out of the code-point order of their names" exit_is 0 wplan
+  check "[C47] build" exit_is 0 wp build
+  check "[C48] a seat's further variables stand in the code-point order of their names, after the kind's variable: in view.json, in BUILD/homes.json and in the seed's environment" \
+    bash -c '[[ $(jq -c "[.seats[] | select(.seat == [\"harbor\", \"dock\", \"keeper\"]) | .home.variables[].name]" "$1/PLAN/view.json") == "[\"WPT_A\",\"WPT_CACHE\",\"WPT__\",\"WPT_b\"]" \
+      && $(jq -c "[.seats[] | select(.name == \"Harbor Keeper\") | .environment[][0]]" "$1/BUILD/homes.json") == "[\"WPT_HOME\",\"WPT_A\",\"WPT_CACHE\",\"WPT__\",\"WPT_b\"]" ]] \
+      && grep -qxF "order WPT_HOME WPT_A WPT_CACHE WPT__ WPT_b " "$2/seeded.how"' _ "$clone" "$hk"
+  check "[C47] each directory of a further variable is made, mode 0700, each name on the way down too" \
+    test "$(cd "$hk" && find a b u cache -printf '%p %m %y,')" = "a 700 d,b 700 d,b/deep 700 d,u 700 d,cache 700 d,"
+  mkdir -- "$scratch/outside"
+  rm -rf -- "$hk/b" "$clone/BUILD"
+  ln -s -- "$scratch/outside" "$hk/b"
+  check "[C47] build, with a link in the home where a further variable's way goes down" exit_is 0 wp build
+  check "[C47] makes nothing through the link, and says so, naming the variable, the seat and the path" \
+    bash -c 'grep -qxF "home: WPT_b of Harbor Keeper (harbor/dock/keeper) names $1/b/deep, and $1/b is a link or not a directory; build makes nothing there" "$2" && [[ -L $1/b && -z $(ls -A "$3") ]]' _ "$hk" "$scratch/out" "$scratch/outside"
 }
 
 t_homes() {
@@ -2330,6 +2347,7 @@ t_homes() {
   check "[C47] in the home" grep -qxF "pwd $hk" "$hk/seeded.how"
   check "[C47] with nothing on standard input" grep -qxF "stdin /dev/null" "$hk/seeded.how"
   check "[C47] given the home's variables" grep -qxF "WPT_HOME=$hk WPT_CACHE=$hk/cache" "$hk/seeded.how"
+  check "[C47] the further variable's directory is made, mode 0700, before the seed runs" grep -qxF "cache 700" "$hk/seeded.how"
   check "[C47] and nothing of the caller's but the inherited names" \
     bash -c 'line=$(grep "^names " "$1"); for n in ${line#names }; do [[ " $2 PWD WPT_HOME WPT_CACHE " == *" $n "* ]] || exit 1; done' _ "$hk/seeded.how" "$(jq -r '.inherit | join(" ")' "$tool/host/binding.json")"
   if [[ $(nnp_of $$) == NoNewPrivs:1 ]]; then
@@ -2383,16 +2401,18 @@ t_homes() {
   check "grower ran again" wait_for_probe "Orchard Grower" grower
   check "[C48] a scratch home starts empty every time" r "$root/orchard/almanac/grower" "home starts: 1"
   check "down" exit_is 0 wp down
-  rm -rf -- "$clone/BUILD"
+  rm -rf -- "$clone/BUILD" "$hk/cache"
   check "[C47] build again" exit_is 0 wp build
   check "[C47] no seed runs for a home that exists" test "$(grep -c '' "$HOME/seed-log")" = 2
   check "[C47] and build says nothing of it" bash -c '! grep -q "^home: " "$1"' _ "$scratch/out"
+  check "[C47] a further variable's directory missing from a home that exists is made again, mode 0700" \
+    bash -c '[[ -d $1 && ! -L $1 && $(stat -c %a "$1") == 700 ]]' _ "$hk/cache"
   rm -rf -- "$clone/BUILD" "$hp"
   statements_plan "$home_terms | $probe_args"' | (.programs[-1].recorded[] | select(.term[0] == "home-seed") | .term[2]) = "tools/failing-seed"'
   check "plan with a failing seed" exit_is 0 wplan
   check "[C47] a seed that fails refuses the build, with exit 1" exit_is 1 wp build
-  check "[C47] naming the seed, the kind, the seat and the exit, with what it said" \
-    said "build refuses: the seed $root/tools/failing-seed of the kind navigator failed for Harbor Pilot (harbor/dock/pilot) with exit 3, and its new home is removed: the seed fails on purpose"
+  check "[C47] naming the seed, the kind, the seat and the exit, with the last five lines it said that are not empty, empty lines between and after them" \
+    said "build refuses: the seed $root/tools/failing-seed of the kind navigator failed for Harbor Pilot (harbor/dock/pilot) with exit 3, and its new home is removed: two three four five the seed fails on purpose "
   check "[C47] its new home is removed, the old one kept, and the record names the old one alone" \
     bash -c '[[ ! -e $2 && -d $3 && $(jq -c "keys" "$1/homes.json") == "[\"navigator/harbor/dock/keeper\"]" ]]' _ "$s" "$hp" "$hk"
   check "[C47] and no BUILD is left" test ! -e "$clone/BUILD"
@@ -2704,6 +2724,8 @@ export LC_ALL=C'
   check "nothing of the loop runs through sudo, doas or pkexec" \
     bash -c '! grep -rnwE "sudo|doas|pkexec" "$1"/bin "$1"/libexec "$1"/host' _ "$tool"
   check "bubblewrap is not setuid" test ! -u "$(command -v bwrap)"
+  check "[C29] the fold's version that the contract names is the one the loop writes" \
+    bash -c '[[ $(grep -oE "The fold'"'"'s version is \`[^\`]+\`" "$1/CONTRACT.md" | grep -c .) == 1 && $(grep -oE "The fold'"'"'s version is \`[^\`]+\`" "$1/CONTRACT.md" | cut -d"\`" -f2) == "$(sed -n "s/^FOLD_DERIVATION=//p" "$1/bin/workplace")" ]]' _ "$tool"
   local n missing=""
   for n in $(grep -oE '\*\*C[0-9]+\.\*\*' "$tool/CONTRACT.md" | tr -d '*.'); do
     grep -qE "^[[:space:]]*check \"\\[$n\\]" "$here/run.sh" || missing+=" $n"

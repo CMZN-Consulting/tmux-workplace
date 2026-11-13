@@ -821,6 +821,23 @@ record_homes() {
   jq -n --argjson o "$1" '$o' > "$2.new" && chmod 0600 -- "$2.new" && mv -f -- "$2.new" "$2"
 }
 
+home_dirs() {
+  local home=$1 who=$2 name sub at rest part
+  while IFS= read -r -d '' name && IFS= read -r -d '' sub; do
+    at=$home rest=$sub
+    while [[ -n $rest ]]; do
+      part=${rest%%/*}
+      [[ $rest == */* ]] && rest=${rest#*/} || rest=""
+      at+=/$part
+      if [[ -L $at || ( -e $at && ! -d $at ) ]]; then
+        say "home: $name of $who names $home/$sub, and $at is a link or not a directory; build makes nothing there"
+        continue 2
+      fi
+      [[ -d $at ]] || mkdir -m 0700 -- "$at" || return 1
+    done
+  done < <(jq --raw-output0 '.home.variables[] | select(.path != ".") | .name, .path' <<< "$3")
+}
+
 make_homes() {
   local holders=$1 workplace=$2 state_dir
   [[ $holders == '[]' ]] && return 0
@@ -879,6 +896,7 @@ make_homes() {
           if [[ -n $seed && -n $seeded_with && $seeded_with != "$(json_list "${words[@]}")" ]]; then
             say "home: $who would now be seeded with $(json_list "${words[@]:1}" | jq -r 'if length == 0 then "no directory" else join(" ") end'), and its home $path was seeded with $(jq -r '.[1:] | if length == 0 then "no directory" else join(" ") end' <<< "$seeded_with"); build does not seed it again"
           fi
+          home_dirs "$path" "$who" "$holder" || die "cannot make the directories of the further variables of $who in its home $path" 2
         fi
       fi
       if [[ ! -e $path ]]; then
@@ -891,6 +909,7 @@ make_homes() {
         owners=$(jq -c --arg h "$hname" --arg s "$place" --arg st "$([[ -n $seed ]] && printf seeding || printf made)" --argjson w "$(json_list "${words[@]}")" \
           '.[$h] = {seat: $s, state: $st} + (if ($w | length) > 0 then {words: $w} else {} end)' <<< "$owners")
         record_homes "$owners" "$record" || die "cannot write $record" 2
+        home_dirs "$path" "$who" "$holder" || die "cannot make the directories of the further variables of $who in its home $path" 2
         if [[ -n $seed ]]; then
           environment=()
           for out in "${inherit[@]}"; do [[ -n ${!out+x} ]] && environment+=("$out=${!out}"); done
@@ -899,7 +918,7 @@ make_homes() {
             < /dev/null > "$build_dir/seed.out" 2>&1
           status=$?
           if (( status != 0 )); then
-            out=$(tail -n 2 "$build_dir/seed.out" | tr '\n' ' ')
+            out=$(sed '/^$/d' "$build_dir/seed.out" | tail -n 5 | tr '\n' ' ')
             rm -rf -- "$path"
             owners=$(jq -c --arg h "$hname" 'del(.[$h])' <<< "$owners")
             record_homes "$owners" "$record"

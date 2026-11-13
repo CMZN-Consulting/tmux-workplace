@@ -4295,6 +4295,32 @@ t_records_by_day() {
   check "[C75] naming it" said "the day 2030-02-30 is not written YYYY-MM-DD, and is not unstored, gaps or signed"
   check "[C75] --requests is refused where the workplace holds no mail, with exit 2" exit_is 2 wp record verify --requests
   check "[C75] naming it" said "this workplace holds no mail, so it keeps no record of requests"
+  local clock=$scratch/fake-clock sent when n=0 states round
+  mkdir -p -- "$clock"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "if [[ \$# == 2 && \$1 == -u && \$2 == +%F ]]; then echo 2030-01-01; elif [[ \$# == 2 && \$1 == -u && \$2 == +%Y-%m-%dT%H:%M:%SZ ]]; then cat '$scratch/sent-at'; else exec '$(command -v date)' \"\$@\"; fi" > "$clock/date"
+  chmod +x -- "$clock/date"
+  for round in "2030-01-02T00:10:00Z|ten minutes after the day's end|taken" "2030-01-02T00:10:01Z|ten minutes and a second after the day's end|not taken" \
+               "2029-12-31T23:50:00Z|ten minutes before the day's start|taken" "2029-12-31T23:49:59Z|ten minutes and a second before the day's start|not taken"; do
+    n=$(( n + 1 ))
+    IFS='|' read -r sent when round <<< "$round"
+    states=$scratch/state-margin-$n
+    printf '%s\n' "$sent" > "$scratch/sent-at"
+    rm -rf -- "$clone/BUILD"
+    check "build, with a state directory of its own" exit_is 0 env XDG_STATE_HOME="$states" "$BASH" "$loop" build
+    check "up, the keepers' day being 2030-01-01 and the carrier's clock $sent" exit_is 0 env XDG_STATE_HOME="$states" PATH="$clock:$PATH" "$BASH" "$loop" up
+    check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+    check "down" exit_is 0 env XDG_STATE_HOME="$states" PATH="$clock:$PATH" "$BASH" "$loop" down
+    check "the file sink holds entries for keeper's file of 2030-01-01, each sent at $sent" \
+      bash -c '[[ $(jq -r "select(.file == \"harbor dock keeper/2030-01-01.pane\") | .at" "$1" | sort -u) == "$2" ]]' _ "$states/workplace/$label/records/chain" "$sent"
+    check "record verify" exit_is 0 env XDG_STATE_HOME="$states" "$BASH" "$loop" record verify "Harbor Keeper" 2030-01-01
+    if [[ $round == taken ]]; then
+      check "[C75] an entry sent $when is taken: the file agrees with its chain" said "harbor dock keeper/2030-01-01.pane agrees with its chain up to byte"
+    else
+      check "[C75] an entry sent $when is not taken: no entry covers the file" said "harbor dock keeper/2030-01-01.pane: no entry of the chain covers it yet"
+    fi
+  done
+  rm -rf -- "$clone/BUILD"
   if ! systemctl --user show-environment > /dev/null 2>&1; then
     skip "[C75] no user manager answers here, so the journal's span of a day is tried where one answers"
     return 0

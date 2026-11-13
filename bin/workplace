@@ -1006,7 +1006,9 @@ make_mail() {
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
     '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
     || die "cannot write $build_dir/mail.json" 2
-  say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path"
+  cp -- "$tool/share/seat-page.md" "$build_dir/seat-page.md" && [[ $(sha_of "$tool/share/seat-page.md") == "$(sha_of "$build_dir/seat-page.md")" ]] \
+    || die "cannot copy the frame's page for a seat, $tool/share/seat-page.md, into $build_dir" 2
+  say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path, each with the frame's page for a seat"
 }
 
 need_programs_for() {
@@ -1221,7 +1223,7 @@ cmd_build() {
   make_homes "$holders" "$(jq -r '.name // "default"' <<< "$report")"
   [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
   [[ -n $folded ]] && make_records "$(jq -r '.name // "default"' <<< "$report")"
-  for name in keys.json homes.json mail.json records.json; do
+  for name in keys.json homes.json mail.json seat-page.md records.json; do
     if [[ -f $build_dir/$name ]]; then
       copy_sums+=("$(cd -- "$build_dir" && sha256sum -- "$name")") || die "cannot hash $build_dir/$name"
     fi
@@ -1706,6 +1708,8 @@ set_mail() {
   need_mail_programs || return 1
   dir=$(jq -r '.path' "$mail")
   [[ -d $dir ]] || { warn "the mail path $dir is not a directory on the machine; the frame shows each seat its mailbox there (the mail at $(jq -c '.origins // []' "$mail" | origins_at))"; return 1; }
+  [[ -f $build_dir/seat-page.md && ! -L $build_dir/seat-page.md ]] || { warn "$build_dir holds no page for a seat's mailbox; build again"; return 1; }
+  state=$(jq -c --arg page "$build_dir/seat-page.md" '.slots[(["mail-page"] | tojson)] = $page' <<< "$state")
   while IFS= read -r entry; do
     for dir in in sent out answers; do
       dir=$(jq -r --arg d "$dir" '.[$d]' <<< "$entry")
@@ -1715,6 +1719,12 @@ set_mail() {
       .slots[(["mail-path"] | tojson)] = $p
       | reduce ("out", "in", "sent", "answers") as $d (.; .slots[(["mail-" + $d] + $e.seat | tojson)] = $e[$d])' <<< "$state")
   done < <(jq -c '.seats[]' "$mail")
+}
+
+records_marked() {
+  [[ $(jq -r '.chain // empty' "$1") != journal || $(jq -r '.mark // empty' "$1") =~ ^[0-9a-f]{32}$ ]] && return 0
+  warn "$build_dir was built before the state directory's mark, so its entries in the journal could not be told from those of another state directory of the same name; build again"
+  return 1
 }
 
 set_records() {
@@ -1727,6 +1737,7 @@ set_records() {
     return 1
   fi
   need_programs_for "a plan that keeps a record" "${LOG_PROGRAMS[@]}" || return 1
+  records_marked "$records" || return 1
   path=$(jq -r '.path // empty' "$records")
   chain=$(jq -r '.chain // empty' "$records")
   if [[ -n $path ]]; then
@@ -2395,7 +2406,7 @@ carrier_wake() {
       if [[ ${shown[n]} =~ ${seat_wake[i]} ]]; then ready=1; break; fi
     done
     (( ready )) || continue
-    text="mail: ${wake_n[i]} new, newest ${wake_ids[i]##* }.md"
+    text="mail: ${wake_n[i]} new, newest ${wake_ids[i]##* }.md, in $mail_path/in, and the page $mail_path/README.md says what this line is"
     sum=$(printf '%s' "$text" | sha256sum)
     carrier_type "${seat_pane[i]}" "$text" Enter
     case $? in
@@ -2543,7 +2554,7 @@ cmd_carry() {
       seat_wake+=("$(jq -r '.wake // ""' <<< "$entry")")
     done < <(jq -c '.seats[]' "$mail")
     carrier_names=$(jq -c '[.seats[].name]' "$mail")
-    comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail")
+    comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail") mail_path=$(jq -r '.path' "$mail")
     taken=$comms/taken
     comms_record=$comms/record
     dev=$(stat -c %d -- "$taken") || die "cannot read $taken" 2
@@ -2621,6 +2632,7 @@ cmd_record() {
   [[ -f $records ]] || die "this workplace keeps no record" 2
   verify_build || die "record verify reads only a verified build" 2
   [[ -n $(jq -r '.chain // empty' "$records") ]] || die "this workplace keeps no chain, so its records cannot be verified" 2
+  records_marked "$records" || exit 2
   seat=$(jq -c --arg n "$name" '.seats[] | select(.name == $n)' "$records")
   [[ -n $seat ]] || die "no seat is named $name in this workplace" 2
   [[ -n $day ]] || day=$(date -u +%F)

@@ -295,6 +295,22 @@ for argument in "$@"; do
       done
       listing=("$box"/*)
       say "box entries: $(for entry in "${listing[@]}"; do printf '%s\n' "${entry##*/}"; done | LC_ALL=C sort | tr '\n' ' ')"
+      if [[ -f $box/README.md ]]; then
+        got=$(sha256sum < "$box/README.md") && say "box page: ${got%% *}"
+        if { printf '%s\n' "$name" >> "$box/README.md"; } 2> /dev/null; then put=ok; else put=refused; fi
+        say "box page append: $put"
+        if rm -f -- "$box/README.md" 2> /dev/null && [[ ! -e $box/README.md ]]; then put=ok; else put=refused; fi
+        say "box page remove: $put"
+        printf '%s\n' "another page" > "$box/out/.page-$name"
+        if mv -f -- "$box/out/.page-$name" "$box/README.md" 2> /dev/null; then put=ok; else put=refused; fi
+        say "box page replace: $put"
+        if ln -sfn -- "out/.page-$name" "$box/README.md" 2> /dev/null; then put=ok; else put=refused; fi
+        say "box page link: $put"
+        rm -f -- "$box/out/.page-$name"
+        got=$(sha256sum < "$box/README.md") && say "box page after: ${got%% *}"
+      else
+        say "box page: none"
+      fi
       ;;
     post=*)
       spec=${argument#post=}

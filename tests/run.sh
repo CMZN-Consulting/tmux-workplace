@@ -2954,6 +2954,9 @@ t_comms_store() {
     test "$(env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" symbolic-ref HEAD)" = refs/heads/mail
   check "[C56] BUILD/mail.json holds each seat's mailbox and reach, and the MANIFEST lists it" \
     bash -c 'jq -e --arg s "$1" "[.seats[] | [.name, .box, .in, .out, (.reach.write | length)]][0] == [\"Harbor Keeper\", \"harbor dock keeper\", \"\(\$s)/mail/harbor dock keeper/in\", \"\(\$s)/comms/harbor dock keeper/out\", 1]" "$2/BUILD/mail.json" > /dev/null && grep -q "  mail.json$" "$2/BUILD/MANIFEST"' _ "$s" "$clone"
+  check "[C97] build copies the frame's page for a seat into BUILD/seat-page.md, the repository's share/seat-page.md byte for byte, and the MANIFEST lists it" \
+    bash -c 'cmp -s "$1/share/seat-page.md" "$2/BUILD/seat-page.md" && grep -q "  seat-page.md$" "$2/BUILD/MANIFEST"' _ "$tool" "$clone"
+  check "[C97] and says so" said "mail: 5 mailboxes in $s/mail, shown at $root/mailbox, each with the frame's page for a seat"
   check "[C56] status verifies the build with its mail.json" exit_is 0 wp status
   printf '%s\n' kept > "$s/mail/harbor dock keeper/in/kept.md"
   rm -rf -- "$clone/BUILD"
@@ -2972,6 +2975,7 @@ t_comms_store() {
   statements_plan
   check "plan without mail" exit_is 0 wplan
   check "[C56] a plan without mail builds without git" exit_is 0 env PATH="$bin" "$BASH" "$loop" build
+  check "[C97] and with no page" test ! -e "$clone/BUILD/seat-page.md"
   rm -rf -- "$clone/BUILD"
   statements_plan "$comms_terms $comms_reach"
   check "plan" exit_is 0 wplan
@@ -2988,6 +2992,12 @@ t_comms_store() {
   check "[C55] up refuses a mail path that is no longer a directory on the machine, with exit 1" exit_is 1 wp up
   check "[C55] naming it and the mail term's origin" said "the mail path $root/mailbox is not a directory on the machine; the frame shows each seat its mailbox there (the mail at programs/COMMS.typify:1)"
   check "[C55] and starts nothing" test ! -e "$clone/BUILD/RUN"
+  mkdir -p -- "$root/mailbox"
+  rm -f -- "$clone/BUILD/seat-page.md"
+  sed -i '/  seat-page[.]md$/d' "$clone/BUILD/MANIFEST"
+  check "[C97] up refuses a build with mail that holds no page, as one made before the page does, with exit 1" exit_is 1 wp up
+  check "[C97] naming it" said "$clone/BUILD holds no page for a seat's mailbox; build again"
+  check "[C97] and starts nothing" test ! -e "$clone/BUILD/RUN"
 }
 
 t_comms_carrier() {
@@ -3276,6 +3286,30 @@ t_comms_mail() {
   check "[C60] a grab of a pane whose session has lost the run's mark is refused" answered picker g10.grab "refused the pane of Harbor Pilot does not carry this run's mark, or is gone"
   check "[C66] no line holds a body, a capture or a text" \
     bash -c '! grep -qE "line one|probe pilot|hello|world|kill-server|yyyy|body" "$1"' _ "$s/comms/record"
+  local page=$tool/share/seat-page.md parts firsts words suffixes word sfx x f n=0 head=() answers=()
+  local by_name="refused its name is not letters, digits, dot, dash and underscore ending in .md, .grab or .write; it is removed"
+  parts=$( { ls -A -- "$s/mail/orchard barn picker"; ls -A -- "$s/comms/orchard barn picker"; } | LC_ALL=C sort -u)
+  firsts=$(for f in "$s"/comms/*/answers/*; do IFS=' ' read -r x _ < "$f" && printf '%s\n' "$x"; done | LC_ALL=C sort -u)
+  words=$( { grep -oE '`[a-z]+`' "$page" | tr -d '`'; sed -n '/^```text$/,/^---$/p' "$page" | sed -n 's/^\([a-z][a-z]*\):.*/\1/p'; } \
+    | LC_ALL=C sort -u | grep -vxF -f <(printf '%s\n' $parts $firsts))
+  for word in $words; do
+    case $word in
+      to) head+=("to: Harbor Keeper") ;;
+      cc) head+=("cc: Orchard Grower") ;;
+      *) head+=("$word: x") ;;
+    esac
+  done
+  request pilot home.md "${head[@]}" --- "body"
+  check "[C97] every word of a head that the page names, beside the mailbox's parts ($(echo $parts)) and an answer's first words ($(echo $firsts)), is one that the carrier takes: one mail that holds them all, $(echo $words), is served" \
+    answered_ok pilot home.md
+  suffixes=$(grep -oE '`[.][a-z]+`' "$page" | tr -d '`' | LC_ALL=C sort -u)
+  for sfx in $suffixes .txt; do
+    n=$(( n + 1 ))
+    request picker "home$n$sfx" "seat: Ghost"
+    answers+=("$sfx|$(answer_of picker "home$n$sfx" | head -n 1)")
+  done
+  check "[C97] every suffix that the page names, $(echo $suffixes), is one that the carrier takes, and .txt, which it does not name, is refused for its name" \
+    bash -c 'r=$1; shift; (( $# >= 2 )) || exit 1; for a in "$@"; do s=${a%%|*} g=${a#*|}; if [[ $s == .txt ]]; then [[ $g == "$r" ]] || exit 1; else [[ $g == refused* && $g != "$r" ]] || exit 1; fi; done' _ "$by_name" "${answers[@]}"
   check "down" exit_is 0 wp down
 }
 
@@ -3317,7 +3351,7 @@ t_comms_from_a_pane() {
         "answer=-rf.md", "answer=--help.grab", "answer=*.md", "answer=$(touch pwned3).md", "answer=%s%n.md",
         "answer=s1.grab", "answer=s2.grab", "answer=s3.grab", "answer=s4.grab", "answer=h1.md", "answer=h2.md", "answer=h3.md",
         "answer=t1.write", "answer=t2.write"])
-    | add("orchard/barn/grower/seat.typify"; ["typed=" + $root + "/orchard/almanac/typed"])
+    | add("orchard/barn/grower/seat.typify"; ["report=" + $root + "/orchard/almanac/grower", "box=" + $root + "/mailbox", "typed=" + $root + "/orchard/almanac/typed"])
     | add("orchard/barn/picker/seat.typify"; ["report=" + $root + "/orchard/almanac/picker", "box=" + $root + "/mailbox", "slow=w.md:Orchard Picker"])'
   args=${args//\$q/\"$q\"}
   statements_plan "$comms_terms $comms_reach | $probe_args ${args//\$s/\"$s\"}"
@@ -3338,9 +3372,16 @@ t_comms_from_a_pane() {
     check "$report ran" eventually_long grep -qx "probe $report done" "$root/harbor/berth/$report"
   done
   check "watch ran" eventually_long grep -qx "probe watch done" "$root/harbor/charts/watch"
+  check "grower looked at its mailbox" eventually_long grep -q "^box page after: " "$root/orchard/almanac/grower"
   report=$root/harbor/berth/keeper
-  check "[C55] in its pane a seat is shown its mailbox: out read-write; in, sent and answers read-only, and nothing else there" \
-    bash -c 'grep -qxF "box out: write=ok" "$1" && grep -qxF "box in: write=refused" "$1" && grep -qxF "box sent: write=refused" "$1" && grep -qxF "box answers: write=refused" "$1" && grep -qxF "box .: write=refused" "$1" && grep -qxF "box entries: answers in out sent " "$1"' _ "$report"
+  check "[C55] in its pane a seat is shown its mailbox: out read-write; in, sent and answers read-only, the page, and nothing else there" \
+    bash -c 'grep -qxF "box out: write=ok" "$1" && grep -qxF "box in: write=refused" "$1" && grep -qxF "box sent: write=refused" "$1" && grep -qxF "box answers: write=refused" "$1" && grep -qxF "box .: write=refused" "$1" && grep -qxF "box entries: README.md answers in out sent " "$1"' _ "$report"
+  local page reports=("$root/harbor/berth/keeper" "$root/harbor/berth/pilot" "$root/harbor/charts/watch" "$root/orchard/almanac/picker" "$root/orchard/almanac/grower")
+  page=$(sha256sum < "$tool/share/seat-page.md") page=${page%% *}
+  check "[C97] every seat's mailbox holds README.md, the frame's page for a seat: the repository's share/seat-page.md, byte for byte" \
+    bash -c 'for r in "${@:2}"; do grep -qxF "box page: $1" "$r" || exit 1; done' _ "$page" "${reports[@]}"
+  check "[C97] no seat can change the page or put another in its place: appending, removing, moving a file over it and making a link there are each refused, and the page stays the repository's" \
+    bash -c 'for r in "${@:2}"; do for a in append remove replace link; do grep -qxF "box page $a: refused" "$r" || exit 1; done; grep -qxF "box page after: $1" "$r" || exit 1; done' _ "$page" "${reports[@]}"
   check "[C65] no seat can write into the store, which no view holds" \
     bash -c 'grep -qxF "hidden $2: unseen" "$1" && grep -qxF "reach $2/comms/harbor dock keeper/out: write=refused" "$1"' _ "$report" "$s"
   check "[C62] a link to a letter outside the seat's view, addressed to the seat itself, is refused and removed" \
@@ -3456,6 +3497,7 @@ t_wake() {
   mkdir -p -- "$root/mailbox"
   local s b=$root/harbor/berth c=$root/harbor/charts a=$root/orchard/almanac own id1 p1 p2 p4 at1 newest first line pane
   s=$(state_of)
+  pointer() { printf '%s\n' "mail: $1 new, newest $2.md, in $root/mailbox/in, and the page $root/mailbox/README.md says what this line is"; }
   printf '%s\n' ready > "$b/screen"
   printf '%s\n' busy > "$c/screen"
   printf '%s\n' menu > "$a/screen"
@@ -3486,12 +3528,14 @@ t_wake() {
   check "the mail to watch and grower is served" answered_ok picker p1.md
   id1=$(answer_of pilot mail-9-new-newest-x.md) id1=${id1#ok }
   p1=$(answer_of picker p1.md) p1=${p1#ok }
-  check "[C94] a ready pane gets one pointer, the line mail: N new, newest ID.md and Enter, typed once" \
-    file_comes_to "$b/typed" "mail: 1 new, newest $id1.md"
+  check "[C94] a ready pane gets one pointer, the line mail: N new, newest ID.md, in PATH/in, and the page PATH/README.md says what this line is, and Enter, typed once" \
+    file_comes_to "$b/typed" "$(pointer 1 "$id1")"
+  check "[C94] [C97] the line names the mailbox's in and the page, at the mail path where the seat sees its mailbox" \
+    bash -c '[[ $(< "$1") == *", in $2/in, and the page $2/README.md says what this line is" ]]' _ "$b/typed" "$root/mailbox"
   check "[C94] with one mail of its own and one of another seat's, the pointer counts 1 and names the other seat's id" \
-    bash -c '[[ $(< "$1") == "mail: 1 new, newest $2.md" && $2 != "$3" ]]' _ "$b/typed" "$id1" "$own"
+    bash -c '[[ $(< "$1") == "$4" && $2 != "$3" ]]' _ "$b/typed" "$id1" "$own" "$(pointer 1 "$id1")"
   check "[C94] a mail whose subject and body hold the pointer's own words, a pattern and control-like text changes nothing in the line typed" \
-    bash -c '[[ $(< "$1") == "mail: 1 new, newest $2.md" && ! -e $3/pwned ]]' _ "$b/typed" "$id1" "$root"
+    bash -c '[[ $(< "$1") == "$2" && ! -e $3/pwned ]]' _ "$b/typed" "$(pointer 1 "$id1")" "$root"
   request pilot k3.md "to: Harbor Keeper" "subject: three" --- "body"
   request picker k4.md "to: Harbor Keeper" "subject: four" --- "body"
   request grower k5.md "to: Harbor Keeper" "subject: five" --- "body"
@@ -3504,7 +3548,7 @@ t_wake() {
   p2=$(answer_of picker p2.md) p2=${p2#ok }
   sleep 4
   check "[C94] no second pointer goes to a reader within a minute, though its mail waits and its pane is ready" \
-    file_is "$b/typed" "mail: 1 new, newest $id1.md"
+    file_is "$b/typed" "$(pointer 1 "$id1")"
   check "[C94] a pane that is not ready gets none" test ! -e "$c/typed"
   check "[C94] a pane that shows a numbered menu gets none" test ! -e "$a/typed"
   at1=$(sed -n 's/^at: //p' "$s/mail/harbor tower watch/in/$p1.md")
@@ -3527,15 +3571,15 @@ t_wake() {
     bash -c '"$BASH" "$1" status > "$2" 2>&1; grep -qxF "wake    Harbor Watch (harbor/tower/watch): 2 delivered and not yet pointed out, the first at $3" "$2"' _ "$loop" "$scratch/out" "$at1"
   T copy-mode -q -t "$pane"
   check "[C94] once the mode is left, the pane gets one pointer, for all that came since" \
-    file_comes_to "$c/typed" "mail: 2 new, newest $p2.md"
+    file_comes_to "$c/typed" "$(pointer 2 "$p2")"
   check "[C94] three mails delivered between two pointers give one pointer, with the count 3 and the newest id" \
-    file_comes_to "$b/typed" "$(printf '%s\n' "mail: 1 new, newest $id1.md" "mail: 3 new, newest $newest.md")"
+    file_comes_to "$b/typed" "$(printf '%s\n' "$(pointer 1 "$id1")" "$(pointer 3 "$newest")")"
   check "[C94] and it went a minute or more after the first" \
     bash -c 'mapfile -t at < <(jq -r "select(.action == \"wake\" and .target == [\"Harbor Keeper\"]) | .at" "$1"); (( ${#at[@]} == 2 && $(date -u -d "${at[1]}" +%s) - $(date -u -d "${at[0]}" +%s) >= 60 ))' _ "$s/comms/record"
   check "[C94] a pane that shows a numbered menu still has none, a minute on" test ! -e "$a/typed"
   first=$(jq -c 'select(.action == "wake" and .target == ["Harbor Keeper"])' "$s/comms/record" | head -n 1)
-  line="mail: 1 new, newest $id1.md"
-  check "[C66] [C96] each pointer is one line of the record: the time, the frame as the one who asked, the reader, the ids it covers, the outcome, and the length and SHA-256 of the line" \
+  line=$(pointer 1 "$id1")
+  check "[C66] [C96] each pointer is one line of the record: the time, the frame as the one who asked, the reader, the ids it covers, the outcome, and the length and SHA-256 of the line, the paths included" \
     test "$(jq -c '[.seat, .action, .target, .covers, .outcome, .length, .sha256, (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))]' <<< "$first")" = \
     "[\"the frame\",\"wake\",[\"Harbor Keeper\"],[\"$id1\"],\"ok\",${#line},\"$(printf '%s' "$line" | sha256sum | cut -d' ' -f1)\",true]"
   check "[C96] the next covers the three" \
@@ -3545,7 +3589,7 @@ t_wake() {
     bash -c '! grep -q "^wake    Harbor Keeper" "$1" && ! grep -q "^wake    Harbor Watch" "$1" && grep -qxF "wake    Orchard Grower (orchard/barn/grower): 1 delivered and not yet pointed out, the first at $2" "$1"' _ "$scratch/out" "$at1"
   printf '%s\n' far > "$a/screen"
   check "[C94] a pane whose prompt stands fifth from the bottom among the lines that are not empty, with empty lines between, is ready" \
-    file_comes_to "$a/typed" "mail: 1 new, newest $p1.md"
+    file_comes_to "$a/typed" "$(pointer 1 "$p1")"
   printf '%s\n' busy > "$c/screen"
   check "watch's pane works again" eventually_long screen_has "Harbor Watch" "working"
   request picker p3.md "to: Harbor Watch" "subject: three" --- "body"
@@ -3560,7 +3604,7 @@ t_wake() {
     bash -c '"$BASH" "$1" status > "$2" 2>&1; grep -q "^wake    Harbor Watch (harbor/tower/watch): 2 delivered and not yet pointed out, the first at " "$2"' _ "$loop" "$scratch/out"
   printf '%s\n' ready > "$c/screen"
   check "[C94] and once the pane is ready, the pointer comes with that count and the newest id" \
-    file_comes_to "$c/typed" "$(printf '%s\n' "mail: 2 new, newest $p2.md" "mail: 2 new, newest $p4.md")"
+    file_comes_to "$c/typed" "$(printf '%s\n' "$(pointer 2 "$p2")" "$(pointer 2 "$p4")")"
   check "down" exit_is 0 wp down
 }
 
@@ -3937,6 +3981,7 @@ t_records_journal() {
   check "down" exit_is 0 wp down
   check "[C72] down ends the unit through its manager: it is inactive when down returns" bash -c '! systemctl --user is-active --quiet "$1"' _ "$unit"
   check "[C83] record verify reads the chain from the journal, and the file agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C83] its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
   check "[C72] every entry the carrier sent, the last ones at down among them, carries a hash and a previous of 64 hexadecimal digits" \
     test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | jq -R -s '[split("\n")[] | try fromjson catch empty | select(type == "object" and .chain == "workplace-record")] | length > 0 and all(.hash + .previous | test("^[0-9a-f]{128}$"))')" = true
   local ident size
@@ -3949,6 +3994,7 @@ t_records_journal() {
   check "[C83] an entry that another process sends under the carrier's words reaches the journal" \
     eventually_long bash -c 'journalctl --user -t "$1" -o cat --no-pager | grep -qF "2030-01-01T00:00:00Z"' _ "$ident"
   check "[C83] and is not taken as the carrier's: the file still agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C83] its whole length" said "harbor dock keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$(record_of keeper)/$day.pane"), its whole length"
   check "[C83] the run wrote $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c .) lines of the carrier's to the journal, $(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record) of them entries of the chain, beside the manager's own lines of the unit and the one forged" \
     test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | grep -c workplace-record)" -ge 1
   local s2=$scratch/state2 mark1 mark2 file1 file2
@@ -3980,6 +4026,18 @@ t_records_journal() {
   rm -rf -- "$clone/BUILD"
   check "[C72] build refuses a mark that is not 32 hexadecimal digits" exit_is 1 wp build
   check "[C72] and says why" said "build refuses: $(state_of)/records/mark is not a file that holds 32 hexadecimal digits, the mark of this state directory"
+  local unmarked premark
+  printf '%s\n' "$mark1" > "$(state_of)/records/mark"
+  check "build again, the first state directory's mark put back" exit_is 0 wp build
+  jq -c 'del(.mark)' "$clone/BUILD/records.json" > "$scratch/records.json" && cp -- "$scratch/records.json" "$clone/BUILD/records.json"
+  unmarked=$(sha256sum < "$clone/BUILD/records.json")
+  sed -i "s/^[0-9a-f]\{64\}  records[.]json\$/${unmarked%% *}  records.json/" "$clone/BUILD/MANIFEST"
+  premark="$clone/BUILD was built before the state directory's mark, so its entries in the journal could not be told from those of another state directory of the same name; build again"
+  check "[C75] up refuses a build whose chain goes to the journal and that holds no mark, as one made before the mark does, with exit 1" exit_is 1 wp up
+  check "[C75] naming it" said "$premark"
+  check "[C75] and starts nothing" test ! -e "$clone/BUILD/RUN"
+  check "[C75] record verify refuses it too, with exit 2" exit_is 2 wp record verify "Harbor Keeper" "$day"
+  check "[C75] naming it" said "$premark"
 }
 
 tests=(

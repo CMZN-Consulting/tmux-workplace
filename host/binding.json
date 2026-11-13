@@ -847,6 +847,22 @@
                 "/answers"
               ]
             },
+            "--ro-bind",
+            {
+              "slot": [
+                "mail-page"
+              ]
+            },
+            {
+              "concat": [
+                {
+                  "slot": [
+                    "mail-path"
+                  ]
+                },
+                "/README.md"
+              ]
+            },
             "--remount-ro",
             {
               "slot": [

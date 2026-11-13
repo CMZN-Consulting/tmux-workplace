@@ -34,7 +34,7 @@ joined($b[0]; $root) as $plan
 | ($seats | map(.[0:2]) | unique) as $rooms
 | [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "clearance-scale", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake")))] as $records
 | def known($scope; $n):
     if $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
@@ -53,7 +53,8 @@ joined($b[0]; $root) as $plan
         else empty end
       elif $t[0] == "clearance" then
         if ($t | length) != 6 then "\($where): a clearance has the words clearance A B C SCOPE NUMBER, not \($t | length)"
-        elif ($t[4] | IN("office", "room", "seat") | not) then "\($where): \($t[4]) is not a scope of a clearance"
+        elif $t[4] == "seat" then "\($where): a seat has its room's clearance and none of its own (5.118), so seat is not a scope of a clearance"
+        elif ($t[4] | IN("office", "room") | not) then "\($where): \($t[4]) is not a scope of a clearance"
         elif places($t[4]; $t[1:4]) | not then "\($where): a \($t[4]) clearance cannot name \($t[1:4] | join(" "))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the clearance names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif $t[5] | whole | not then "\($where): \($t[5]) is not a whole number"
@@ -136,6 +137,10 @@ joined($b[0]; $root) as $plan
         elif ($t[5] | key_fault) != null then "\($where): the ssh key's name \($t[5] | tojson) is refused: \($t[5] | key_fault)"
         elif $t[6] | IN("granted", "none") | not then "\($where): \($t[6]) is not granted or none"
         else empty end
+      elif $t[0] == "clearance-scale" then
+        if ($t | length) != 2 then "\($where): a clearance-scale has the words clearance-scale turned, not \($t | length)"
+        elif $t[1] != "turned" then "\($where): \($t[1]) is not a scale the fold knows: turned, where 0 is the most cleared (5.122)"
+        else empty end
       elif $t[0] == "wake" then
         if ($t | length) != 3 then "\($where): a wake has the words wake KIND PATTERN, not \($t | length)"
         elif ($made_kinds | index($t[1])) == null then "\($where): the wake names the kind \($t[1]), which the plan does not make"
@@ -145,7 +150,7 @@ joined($b[0]; $root) as $plan
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
         elif $t[1] == "/" then "\($where): a label on / refuses the plan"
-        elif $t[2] | whole | not then "\($where): \($t[2]) is not a whole number"
+        elif ($t[2] | whole | not) and $t[2] != "closed" then "\($where): \($t[2]) is neither a whole number nor closed"
         else empty end
       end;
   [$records[] | shape(.)] as $shapes
@@ -173,12 +178,17 @@ joined($b[0]; $root) as $plan
       | ([$sshkeys, $sshgrants] | add | length > 0) as $ssh
       | ($sshkeys | map(.term[1]) | unique) as $ssh_names
       | [$records[] | select(.term[0] == "wake")] as $waked
+      | [$records[] | select(.term[0] == "clearance-scale")] as $scaled
       | [($said | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two statements of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
          ($cleared | group_by(.term[1:5])[] | select((map(.term[5] | tonumber) | unique | length) > 1)
           | "two clearances of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) differ: \(map("\(.term[5]) from \(at(.origin))") | join(", "))"),
-         ($labelled | group_by(.term[1])[] | select((map(.term[2] | tonumber) | unique | length) > 1)
+         ($labelled | group_by(.term[1])[] | select((map(.term[2]) | unique | length) > 1)
           | "two labels of \(.[0].term[1]) differ: \(map("\(.term[2]) from \(at(.origin))") | join(", "))"),
+         (if ([$cleared, $labelled] | add | length) > 0 and ($scaled | length) == 0
+          then "the plan holds clearance or label terms and no clearance-scale term: since 5.122 the number 0 is the most cleared, and a plan numbered before that turn is refused until it is renumbered and says clearance-scale turned (the clearance or label at \(ats([([$cleared, $labelled] | add)[0:3][] | .origin])))" else empty end),
+         ($labelled[] | select(.term[2] == "closed") as $c | $labelled[] | select(beneath(.term[1]; $c.term[1]))
+          | "\(at(.origin)): the label speaks of \(.term[1]), which lies beneath \($c.term[1]), closed (from \(at($c.origin))): no label governs beneath a closed path (5.124 point 6)"),
          ($keyed | group_by(.term[1:5])[] | select((map(.term[5]) | unique | length) > 1)
           | "two keys of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) differ: \(map("\(.term[5]) from \(at(.origin))") | join(", "))"),
          ($homed | group_by(.term[1])[] | select((map(.term[2:4]) | unique | length) > 1)
@@ -258,8 +268,10 @@ joined($b[0]; $root) as $plan
                 else ($c | map(.term[4] | rank) | max) as $ask | [$c[] | select((.term[4] | rank) == $ask)] as $narrow
                   | ($narrow | map(.term[9] | rank) | max) as $tgt | [$narrow[] | select((.term[9] | rank) == $tgt)][0]
                   | {state: .term[10], origins} end;
-            (entities($labelled) | map({path: .term[1], value: (.term[2] | tonumber), origins}) | sort_by((.path | depth), .path)) as $labels
-          | [$panes[] | . as $pane | $pane[1:4] as $k | ($kinds[$k | tojson] // "none") as $kind
+            (entities($labelled) | map({path: .term[1], value: (if .term[2] == "closed" then "closed" else (.term[2] | tonumber) end), origins}) | sort_by((.path | depth), .path)) as $labels
+          | def cleared($c; $l): $l.value != "closed" and $c.value != null and $c.value <= $l.value;
+            def governing($p): [$labels[] | select(at_or_beneath($p; .path))] | max_by(.path | depth);
+            [$panes[] | . as $pane | $pane[1:4] as $k | ($kinds[$k | tojson] // "none") as $kind
              | [$statements[] | select(
                  .term[4] == "workplace"
                  or (.term[4] == "kind" and $kind != "none" and .term[1] == $kind)
@@ -268,10 +280,9 @@ joined($b[0]; $root) as $plan
                  or (.term[4] == "seat" and .term[1:4] == $k))] as $mine
              | [$mine[] | . as $s
                 | select(any($mine[]; (.term[4] | rank) > ($s.term[4] | rank) and at_or_beneath($s.term[5]; .term[5])) | not)] as $remaining
-             | ([$clearances[] | select(.term[4] == "seat" and .term[1:4] == $k)]
-                + [$clearances[] | select(.term[4] == "room" and .term[1:3] == $k[0:2])]
+             | ([$clearances[] | select(.term[4] == "room" and .term[1:3] == $k[0:2])]
                 + [$clearances[] | select(.term[4] == "office" and .term[1] == $k[0])]) as $held
-             | (if ($held | length) == 0 then {value: 0, scope: null, origins: []}
+             | (if ($held | length) == 0 then {value: null, scope: null, origins: []}
                 else ($held[0].term[4]) as $scope | [$held[] | select(.term[4] == $scope)] as $same
                   | {value: ($same[0].term[5] | tonumber), scope: $scope, origins: [$same[].origins[]]} end) as $clearance
              | ([$keys[] | select(.term[4] == "seat" and .term[1:4] == $k)]
@@ -344,23 +355,32 @@ joined($b[0]; $root) as $plan
                    if .rows | has($l.path) then
                      (if .rows[$l.path].source == "statement" then .at += [{statement: (.rows[$l.path] | statement_object), label: {value: $l.value, origins: $l.origins}}] else . end)
                    else
-                     (.rows[[.rows | keys[] | select(beneath($l.path; .))] | max_by(depth)].value[0]) as $above
-                     | if $f.clearance.value < $l.value then
+                     .rows[[.rows | keys[] | select(beneath($l.path; .))] | max_by(depth)] as $aboverow
+                     | $aboverow.value[0] as $above
+                     | if cleared($f.clearance; $l) | not then
                          if $above | IN("searchable-only", "scratch") then .
                          else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["hidden"], origins: $l.origins, source: "label"} end
-                       elif $above | IN("hidden", "scratch") then .
+                       elif $above == "scratch" or ($above == "hidden" and $aboverow.source != "label") then .
                        else .rows[$l.path] = {key: ($f.seat + [$l.path]), value: ["read-only"], origins: $l.origins, source: "label"} end
                    end)) as $made
-               | [$made.rows | keys[] as $p | $made.rows[$p]] as $rows
+               | ($made.rows | with_entries(
+                   .key as $p
+                   | if .value.source == "label" and .value.value[0] == "hidden"
+                        and any($made.rows[]; .value[0] != "hidden" and beneath(.key[3]; $p))
+                     then .value.value = ["searchable-only"] | .value.passage = true else . end)) as $passed
+               | [$passed | keys[] as $p | $passed[$p]] as $rows
                | $f + {rows: $rows, at: ($made.at | sort_by(.statement.term[5]))}]
             as $tables
             | [$tables[] | . as $f
                | ($f.rows[] | . as $r | select($r.value[0] != "hidden")
                   | ($f.rows[] | select(.value[0] == "hidden" and beneath($r.key[3]; .key[3]))
                      | "seat \($f.name) (\($f.seat | join("/"))): \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) lies beneath \(.key[3]) (hidden, from \(ats(.origins)))")),
-                 ($f.rows[] | . as $r | select($r.value[0] != "hidden")
-                  | ($labels[] | select(.value > $f.clearance.value and at_or_beneath($r.key[3]; .path))
-                     | "seat \($f.name) (\($f.seat | join("/"))): \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) lies at or beneath \(.path), labelled \(.value) (from \(ats(.origins))), above the seat's clearance \($f.clearance.value)")),
+                 ($f.rows[] | . as $r | select($r.value[0] != "hidden" and ($r.passage | not))
+                  | governing($r.key[3]) | select(. != null and (cleared($f.clearance; .) | not))
+                  | "seat \($f.name) (\($f.seat | join("/"))): \($r.key[3]) (\($r.value[0]), from \(ats($r.origins))) lies at or beneath \(.path), labelled \(.value) (from \(ats(.origins)))"
+                    + (if .value == "closed" then ", which no clearance reaches"
+                       elif $f.clearance.value == null then ", and the seat is cleared for no label"
+                       else ", which the seat's clearance \($f.clearance.value) does not reach" end)),
                  (if $mail == null then empty
                   else $f.rows[] | select(.value[0] == "hidden" and beneath($mail.path; .key[3]))
                     | "seat \($f.name) (\($f.seat | join("/"))): its mailbox at \($mail.path) lies beneath \(.key[3]) (hidden, from \(ats(.origins))), and the seat could not reach it (the mail at \(ats($mail.origins)))" end),
@@ -410,10 +430,9 @@ joined($b[0]; $root) as $plan
                      wakes: [$wakes[] | {kind: .term[1], pattern: .term[2], origins}],
                      record_path_origins: [$rpaths[].origin],
                      reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,
-                     pairs: [$labels[] as $upper | $labels[] | . as $lower
-                       | select(beneath($lower.path; $upper.path) and $lower.value < $upper.value)
-                       | {upper: $upper, lower: $lower,
-                          between: [$done[] | select(.clearance.value >= $lower.value and .clearance.value < $upper.value) | .name]}]}}
+                     passages: [$labels[] | . as $l
+                       | {label: $l, seats: [$done[] | select(any(.rows[]; .passage == true and .key[3] == $l.path)) | .name]}
+                       | select((.seats | length) > 0)]}}
               end
             end
         end

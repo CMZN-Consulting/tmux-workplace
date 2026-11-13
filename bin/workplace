@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
 LOG_PROGRAMS=(dd date tail head)
@@ -423,8 +423,9 @@ print_fold_report() {
        else "records: \(if .view.records.path == null then "shown to no seat" else "shown at \(.view.records.path)" end); \(.view.records.limit) bytes a day for a pane; \(if .view.records.chain == null then "no chain is made, and the files are kept" else "chained to the \(.view.records.chain)" end)" end),
       (.view.ssh.keys[]? | "ssh key \(.name): \(.path) (\(ats(.origins)))" + (if .name | IN($reached[]) then "" else ", and it reaches no seat: no grant takes it to a seat that holds a key" end)),
       (.view.seats[]
-       | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); clearance \(.clearance.value)"
-         + (if .clearance.scope == null then ", by default" else ", the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)
+       | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); "
+         + (if .clearance.value == null then "cleared for no label, since neither its room nor its office has a clearance"
+            else "clearance \(.clearance.value), the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)
          + (if .home == null then "" else "; home \(.home.state), by \(.home.variable)" end)
          + (if .expects == null then "" else "; expects \([.expects[].name] | join(", "))" end)
          + (if .record == null then "" else "; its pane \(if .record.pane == "kept" then "kept" else "not kept" end)" end)
@@ -440,7 +441,7 @@ print_fold_report() {
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
-      (.report.pairs[] | "label \(.lower.path) (\(.lower.value)) lies beneath \(.upper.path) (\(.upper.value)), and opens nothing to the seats between: \(if (.between | length) == 0 then "none" else .between | join(", ") end)")
+      (.report.passages[] | "label \(.label.path) (\(.label.value)) is searchable only, a passage to the labels beneath it that a seat is cleared for (5.124 point 7), for: \(.seats | join(", ")) (\(ats(.label.origins)))")
   ' <<< "$folded"
 }
 

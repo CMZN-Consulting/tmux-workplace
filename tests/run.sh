@@ -1159,6 +1159,7 @@ statements_plan() {
     def st($a; $b; $c; $scope; $path; $state; $line): {term: ["statement", $a, $b, $c, $scope, $path, $state], origin: at($line)};
     def cl($a; $b; $c; $scope; $n; $line): {term: ["clearance", $a, $b, $c, $scope, $n], origin: at($line)};
     def lb($path; $n; $line): {term: ["label", $path, $n], origin: at($line)};
+    def sc($line): {term: ["clearance-scale", "turned"], origin: at($line)};
     def kinds($rows): .state["seat-kinds"] = [$rows[] | {key: .[0:3], masked: false, origin: at(30), value: [.[3]]}];
     def terms_of($path; f): (.programs[] | select(.path == $path) | .plan) |= map(if type == "object" then .term |= f else f end);
     del(.state.view)
@@ -1201,7 +1202,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1371,13 +1372,13 @@ t_the_fold() {
   check "[C30] 5.18: which carries the origin of each, in the plan's order" \
     test "$(jq -c '[.rows[] | select(.key[2] == "picker" and .key[3] == "/") | [.origins[] | "\(.path):\(.line)"]][0]' "$clone/PLAN/view.json")" = \
     '["workplace.typify:4","programs/policy.typify:1","programs/policy.typify:9"]'
-  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "-"; "-"; "office"; "2"; 10)]'
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "-"; "-"; "office"; "2"; 10), sc(20)]'
   check "[C31] rule 2: two clearances of one office with different numbers refuse the plan" exit_is 1 wplan
   check "[C31] naming both" said "two clearances of the office harbor differ: 1 from programs/policy.typify:9, 2 from programs/policy.typify:10"
-  statements_plan '.programs[-1].recorded += [lb($root + "/orchard"; "1"; 9), lb($root + "/orchard"; "2"; 10)]'
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard"; "1"; 9), lb($root + "/orchard"; "2"; 10), sc(20)]'
   check "[C31] rule 2: two labels of one path with different numbers refuse the plan" exit_is 1 wplan
   check "[C31] naming both" said "two labels of $root/orchard differ: 1 from programs/policy.typify:9, 2 from programs/policy.typify:10"
-  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "-"; "-"; "office"; "1"; 10)]'
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "-"; "-"; "office"; "1"; 10), sc(20)]'
   check "[C30] equal clearances count once" exit_is 0 wplan
   check "[C30] with both origins" test "$(seat_of watch '[.clearance.value, [.clearance.origins[].line]]')" = '[1,[9,10]]'
 
@@ -1404,43 +1405,63 @@ t_the_fold() {
     test "$(seat_of keeper '[.replacement_statements[] | .statement.term[4]] | index("kind")')" = null
   check "[C32] 5.18: the counts are 1 and 2" test "$(seat_of keeper '[.exception_count, .distinct_replaced_statement_count]')" = '[1,2]'
 
-  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "dock"; "-"; "room"; "2"; 10),
-                                              cl("harbor"; "dock"; "keeper"; "seat"; "3"; 11)]'
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "dock"; "-"; "room"; "2"; 10), sc(20)]'
   check "plan with clearances" exit_is 0 wplan
-  check "[C30] rule 4: the seat's own clearance" test "$(seat_of keeper '[.clearance.value, .clearance.origin.line]')" = '[3,11]'
-  check "[C30] rule 4: else its room's" test "$(seat_of pilot '[.clearance.value, .clearance.origin.line]')" = '[2,10]'
-  check "[C30] rule 4: else its office's" test "$(seat_of watch '[.clearance.value, .clearance.origin.line]')" = '[1,9]'
-  check "[C30] rule 4: else 0" test "$(seat_of grower '[.clearance.value, .clearance.origin]')" = '[0,null]'
+  check "[C30] rule 4: a seat has its room's clearance" test "$(seat_of keeper '[.clearance.value, .clearance.origin.line, .clearance.scope]')" = '[2,10,"room"]'
+  check "[C30] rule 4: so do its room-mates" test "$(seat_of pilot '[.clearance.value, .clearance.origin.line]')" = '[2,10]'
+  check "[C30] rule 4: else its office's" test "$(seat_of watch '[.clearance.value, .clearance.origin.line, .clearance.scope]')" = '[1,9,"office"]'
+  check "[C30] rule 4: else none, which is null and no 0" test "$(seat_of grower '[.clearance.value, .clearance.origin, .clearance.scope]')" = '[null,null,null]'
+  check "[C32] plan prints a seat with none as cleared for no label" \
+    said "seat Orchard Grower (orchard/barn/grower): kind none; cleared for no label, since neither its room nor its office has a clearance; 1 rows"
+  check "[C32] and a seat with a number with its scope" said "seat Harbor Watch (harbor/tower/watch): kind none; clearance 1, the office's (programs/policy.typify:9); 2 rows"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "keeper"; "seat"; "3"; 11), sc(20)]'
+  check "[C31] 5.118: a clearance at a seat's scope refuses the plan" exit_is 1 wplan
+  check "[C31] naming it, and why" said "programs/policy.typify:11: a seat has its room's clearance and none of its own (5.118), so seat is not a scope of a clearance"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), lb($root + "/orchard"; "2"; 10)]'
+  check "[C31] clearance or label terms with no clearance-scale refuse the plan" exit_is 1 wplan
+  check "[C31] saying that 0 is the most cleared now, and naming the terms" \
+    said "the plan holds clearance or label terms and no clearance-scale term: since 5.122 the number 0 is the most cleared, and a plan numbered before that turn is refused until it is renumbered and says clearance-scale turned (the clearance or label at programs/policy.typify:9, programs/policy.typify:10)"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/harbor/ledger"; "hidden"; 9), sc(20)]'
+  check "[C30] a clearance-scale with no number to read refuses nothing" exit_is 0 wplan
+  statements_plan '.programs[-1].recorded += [{term: ["clearance-scale", "upright"], origin: at(20)}]'
+  check "[C31] a scale the fold does not know refuses the plan" exit_is 1 wplan
+  check "[C31] naming it" said "programs/policy.typify:20: upright is not a scale the fold knows: turned, where 0 is the most cleared (5.122)"
 
-  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "1"; 9), cl("harbor"; "dock"; "keeper"; "seat"; "3"; 11),
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "3"; 9), cl("harbor"; "dock"; "-"; "room"; "1"; 11),
       lb($root + "/harbor/charts"; "2"; 12), lb($root + "/harbor/ledger/inner"; "1"; 13),
-      lb($root + "/orchard"; "2"; 14), lb($root + "/orchard/almanac"; "1"; 15),
-      st("harbor"; "-"; "-"; "office"; $root + "/harbor/vault/shelf"; "read-write"; 16), lb($root + "/harbor/vault"; "1"; 17)]'
+      lb($root + "/orchard"; "2"; 14), lb($root + "/orchard/almanac"; "3"; 15),
+      st("harbor"; "-"; "-"; "office"; $root + "/harbor/vault/shelf"; "read-write"; 16), lb($root + "/harbor/vault"; "3"; 17), sc(18)]'
   check "plan with labels" exit_is 0 wplan
-  check "[C30] rule 5: a label above the seat's clearance makes a hidden row" bash -c '[[ $1 == *"/harbor/charts hidden"* ]]' _ "$(rows_of watch)"
-  check "[C30] rule 5: at or below it, under an open row, a read-only row" bash -c '[[ $1 == *"/harbor/charts read-only"* ]]' _ "$(rows_of keeper)"
-  check "[C30] rule 5: under a hidden row, none" bash -c '[[ $1 != *"/harbor/ledger/inner "* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5: a label the seat is not cleared for (its 3 above the label 2) makes a hidden row" bash -c '[[ $1 == *"/harbor/charts hidden"* ]]' _ "$(rows_of watch)"
+  check "[C30] rule 5: one it is cleared for (its 1 at most 2), under an open row, makes a read-only row" bash -c '[[ $1 == *"/harbor/charts read-only"* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5: cleared, under a row a statement hides, none" bash -c '[[ $1 != *"/harbor/ledger/inner "* ]]' _ "$(rows_of keeper)"
+  check "[C30] rule 5: not cleared, under a row a statement hides, a hidden row" bash -c '[[ $1 == *"/harbor/ledger/inner hidden"* ]]' _ "$(rows_of watch)"
   check "[C30] rule 5: the row a label makes carries the label's origin" \
     test "$(jq -c --arg p "$root/harbor/charts" '[.rows[] | select(.key[2] == "watch" and .key[3] == $p) | [.source, .origins[0].line]][0]' "$clone/PLAN/view.json")" = '["label",12]'
   check "[C30] rule 5: and replaces nothing: the office's row beneath it stands" \
     bash -c '[[ $1 == *"/harbor/vault read-only,"* && $1 == *"/harbor/vault/shelf read-write,"* ]]' _ "$(rows_of watch)"
-  check "[C30] rule 5: labels from the shallowest: a lower label beneath a higher one opens nothing to the seats between" \
-    bash -c '[[ $1 == *"/orchard hidden,"* && $1 != *"/orchard/almanac "* ]]' _ "$(rows_of watch)"
-  check "[C32] the plan stands, and plan prints the pair" \
-    said "label $root/orchard/almanac (1) lies beneath $root/orchard (2), and opens nothing to the seats between: Harbor Pilot, Harbor Watch"
+  check "[C30] 5.124 point 7: a label beneath a labelled path governs it, and the ancestor is a passage for a seat that sees the child alone" \
+    bash -c '[[ $1 == *"/orchard searchable-only,"* && $1 == *"/orchard/almanac read-only,"* ]]' _ "$(rows_of watch)"
+  check "[C30] the passage is the label's row" \
+    test "$(jq -c --arg p "$root/orchard" '[.rows[] | select(.key[2] == "watch" and .key[3] == $p) | [.source, .origins[0].line]][0]' "$clone/PLAN/view.json")" = '["label",14]'
+  check "[C30] a seat cleared for both gets both read-only" bash -c '[[ $1 == *"/orchard read-only,"* && $1 == *"/orchard/almanac read-only,"* ]]' _ "$(rows_of keeper)"
+  check "[C30] a seat cleared for no label gets both hidden, and no passage" \
+    bash -c '[[ $1 == *"/orchard hidden,"* && $1 == *"/orchard/almanac hidden,"* ]]' _ "$(rows_of grower)"
+  check "[C32] the plan stands, and plan prints the passage with the seats that pass" \
+    said "label $root/orchard (2) is searchable only, a passage to the labels beneath it that a seat is cleared for (5.124 point 7), for: Harbor Watch (programs/policy.typify:14)"
   check "[C32] a statement standing at a labelled path is printed" said "stands at a labelled path: seat harbor/dock/keeper $root/harbor/vault searchable-only"
 
-  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "keeper"; "seat"; "3"; 9),
-      lb($root + "/harbor/scratch/deep"; "5"; 10), lb($root + "/harbor/scratch/page"; "1"; 11),
-      lb($root + "/harbor/vault/deep"; "5"; 12), lb($root + "/harbor/vault/open"; "1"; 13)]'
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "3"; 9),
+      lb($root + "/harbor/scratch/deep"; "1"; 10), lb($root + "/harbor/scratch/page"; "5"; 11),
+      lb($root + "/harbor/vault/deep"; "1"; 12), lb($root + "/harbor/vault/open"; "5"; 13), sc(14)]'
   check "plan with labels beneath a scratch row and a searchable-only row" exit_is 0 wplan
-  check "[C30] rule 5 (5.24): beneath a scratch row, a label above the seat's clearance makes no row" \
+  check "[C30] rule 5 (5.24): beneath a scratch row, a label the seat is not cleared for makes no row" \
     bash -c '[[ $1 != *"/harbor/scratch/deep "* ]]' _ "$(rows_of keeper)"
-  check "[C30] rule 5 (5.24): beneath a scratch row, a label at or below the seat's clearance makes no row" \
+  check "[C30] rule 5 (5.24): beneath a scratch row, a label it is cleared for makes no row" \
     bash -c '[[ $1 != *"/harbor/scratch/page "* ]]' _ "$(rows_of keeper)"
-  check "[C30] rule 5 (5.24): beneath a searchable-only row, a label above the seat's clearance makes no row" \
+  check "[C30] rule 5 (5.24): beneath a searchable-only row, a label it is not cleared for makes no row" \
     bash -c '[[ $1 != *"/harbor/vault/deep "* ]]' _ "$(rows_of keeper)"
-  check "[C30] rule 5: beneath a searchable-only row, a label at or below the seat's clearance makes a read-only row" \
+  check "[C30] rule 5: beneath a searchable-only row, a label it is cleared for makes a read-only row" \
     bash -c '[[ $1 == *"/harbor/vault/open read-only,"* ]]' _ "$(rows_of keeper)"
   check "[C30] rule 5: and the seat's rows are those and no more" \
     test "$(rows_of keeper)" = "/ read-only,$root/harbor/berth read-write,$root/harbor/hold hidden,$root/harbor/holdall read-write,$root/harbor/ledger hidden,$root/harbor/scratch scratch,$root/harbor/vault searchable-only,$root/harbor/vault/open read-only,$root/harbor/vault/shelf read-write,"
@@ -1451,7 +1472,7 @@ t_the_fold() {
   check "[C32] the directories beneath it that no row names are listed as held by nobody" \
     bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && grep -qxF "  $1/orchard/cellar" "$2" && grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
   check "[C32] and not one that a row names" bash -c '! grep -qxF "  $1/orchard/almanac" "$2"' _ "$root" "$scratch/out"
-  statements_plan '.programs[-1].recorded = [lb($root + "/orchard"; "1"; 9)]'
+  statements_plan '.programs[-1].recorded = [lb($root + "/orchard"; "1"; 9), sc(10)]'
   check "[C31] a plan with a label and no statement is folded, and refused for want of a row for /" exit_is 1 wplan
   check "[C31] naming a seat" said "seat Harbor Keeper (harbor/dock/keeper): no row for /"
   statements_plan '(.programs[-1].recorded[0].term[6]) = "searchable-only" | .programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root; "read-only"; 9)]'
@@ -1465,10 +1486,49 @@ t_the_fold() {
   check "[C31] rule 6: a row opened beneath a hidden one refuses the plan" exit_is 1 wplan
   check "[C31] naming the seat, both paths and their origins" \
     said "seat Harbor Watch (harbor/tower/watch): $root/harbor/ledger/inner (read-write, from programs/policy.typify:9) lies beneath $root/harbor/ledger (hidden, from programs/policy.typify:2)"
-  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-write"; 9), lb($root + "/orchard"; "1"; 10)]'
-  check "[C31] rule 6: a row open at or beneath a label above the seat's clearance refuses the plan" exit_is 1 wplan
-  check "[C31] naming the seat, the path, the label and the origins" \
-    said "seat Orchard Grower (orchard/barn/grower): $root/orchard/almanac (read-write, from programs/policy.typify:9) lies at or beneath $root/orchard, labelled 1 (from programs/policy.typify:10), above the seat's clearance 0"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-write"; 9), lb($root + "/orchard"; "1"; 10), sc(20)]'
+  check "[C31] rule 6: a row open beneath a label the seat is not cleared for refuses the plan" exit_is 1 wplan
+  check "[C31] naming the seat, the path, the label and the origins, for a seat cleared for no label" \
+    said "seat Orchard Grower (orchard/barn/grower): $root/orchard/almanac (read-write, from programs/policy.typify:9) lies at or beneath $root/orchard, labelled 1 (from programs/policy.typify:10), and the seat is cleared for no label"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-write"; 9), lb($root + "/orchard"; "1"; 10),
+      cl("orchard"; "-"; "-"; "office"; "2"; 11), sc(20)]'
+  check "[C31] rule 6: and for a seat whose number is above the label" exit_is 1 wplan
+  check "[C31] naming its number" \
+    said "seat Orchard Grower (orchard/barn/grower): $root/orchard/almanac (read-write, from programs/policy.typify:9) lies at or beneath $root/orchard, labelled 1 (from programs/policy.typify:10), which the seat's clearance 2 does not reach"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard/almanac"; "read-only"; 9), lb($root + "/orchard/almanac"; "0"; 10),
+      cl("harbor"; "-"; "-"; "office"; "0"; 11), sc(20)]'
+  check "[C31] 5.122 point 1: a seat with no number is cleared for no label, not even 0, so an open row at a label 0 refuses the plan" exit_is 1 wplan
+  check "[C31] naming a seat with none" said "seat Orchard Grower (orchard/barn/grower): $root/orchard/almanac (read-only, from programs/policy.typify:9) lies at or beneath $root/orchard/almanac, labelled 0 (from programs/policy.typify:10), and the seat is cleared for no label"
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard/almanac"; "0"; 10), cl("harbor"; "-"; "-"; "office"; "0"; 11), sc(20)]'
+  check "plan with a label 0 and an office at 0" exit_is 0 wplan
+  check "[C30] a seat at 0 is cleared for a label 0: a read-only row" bash -c '[[ $1 == *"/orchard/almanac read-only,"* ]]' _ "$(rows_of watch)"
+  check "[C30] a seat with no number gets a hidden row there" bash -c '[[ $1 == *"/orchard/almanac hidden,"* ]]' _ "$(rows_of grower)"
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard"; "closed"; 10), cl("harbor"; "-"; "-"; "office"; "0"; 11), sc(20)]'
+  check "plan with a closed label" exit_is 0 wplan
+  check "[C30] 5.124 point 6: a closed path is hidden even from a seat at 0" bash -c '[[ $1 == *"/orchard hidden,"* ]]' _ "$(rows_of watch)"
+  check "[C30] and from a seat cleared for no label" bash -c '[[ $1 == *"/orchard hidden,"* ]]' _ "$(rows_of grower)"
+  statements_plan '.programs[-1].recorded += [st("harbor"; "-"; "-"; "office"; $root + "/orchard/almanac"; "read-only"; 9), lb($root + "/orchard"; "closed"; 10),
+      cl("harbor"; "-"; "-"; "office"; "0"; 11), sc(20)]'
+  check "[C31] a row opened beneath a closed path refuses the plan, whatever the seat's number" exit_is 1 wplan
+  check "[C31] naming the closed label" \
+    said "seat Harbor Watch (harbor/tower/watch): $root/orchard/almanac (read-only, from programs/policy.typify:9) lies at or beneath $root/orchard, labelled closed (from programs/policy.typify:10), which no clearance reaches"
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard"; "closed"; 10), lb($root + "/orchard/almanac"; "4"; 11), sc(20)]'
+  check "[C31] 5.124 point 6: a label beneath a closed path refuses the plan" exit_is 1 wplan
+  check "[C31] naming both" \
+    said "programs/policy.typify:11: the label speaks of $root/orchard/almanac, which lies beneath $root/orchard, closed (from programs/policy.typify:10): no label governs beneath a closed path (5.124 point 6)"
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard"; "open"; 10), sc(20)]'
+  check "[C31] a label that is neither a number nor closed refuses the plan" exit_is 1 wplan
+  check "[C31] naming it" said "programs/policy.typify:10: open is neither a whole number nor closed"
+  statements_plan '.programs[-1].recorded += [cl("orchard"; "barn"; "-"; "room"; "4"; 9), lb($root + "/orchard"; "3"; 10), lb($root + "/orchard/almanac"; "4"; 11),
+      st("orchard"; "barn"; "-"; "room"; $root + "/orchard/almanac"; "read-write"; 12), sc(20)]'
+  check "[C30] 5.124 point 7: a room at 4 writes its own child labelled 4 beneath an ancestor labelled 3" exit_is 0 wplan
+  check "[C30] through the ancestor as a passage" \
+    bash -c '[[ $1 == *"/orchard searchable-only,"* && $1 == *"/orchard/almanac read-write,"* ]]' _ "$(rows_of grower)"
+  statements_plan '.programs[-1].recorded += [cl("orchard"; "barn"; "-"; "room"; "4"; 9), lb($root + "/orchard"; "3"; 10), lb($root + "/orchard/almanac"; "4"; 11),
+      st("orchard"; "barn"; "-"; "room"; $root + "/orchard/almanac"; "read-write"; 12), st("orchard"; "barn"; "-"; "room"; $root + "/orchard"; "read-only"; 13), sc(20)]'
+  check "[C31] the same room reading the ancestor itself refuses the plan" exit_is 1 wplan
+  check "[C31] naming the ancestor's label" \
+    said "seat Orchard Grower (orchard/barn/grower): $root/orchard (read-only, from programs/policy.typify:13) lies at or beneath $root/orchard, labelled 3 (from programs/policy.typify:10), which the seat's clearance 4 does not reach"
   statements_plan '.programs[-1].recorded += [lb("/"; "0"; 9)]'
   check "[C31] 5.18: a label on / refuses the plan" exit_is 1 wplan
   check "[C31] saying so" said "programs/policy.typify:9: a label on / refuses the plan"
@@ -1478,9 +1538,9 @@ t_the_fold() {
   statements_plan '.programs[-1].recorded += [st("nowhere"; "-"; "-"; "office"; "/"; "hidden"; 9)]'
   check "[C31] a statement naming an office the plan does not make refuses the plan" exit_is 1 wplan
   check "[C31] naming it" said "programs/policy.typify:9: the statement names the office nowhere, which the plan does not make"
-  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "ghost"; "seat"; "1"; 9)]'
-  check "[C31] a clearance naming a seat the plan does not make refuses the plan" exit_is 1 wplan
-  check "[C31] naming it" said "the clearance names the seat harbor/dock/ghost, which the plan does not make"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "ghost"; "-"; "room"; "1"; 9), sc(20)]'
+  check "[C31] a clearance naming a room the plan does not make refuses the plan" exit_is 1 wplan
+  check "[C31] naming it" said "the clearance names the room harbor/ghost, which the plan does not make"
   statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/harbor/"; "read-only"; 9)]'
   check "[C4] a statement's path that is not canonical refuses the plan" exit_is 1 wplan
   check "[C4] naming its origin" said "programs/policy.typify:9 (statement): the path \"$root/harbor/\" is refused: it ends in a slash"
@@ -1491,7 +1551,7 @@ t_the_fold() {
 
 t_plan_relative() {
   scoped_clone
-  local extra='.programs[-1].recorded += [lb($root + "/orchard"; "2"; 9), cl("harbor"; "dock"; "keeper"; "seat"; "3"; 10)]'
+  local extra='.programs[-1].recorded += [lb($root + "/orchard"; "2"; 9), cl("harbor"; "dock"; "-"; "room"; "3"; 10), sc(11)]'
   local rel='def rel: if . == $root then "." elif startswith($root + "/") then .[($root | length) + 1:] else . end;
     .programs[-1].recorded |= map(if .term[0] == "statement" then .term[5] |= rel elif .term[0] == "label" then .term[1] |= rel else . end)'
   statements_plan "$extra"
@@ -1566,13 +1626,13 @@ t_the_folded_view_in_the_panes() {
 }
 
 t_plan_end_to_end() {
-  local pinned=f007776cde073439b0cac818c1b193afdcddee7d7d23ac5d6fb66a4f1aab7107 reference=/tmp/workplace-reference-s3
+  local pinned=e500ac3ff69c79f114593ae86ad0c2ece3644c39da4226425ef8fa7060c8f4a9 reference=/tmp/workplace-reference-s3
   if ! command -v typify > /dev/null; then
     skip "[C28] the reader typify is not on PATH here, so plan cannot run end to end"
     return 0
   fi
   if [[ ! -f $reference/config/workplace.json ]]; then
-    skip "[C28] the relative edition of the fixture (w1-paths 5384b45) is not laid out as a clone at $reference"
+    skip "[C28] the relative edition of the fixture (w1-paths 5384b45, renumbered for 5.122 and 5.124) is not laid out as a clone at $reference"
     return 0
   fi
   if [[ -e $reference/config/BUILD ]]; then
@@ -1630,7 +1690,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -1650,7 +1710,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -1659,7 +1719,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -1903,7 +1963,7 @@ t_ssh_grants_fold() {
   check "[C85] and, for a seat of the scope that holds no key, that the grant does not reach it" \
     said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
   check "[C85] the fold's version is one that reads ssh grants" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
   statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "node", "keys/node"]; 10), s(["ssh-key", "tower", "keys/tower"]; 11), s(["ssh-grant", "harbor", "tower", "-", "room", "tower", "granted"]; 12)]'
   check "plan with a key that no grant takes, and one granted to a room whose seat holds no key" exit_is 0 wplan
   check "[C85] plan names a key that no grant takes to a seat that holds a key as reaching no seat" \
@@ -2242,9 +2302,9 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
   check "[C32] plan prints each seat's home and the names it expects" \
-    bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; clearance 0, by default; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; clearance 0, by default; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
+    bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; cleared for no label, since neither its room nor its office has a clearance; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; cleared for no label, since neither its room nor its office has a clearance; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
   check "plan with neither" exit_is 0 wplan
   check "[C45] a plan with no home and no expect gives no seat a home or an expects member" \
@@ -2812,7 +2872,7 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
   check "[C54] with no reach term every seat mails every seat, and grabs and writes none; no clearance is read" \
@@ -2840,7 +2900,7 @@ t_comms_fold() {
     'def m($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/COMMS.typify"}}; .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "-", "-", "-", "workplace", "allowed"]; 2)]|the plan holds reach terms and no mail term, so no seat has a mailbox to ask in (the reach at programs/COMMS.typify:2)'
     "$comms_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; $root + "/mailbox/inner"; "read-only"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/mailbox/inner, which lies at or beneath the mail path '"$root"'/mailbox, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | .programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/mailbox"; "hidden"; 22)]|programs/policy.typify:22: the statement speaks of '"$root"'/mailbox, which lies at or beneath the mail path'
-    "$comms_terms"' | .programs[-1].recorded += [lb($root + "/mailbox"; "1"; 23)]|programs/policy.typify:23: the label speaks of '"$root"'/mailbox, which lies at or beneath the mail path '"$root"'/mailbox, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
+    "$comms_terms"' | .programs[-1].recorded += [lb($root + "/mailbox"; "1"; 23), sc(24)]|programs/policy.typify:23: the label speaks of '"$root"'/mailbox, which lies at or beneath the mail path '"$root"'/mailbox, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "harbor/ledger/box"|seat Harbor Keeper (harbor/dock/keeper): its mailbox at '"$root"'/harbor/ledger/box lies beneath '"$root"'/harbor/ledger (hidden, from programs/policy.typify:2), and the seat could not reach it (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "config/mail"|the mail path '"$clone"'/mail lies at or beneath the clone '"$clone"', which the frame masks in every view (the mail at programs/COMMS.typify:1)'
     "$comms_terms"' | (.programs[-1].recorded[] | select(.term[0] == "mail") | .term[1]) = "orchard"|orchard/barn/grower/seat.typify, term 2 (start): the seat'"'"'s directory '"$root"'/orchard lies at or beneath the mail path '"$root"'/orchard, where the frame shows each seat its mailbox (the mail at programs/COMMS.typify:1)'
@@ -3481,7 +3541,7 @@ t_wake_fold() {
     bash -c '(( $(grep -cxF -- "$2" "$1") == 3 ))' _ "$scratch/out" \
     "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \"^waiting>\$\", by its kind's term (programs/COMMS.typify:9)"
   check "[C29] the fold's version is the one that reads the wake" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
   local planned entry
   planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
   local refusals=(
@@ -3714,8 +3774,8 @@ t_records_fold() {
     test "$(jq -c '[.seats[] | [.seat[2], .reach.record]]' "$clone/PLAN/view.json")" = '[["keeper",["Harbor Pilot"]],["pilot",[]],["watch",[]],["grower",[]],["picker",[]]]'
   check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
   check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
-  check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; clearance 0, by default; its pane not kept; 1 rows"
-  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-v8
+  check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; cleared for no label, since neither its room nor its office has a clearance; its pane not kept; 1 rows"
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-v9
   statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
   check "plan with a record and no chain" exit_is 0 wplan
   check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"
@@ -3739,7 +3799,7 @@ t_records_fold() {
     "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "/"|the record path / would cover each seat'"'"'s whole view (the record-path at programs/LOGS.typify:2)'
     "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-path") | .term[1]) = "tools"|harbor/dock/keeper/seat.typify, term 2 (start): the seat'"'"'s program '"$root"'/tools/probe lies at or beneath the record path '"$root"'/tools, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
     "$records_terms"' | .programs[-1].recorded += [{term: ["record-directory", "harbor", "dock", "pilot", "records/work"], origin: at(24)}]|programs/policy.typify:24 (record-directory): the seat'"'"'s directory '"$root"'/records/work lies at or beneath the record path '"$root"'/records, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
-    "$records_terms"' | .programs[-1].recorded += [lb($root + "/records"; "1"; 23)]|programs/policy.typify:23: the label speaks of '"$root"'/records, which lies at or beneath the record path '"$root"'/records, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
+    "$records_terms"' | .programs[-1].recorded += [lb($root + "/records"; "1"; 23), sc(24)]|programs/policy.typify:23: the label speaks of '"$root"'/records, which lies at or beneath the record path '"$root"'/records, where the frame shows a seat the records it may read (the record-path at programs/LOGS.typify:2)'
     "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "statement" or .term[4] != "workplace")) | .programs[-1].recorded += [st("harbor"; "dock"; "-"; "room"; "/"; "read-only"; 25), st("orchard"; "-"; "-"; "office"; "/"; "read-only"; 26)]|seat Harbor Watch (harbor/tower/watch): no row for /: it has no view, and a seat with no view could reach its own record, which the plan keeps (the record at programs/LOGS.typify:1)'
     "$records_terms"' | .programs[-1].recorded += [st("harbor"; "dock"; "keeper"; "seat"; "/run/systemd/journal"; "read-only"; 22)]|seat Harbor Keeper (harbor/dock/keeper): /run/systemd/journal (read-only, from programs/policy.typify:22) lies at or beneath /run/systemd/journal, which the frame hides in every view of a workplace that keeps a chain, as a hidden row would'
   )

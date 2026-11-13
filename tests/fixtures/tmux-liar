@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# A stand-in for tmux, named tmux on PATH in t_restart. It runs the tmux named in the file real beside it, and
+# where the file lie beside it names a pane, it lists that pane to the carrier's watch as alive with no pipe
+# while the pane has one, so the carrier's set meets a pipe that its listing did not show.
+here=${BASH_SOURCE[0]%/*}
+real=$(< "$here/real")
+lie=$(cat -- "$here/lie" 2> /dev/null)
+if [[ -n $lie ]]; then
+  for word in "$@"; do
+    if [[ $word == '#{pane_id} #{pane_pipe}#{pane_dead}' ]]; then
+      "$real" "$@" | sed "s/^$lie 10\$/$lie 00/"
+      exit "${PIPESTATUS[0]}"
+    fi
+  done
+fi
+exec "$real" "$@"

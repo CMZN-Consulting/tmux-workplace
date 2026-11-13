@@ -2645,13 +2645,18 @@ carrier_chain() {
 }
 
 carrier_watch() {
-  local out line i
+  local out line i set
   local -A piped=()
   out=$(carrier_tmux list-panes -a -F '#{pane_id} #{pane_pipe}#{pane_dead}' 2> /dev/null) || return 0
   while IFS=' ' read -r line i; do piped[$line]=$i; done <<< "$out"
   for i in "${!record_names[@]}"; do
     [[ ${record_kept[i]} == kept && -n ${record_pane[i]} && ${piped[${record_pane[i]}]-} == 00 ]] || continue
-    carrier_tmux pipe-pane -o -O -t "${record_pane[i]}" "$(pipe_command "${record_dirs[i]}" "$record_limit")" > /dev/null 2>&1
+    # The server tests the pane again in the call that sets its pipe, so a pipe set since the listing is never
+    # closed (pipe-pane -o would close it), and the gap is written only when this call set one. tmux reads the
+    # quoting of sh_quote in a command string as sh does.
+    set=$(carrier_tmux if-shell -F -t "${record_pane[i]}" '#{||:#{pane_pipe},#{pane_dead}}' 'display-message -p kept' \
+      "pipe-pane -O -t ${record_pane[i]} $(sh_quote "$(pipe_command "${record_dirs[i]}" "$record_limit")") ; display-message -p set" 2> /dev/null)
+    [[ $set == set ]] || continue
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "the pipe of the pane was gone, and the carrier set it again" >> "${record_dirs[i]}/gaps"
   done
 }
@@ -3420,19 +3425,17 @@ cmd_restart() {
   [[ -d $state_dir ]] || mkdir -m 0700 -p -- "$state_dir" || die "cannot make $state_dir" 2
   for i in "${!names[@]}"; do
     name=${names[i]} pane=${panes[i]}
-    log_call "$setpriv" --no-new-privs "$tmux" -S "$socket" -u respawn-pane -k -t "$pane" -- "$tmux" -S "$socket" wait-for "workplace-restart-$$-$i"
-    run_call out "$setpriv" --no-new-privs "$tmux" -S "$socket" -u respawn-pane -k -t "$pane" -- "$tmux" -S "$socket" wait-for "workplace-restart-$$-$i" \
-      || die "restart: the pane of $name could not be made ready: $(jq_message "$run_dir/call.err")" 2
     dir=""
     if [[ -f $build_dir/records.json ]]; then
       dir=$(jq -r --arg n "$name" '.seats[] | select(.name == $n and .pane == "kept") | .dir' "$build_dir/records.json")
     fi
-    if [[ -n $dir ]]; then
-      log_call "$setpriv" --no-new-privs "$tmux" -S "$socket" -u pipe-pane -O -t "$pane" "$(pipe_command "$dir" "$(jq -r '.limit' "$build_dir/records.json")")"
-      if ! run_call out "$setpriv" --no-new-privs "$tmux" -S "$socket" -u pipe-pane -O -t "$pane" "$(pipe_command "$dir" "$(jq -r '.limit' "$build_dir/records.json")")" \; \
-        display-message -p -t "$pane" '#{pane_pipe}' || [[ $out != 1 ]]; then
-        die "restart: the pipe of $name's pane was not set, and its program is not started: $(jq_message "$run_dir/call.err")" 2
-      fi
+    # The pane is made and its pipe set in one call, so no listing of the carrier's finds it alive with no pipe.
+    call=("$setpriv" --no-new-privs "$tmux" -S "$socket" -u respawn-pane -k -t "$pane" -- "$tmux" -S "$socket" wait-for "workplace-restart-$$-$i")
+    [[ -n $dir ]] && call+=(\; pipe-pane -O -t "$pane" "$(pipe_command "$dir" "$(jq -r '.limit' "$build_dir/records.json")")" \; display-message -p -t "$pane" '#{pane_pipe}')
+    log_call "${call[@]}"
+    run_call out "${call[@]}" || die "restart: the pane of $name could not be made ready: $(jq_message "$run_dir/call.err")" 2
+    if [[ -n $dir && $out != 1 ]]; then
+      die "restart: the pipe of $name's pane was not set, and its program is not started: $(jq_message "$run_dir/call.err")" 2
     fi
     record=$(jq -c --arg p "$pane" 'select(index(["respawn-pane", "-k", "-t", $p]) != null and index("exec") != null)' "$run_dir/calls.jsonl" | head -n 1)
     call=()

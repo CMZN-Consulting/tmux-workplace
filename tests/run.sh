@@ -3352,6 +3352,7 @@ t_comms_carrier() {
 file_is() { [[ $(cat -- "$1" 2> /dev/null) == "$2" ]]; }
 dead_pane() { [[ $(T display-message -p -t "$(pane_by_title "$1")" '#{pane_dead}' 2> /dev/null) == 1 ]]; }
 pane_state() { T display-message -p -t "$1" '#{pane_id} #{pane_dead} #{pane_pipe}' 2> /dev/null; }
+pane_state_is() { [[ $(pane_state "$1") == "$2" ]]; }
 file_comes_to() {
   eventually_long file_is "$1" "$2" && return 0
   note "    $1 holds:"
@@ -4028,6 +4029,11 @@ t_records_fold() {
   check "[C70] and starts nothing" test ! -e "$clone/BUILD/RUN"
 }
 
+liar_records_up() {
+  local -x PATH="$scratch/liar:$PATH"
+  records_up "$1"
+}
+
 records_up() {
   scoped_clone
   mkdir -p -- "$root/records"
@@ -4152,14 +4158,14 @@ t_records_day_and_limit() {
   check "build" exit_is 0 wp build
   check "up" exit_is 0 wp up
   check "watch's program wrote 5,000 bytes and ended, its pane staying dead" eventually_long dead_pane "Harbor Watch"
-  check "[C82] at the limit nothing more is stored: the day holds 2,000 bytes" eventually_long bash -c '[[ $(stat -c %s "$1") == 2000 ]]' _ "$(record_of watch)/$(date -u +%F).pane"
-  local counted='[[ $(awk -v d="$2" "\$1 == d { n += \$2 } END { print n + 0 }" "$1/unstored" 2> /dev/null) == $3 ]]'
+  check "[C82] at the limit nothing more is stored: the day holds 2,000 bytes" eventually_long bash -c '[[ $(stat -c %s "$1/$(date -u +%F).pane") == 2000 ]]' _ "$(record_of watch)"
+  local counted='[[ $(awk -v d="$(date -u +%F)" "\$1 == d { n += \$2 } END { print n + 0 }" "$1/unstored" 2> /dev/null) == $2 ]]'
   local keepers='f=1; for p in /proc/[0-9]*; do [[ $(tr "\0" " " 2> /dev/null < "$p/cmdline") == *" keep $1 "* ]] && f=0; done;'
   if [[ $(T display-message -p -t "$(pane_by_title "Harbor Watch")" '#{pane_pipe}') == 0 ]]; then
     note "  this tmux, $(T -V), closed the dead pane's pipe (C98)"
     check "[C98] the pipe closed with the program, so watch's keeper has ended" eventually_long bash -c "$keepers (( f == 1 ))" _ "$(record_of watch)"
     check "[C82] and what was not stored is counted exactly, when the day's file ends with the pipe: 3,000" \
-      eventually_long bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 3000
+      eventually_long bash -c "$counted" _ "$(record_of watch)" 3000
   else
     note "  this tmux, $(T -V), keeps the dead pane's pipe open (C98)"
     check "[C98] the pipe stays open, and a keeper of watch's record still runs" bash -c "$keepers (( f == 0 ))" _ "$(record_of watch)"
@@ -4171,7 +4177,7 @@ t_records_day_and_limit() {
     done
   fi
   check "down" exit_is 0 wp down
-  check "[C82] after down, what was not stored is counted exactly, once: 3,000" eventually_long bash -c "$counted" _ "$(record_of watch)" "$(date -u +%F)" 3000
+  check "[C82] after down, what was not stored is counted exactly, once: 3,000" eventually_long bash -c "$counted" _ "$(record_of watch)" 3000
   check "[C75] record verify reads watch's unstored against its chain, over its whole span" exit_is 0 wp record verify "Harbor Watch" unstored
   check "[C75] its whole length" said "Harbor Watch/unstored agrees with its chain up to byte $(stat -c %s "$(record_of watch)/unstored"), its whole length"
 }
@@ -4420,7 +4426,11 @@ t_restart() {
   local s day pane seen others sum carrier args='| add("harbor/dock/keeper/seat.typify"; ["report=" + $root + "/harbor/berth/keeper", "entries=" + $root + "/records"])'
   s=$(state_of)
   day=$(date -u +%F)
-  check "up, every pane kept, keeper's probe listing the record path" records_up "| $probe_args $args"
+  mkdir -p -- "$scratch/liar"
+  command -v tmux > "$scratch/liar/real"
+  cp -- "$fixtures/tmux-liar" "$scratch/liar/tmux"
+  check "up, every pane kept, keeper's probe listing the record path, the frame's tmux a stand-in that can list a piped pane as having no pipe" \
+    liar_records_up "| $probe_args $args"
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   seen=$(grep "^entries $root/records: " "$root/harbor/berth/keeper")
   check "keeper's view shows it the record path" test -n "$seen"
@@ -4439,8 +4449,18 @@ t_restart() {
   check "[C98] and neither refusal started anything" dead_pane "Harbor Keeper"
   check "[C98] restart, with no name, starts again each seat whose program ended" exit_is 0 wp restart
   check "[C98] saying who asked" said "restart: Harbor Keeper is started again in its pane $pane, asked by $(id -un) (uid $EUID) at "
-  check "[C98] in the same pane, alive, with its record's pipe set" eventually test "$(pane_state "$pane")" = "$pane 0 1"
+  check "[C98] in the same pane, alive, with its record's pipe set" eventually pane_state_is "$pane" "$pane 0 1"
+  check "[C98] restart made the pane and set its pipe in one call of tmux, so the carrier never lists it alive with no pipe" \
+    jq -se --arg p "$pane" 'any(.[]; index(["respawn-pane", "-k", "-t", $p]) != null and index("pipe-pane") != null and index(";") != null)' "$clone/BUILD/RUN/calls.jsonl"
   check "keeper ran again" wait_for_probe "Harbor Keeper" keeper
+  sleep 3
+  check "[C98] after the restart and three of the carrier's passes, keeper's gaps hold no line of the carrier" \
+    bash -c '! grep -q "the carrier set it again" "$1/gaps"' _ "$(record_of keeper)"
+  printf '%s\n' "$pane" > "$scratch/liar/lie"
+  sleep 3
+  : > "$scratch/liar/lie"
+  check "[C98] a carrier that lists keeper's piped pane as having no pipe leaves the pipe as it is" pane_state_is "$pane" "$pane 0 1"
+  check "[C98] and writes no gap, since its call set no pipe" bash -c '! grep -q "the carrier set it again" "$1/gaps"' _ "$(record_of keeper)"
   check "[C98] in its view as up made it: it is shown the same record path" test "$(grep "^entries $root/records: " "$root/harbor/berth/keeper")" = "$seen"
   check "[C98] every other pane is as it was, the same process in each" test "$(T list-panes -a -F '#{pane_id} #{pane_pid}' | grep -v "^$pane " | LC_ALL=C sort)" = "$others"
   check "[C98] status is whole again" exit_is 0 wp status

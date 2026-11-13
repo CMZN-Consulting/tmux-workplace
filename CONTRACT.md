@@ -315,6 +315,7 @@
   - **The file sink:** appends each entry, one line of JSON, to `S/records/chain`.
   - **The journal sink:** `up` starts the carrier as a transient unit of the user's manager, `workplace-carrier-NAME.service`, under `NoNewPrivileges` and `setpriv`, and refuses where no manager answers.
     - The ledger marks the unit by its invocation id, and `down` stops it through its manager: the unit is inactive when `down` returns.
+    - The unit's `KillMode` is `mixed`: stopping it signals the carrier alone, which sends its last entries and ends. The programs it runs to hash an entry are not cut off, so no entry goes out with its hash missing.
     - The unit sets `SyslogIdentifier=workplace-carrier`, so the carrier's entries carry that identifier. `record verify` reads by unit and does not rest on it.
     - The carrier writes each entry on its standard output, which the manager hands to the journal stamped with the unit.
     - A run of the tests' own leaves about five lines of the carrier's in the journal, beside the manager's own lines about the unit.

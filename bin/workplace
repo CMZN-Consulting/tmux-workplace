@@ -1797,7 +1797,7 @@ start_carrier() {
     local -a environment=(--setenv=WORKPLACE_ROOT="$WORKPLACE_ROOT" --setenv=WORKPLACE_CONFIG="$WORKPLACE_CONFIG" --setenv=PATH="$PATH")
     [[ -n ${HOME-} ]] && environment+=(--setenv=HOME="$HOME")
     [[ -n ${XDG_STATE_HOME-} ]] && environment+=(--setenv=XDG_STATE_HOME="$XDG_STATE_HOME")
-    if ! systemd-run --user --quiet --collect --unit="$unit" -p WorkingDirectory=/ -p NoNewPrivileges=yes -p SyslogIdentifier=workplace-carrier "${environment[@]}" \
+    if ! systemd-run --user --quiet --collect --unit="$unit" -p WorkingDirectory=/ -p NoNewPrivileges=yes -p KillMode=mixed -p SyslogIdentifier=workplace-carrier "${environment[@]}" \
       -- "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry > "$run_dir/carrier.log" 2>&1; then
       warn "the user manager did not start the carrier's unit $unit: $(tail -n 1 "$run_dir/carrier.log")"
       return 1

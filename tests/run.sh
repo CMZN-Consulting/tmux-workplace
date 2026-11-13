@@ -3932,10 +3932,13 @@ t_records_journal() {
   check "[C72] the ledger records the unit by its invocation, which down checks before it stops it" \
     test "$(jq -r 'select(.what | startswith("the carrier")) | .is' "$run/ledger")" = "$(systemctl --user show -p InvocationID --value "$unit")"
   check "[C72] the unit runs under no-new-privileges" test "$(systemctl --user show -p NoNewPrivileges --value "$unit")" = yes
+  check "[C72] stopping the unit signals the carrier alone" test "$(systemctl --user show -p KillMode --value "$unit")" = mixed
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   check "down" exit_is 0 wp down
   check "[C72] down ends the unit through its manager: it is inactive when down returns" bash -c '! systemctl --user is-active --quiet "$1"' _ "$unit"
   check "[C83] record verify reads the chain from the journal, and the file agrees" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C72] every entry the carrier sent, the last ones at down among them, carries a hash and a previous of 64 hexadecimal digits" \
+    test "$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o cat --no-pager | jq -R -s '[split("\n")[] | try fromjson catch empty | select(type == "object" and .chain == "workplace-record")] | length > 0 and all(.hash + .previous | test("^[0-9a-f]{128}$"))')" = true
   local ident size
   ident=$(journalctl --user _SYSTEMD_USER_UNIT="$unit" -o json --no-pager | jq -r 'select(.MESSAGE | strings | test("workplace-record")) | .SYSLOG_IDENTIFIER' | head -n 1)
   check "[C72] the carrier's entries carry the identifier workplace-carrier" test "$ident" = workplace-carrier

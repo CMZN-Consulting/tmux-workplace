@@ -2752,12 +2752,24 @@ carrier_release() {
   carrier_held=0
 }
 
-# One line of the record. Under the store's lock a torn last line is ended first (5.153); outside it, a line is one
-# write of its own.
+# One line of the record, written under the store's lock after a torn last line is ended (5.153), so that it parses by
+# itself whichever floor's carrier stopped while it wrote. A line decided while no lock is held, a grab's, a write's or
+# a pointer's, takes a hold of its own for its mend and its write, and waits for it at most a second; where it gets
+# none, the line is written in one write of its own without the mend (a limit). It runs in a pipeline's subshell, so
+# that hold ends with it.
 carrier_append() {
   local line
   IFS= read -r line || [[ -n $line ]] || return 1
-  (( carrier_held )) && carrier_record_mend
+  if (( carrier_held )); then
+    carrier_record_mend
+  elif [[ -n $store ]] && exec 8< "$store" && flock -w 1 8; then
+    carrier_held=1
+    carrier_holder ""
+    carrier_record_mend
+    printf '%s\n' "$line" >> "$comms/record"
+    carrier_release
+    return 0
+  fi
   printf '%s\n' "$line" >> "$comms/record"
 }
 

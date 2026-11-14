@@ -2578,6 +2578,13 @@ t_floors_up() {
     bash -c '[[ -d $1/floors/deck/comms/taken && -d $1/floors/lodge/comms/taken && ! -e $1/comms/taken ]]' _ "$s"
   request keeper g1.grab "seat: Lodge Ida"
   check "[C60] 5.162 point 1: a grab across floors is refused until 4b" answered keeper g1.grab "refused a grab or a write across floors comes with S2's stop 4b"
+  # A stopped carrier's torn last line, and then a grab, whose line is written after the store's lock is let go.
+  printf '%s' '{"at":"2026' >> "$s/comms/record"
+  request keeper g2.grab "seat: Harbor Pilot"
+  check "a grab of a seat of its own floor is served" answered_ok keeper g2.grab
+  check "[C57] 5.153: a grab's line, decided after the store's lock is let go, takes a hold of its own, ends the torn last line first, and parses by itself" \
+    eventually bash -c '[[ $(jq -R -c "fromjson? | select(.request == \"g2.grab\") | .outcome" "$1") == "\"ok\"" ]]' _ "$s/comms/record"
+  check "[C57] and the torn bytes stay as a line of their own" bash -c 'grep -qx "{\"at\":\"2026" "$1"' _ "$s/comms/record"
   wp status > "$scratch/out" 2>&1
   check "[C22] bare status reports every floor" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor lodge is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor bridge is down" "$1"' _ "$scratch/out"
   check "[C22] 5.167: and says that a floor's own file is not read in 4a" said "conf    the floor's own file is not read in 4a"
@@ -2716,6 +2723,61 @@ t_store_lock() {
   check "[C57] and names its readers, the commit's" test "$(jq -c 'select(.id == "recovered-x" and .action == "mail") | .target' "$s/comms/record")" = '["Harbor Keeper"]'
   rm -rf -- "$run/lodge/carrier"
   wait "${carriers[@]}"
+}
+
+# A pointer settles exactly what it counted (5.162 point 1): mail that another floor's carrier delivers to its reader
+# while it is typed stays to be pointed out. The test holds the store's lock across the pointer, so that its settle
+# waits, and in that time adds a due id as the deck's carrier would under its hold.
+t_wake_floors() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/screens"
+  local d=$root/screens
+  printf '%s\n' busy > "$d/screen"
+  local kinds='| kinds([["harbor", "dock", "keeper", "clerk"], ["harbor", "dock", "pilot", "clerk"], ["harbor", "tower", "watch", "clerk"],
+      ["orchard", "barn", "grower", "clerk"], ["orchard", "barn", "picker", "clerk"], ["lodge", "east", "ida", "clerk"]])'
+  statements_plan "$floors_terms | $comms_terms $kinds"' | .programs[-1].recorded += [
+      m(["reach", "harbor", "-", "-", "office", "mail", "lodge", "-", "-", "floor", "allowed"]; 2),
+      m(["wake", "clerk", "^waiting>$"]; 3)]
+    | def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
+      add("lodge/east/ida/seat.typify"; ["screen=" + $root + "/screens/screen", "typed=" + $root + "/screens/typed"])
+    | .programs[-1].recorded += [st("lodge"; "east"; "-"; "room"; $root + "/screens"; "read-write"; 20)]'
+  check "plan of floors whose lodge reader has a wake" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "up lodge" exit_is 0 wp up lodge
+  check "ida's pane works" eventually_long on lodge screen_has "Lodge Ida" "working"
+  local s k1 x=20261114T235959Z-999999 holder deck path
+  s=$(state_of)
+  path=$(jq -r '.path' "$clone/BUILD/shared/$(top_gen)/mail.json")
+  mkdir -p -- "$run/deck/carrier"
+  printf '%s\n' '{"slots": {}}' > "$run/deck/state.json"
+  "$BASH" "$clone/BUILD/bin/workplace" carry deck > "$scratch/carry-deck" 2>&1 &
+  deck=$!
+  request keeper k1.md "to: Lodge Ida" "subject: one" --- "body"
+  check "the deck's carrier delivers a mail to the lodge's reader" answered_ok keeper k1.md
+  k1=$(answer_of keeper k1.md) k1=${k1#ok }
+  check "[C94] the reader is due its pointer, while its pane is not ready" \
+    test "$(jq -c '.seats["Lodge Ida"] | [.count, .ids]' "$s/comms/wake.json")" = "[1,[\"$k1\"]]"
+  flock -o "$s/mail" sleep 40 &
+  holder=$!
+  check "the test holds the store's lock" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
+  printf '%s\n' ready > "$d/screen"
+  check "[C94] the lodge's carrier types the pointer, which needs no lock" \
+    file_comes_to "$d/typed" "mail: 1 new, newest $k1.md, in $path/in, and the page $path/README.md says what this line is"
+  sleep 2
+  check "[C94] 5.162 point 1: while the lock is held the pointer is not settled: its ids stay in wake.json" \
+    test "$(jq -c '.seats["Lodge Ida"].ids' "$s/comms/wake.json")" = "[\"$k1\"]"
+  jq --arg x "$x" '.seats["Lodge Ida"] |= (.ids += [$x] | .times[$x] = "2026-11-14T23:59:59Z" | .count = (.ids | length))' \
+    "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
+  pkill -P "$holder" sleep 2> /dev/null
+  wait "$holder" 2> /dev/null
+  check "[C94] 5.162 point 1: once it settles, the mail it counted is no longer to be pointed out, and the mail delivered meanwhile stays" \
+    eventually bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.count, .ids, .since, (.last > 0)]" "$1") == "[1,[\"$2\"],\"2026-11-14T23:59:59Z\",true]" ]]' _ "$s/comms/wake.json" "$x"
+  check "[C96] the pointer's line covers the mail it counted alone" \
+    test "$(jq -c --arg k "$k1" 'select(.action == "wake" and has("length")) | [.target, .covers, .outcome]' "$s/comms/record")" = "[[\"Lodge Ida\"],[\"$k1\"],\"ok\"]"
+  rm -rf -- "$run/deck/carrier"
+  wait "$deck"
+  check "down lodge" exit_is 0 wp down lodge
 }
 
 t_plan_relative() {
@@ -5742,6 +5804,7 @@ tests=(
   t_pointer_floors
   t_floors_up
   t_store_lock
+  t_wake_floors
   t_floors_assembly
   t_the_folded_view_in_the_panes
   t_plan_end_to_end

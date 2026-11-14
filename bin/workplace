@@ -574,30 +574,66 @@ physical_of() {
   fi
 }
 
+# The frame's own masks, which a view lays over its rows (C39, C52, C68, C73, C84), each as a path, its kind and its
+# name in a refusal, NUL-separated: the clone, R, the user's tmux socket directories, the journal's directories where a
+# chain is kept, and the runtime directory, beneath which a seat's rows are mounted again after its mask (kind
+# beneath). A directory that does not stand is passed over.
+frame_masks() {
+  local chain=${1-} r t j
+  [[ -n ${clone-} && -d $clone ]] && printf '%s\0%s\0%s\0' "$clone" closed "the clone, which every view masks (C52)"
+  r=$(state_root 2> /dev/null) && [[ -d $r ]] && printf '%s\0%s\0%s\0' "$r" closed "the workplaces' state R, which every view masks (C39)"
+  t=${TMUX_TMPDIR:-/tmp}/tmux-$EUID
+  [[ -d $t ]] && printf '%s\0%s\0%s\0' "$t" closed "the user's tmux socket directory, which every view masks (C68)"
+  [[ /tmp/tmux-$EUID != "$t" && -d /tmp/tmux-$EUID ]] && printf '%s\0%s\0%s\0' "/tmp/tmux-$EUID" closed "the user's tmux socket directory, which every view masks (C68)"
+  if [[ -n $chain ]]; then
+    for j in /var/log/journal /run/log/journal /run/systemd/journal; do
+      [[ -d $j ]] && printf '%s\0%s\0%s\0' "$j" closed "the journal's directory, which a view masks where a chain is kept (C73)"
+    done
+  fi
+  [[ -d /run/user/$EUID ]] && printf '%s\0%s\0%s\0' "/run/user/$EUID" beneath "the runtime directory, which a view masks where its rows would show it (C84)"
+  return 0
+}
+
 # No view holds a closed directory under another name (5.159 point 6). The fold compares paths as written; this reads
-# the machine. A closed label's last part may not be a link, since bubblewrap mounts nothing on a link (5.162 point
-# 6). A seat's row that is not hidden may not be, by its physical path, at or beneath a closed directory's. And a
-# read-only or read-write row that holds a closed directory may not be mounted after the closed path's tmpfs, which
-# it would undo: the rows are mounted in the code-point order of their written paths, and a bind of an ancestor
-# brings back what a tmpfs mounted before it hid (measured, bubblewrap 0.13.1). A path that does not exist is
-# passed over. With a seat named, only that seat's rows are read.
+# the machine, for each label of closed and each of the frame's own masks.
+# - A closed label is written by its physical path, with no link in it: a tmpfs written through a link lies where the
+#   link leads, and a label whose last part is a link gets none, since bubblewrap mounts nothing on a link (5.162
+#   point 6). So a label's tmpfs, where it has one, lies at its written path, which is its physical one.
+# - A row that is not hidden may not be, by its physical path, at or beneath a closed directory's, nor beneath a
+#   mask's under a name that the mask does not cover. Beneath the runtime directory's mask a seat's rows are mounted
+#   again, so that one is passed over.
+# - A read-only or read-write row whose physical path holds a closed directory shows it at the row's written path
+#   joined with the rest of the closed directory's physical path. Something must lie over that path after the row's
+#   bind: a hidden, scratch or searchable-only row of the view written at it or at an ancestor of it beneath the row
+#   (such a row sorts after the row, and the rows are mounted in that order), or, for a mask, the mask itself, which is
+#   mounted after every row, at its path. A label beneath a hidden, scratch or searchable-only row has no tmpfs of
+#   its own, and that row is what lies over it.
+# A path that does not exist is passed over. With a seat named, only that seat's rows are read. The binding is the
+# tool's own in the clone, and BUILD's own in a build, where a pane's exec runs.
 refuse_closed_names() {
-  local view=$1 plan=$2 only=${3-} c rpath row state seat origins label lorigin cphys rphys
-  local -a closed=() rows=() faults=()
+  local view=$1 plan=$2 only=${3-} c r p row state seat origins label lorigin cphys rphys kind name target rest covered binding chain
+  local -a closed=() rows=() masks=() faults=() covers=()
   [[ -f $view ]] || return 0
-  mapfile -d '' -t closed < <(jq --raw-output0 -L "$tool/libexec" --arg root "$root" --slurpfile b "$tool/host/binding.json" '
+  binding=$tool/host/binding.json
+  [[ -f $binding ]] || binding=$tool/binding.json
+  mapfile -d '' -t closed < <(jq --raw-output0 -L "$tool/libexec" --arg root "$root" --slurpfile b "$binding" '
     include "table";
     def at: "\(.path // "?"):\(.line // "?")";
     joined($b[0]; $root)
     | .programs[]?.recorded[]? | select((.term | type) == "array" and .term[0] == "label" and .term[2] == "closed")
-    | .term[1], (.origin | at)' "$plan") || return 0
-  (( ${#closed[@]} )) || return 0
+    | .term[1], (.origin | at)' "$plan")
+  wait "$!" || { warn "cannot read the plan's labels of closed in $plan"; return 1; }
   mapfile -d '' -t rows < <(jq --raw-output0 --arg only "$only" --slurpfile p "$plan" '
     ([$p[0].programs[]?.plan[]? | (if type == "object" then .term else . end) | select(type == "array" and .[0] == "pane")
       | {key: (.[1:4] | tojson), value: .[4]}] | from_entries) as $names
-    | .rows[] | select(.value[0] != "hidden") | select($only == "" or (.key[0:3] | join("/")) == $only)
+    | .rows[] | select($only == "" or (.key[0:3] | join("/")) == $only)
     | .key[3], .value[0], "\($names[.key[0:3] | tojson] // "?") (\(.key[0:3] | join("/")))",
-      ([.origins[]? | "\(.path // "?"):\(.line // "?")"] | join(", "))' "$view") || return 0
+      ([.origins[]? | "\(.path // "?"):\(.line // "?")"] | join(", "))' "$view")
+  wait "$!" || { warn "cannot read the views in $view"; return 1; }
+  chain=$(jq -r '.records.chain // empty' "$view" 2> /dev/null)
+  mapfile -d '' -t masks < <(frame_masks "$chain")
+  # Each closed thing: its written path, its physical path, its kind (label, closed, beneath), and its name.
+  local -a things=()
   for (( c = 0; c + 1 < ${#closed[@]}; c += 2 )); do
     label=${closed[c]} lorigin=${closed[c + 1]}
     if [[ -L $label ]]; then
@@ -606,16 +642,41 @@ refuse_closed_names() {
     fi
     [[ -e $label ]] || continue
     physical_of "$label"
-    cphys=$physical
+    if [[ $physical != "$label" ]]; then
+      faults+=("$lorigin: the label of closed names $label, which is written through a link to $physical: a closed label is written by its physical path, so that the tmpfs over it lies where it is read (5.159 point 6, 5.162 point 6)")
+      continue
+    fi
+    things+=("$label" "$physical" label "closed by the label at $lorigin as $label")
+  done
+  for (( c = 0; c + 2 < ${#masks[@]}; c += 3 )); do
+    physical_of "${masks[c]}"
+    things+=("${masks[c]}" "$physical" "${masks[c + 1]}" "${masks[c + 2]}")
+  done
+  (( ${#things[@]} )) || return 0
+  for (( c = 0; c + 3 < ${#things[@]}; c += 4 )); do
+    label=${things[c]} cphys=${things[c + 1]} kind=${things[c + 2]} name=${things[c + 3]}
     for (( r = 0; r + 3 < ${#rows[@]}; r += 4 )); do
       row=${rows[r]} state=${rows[r + 1]} seat=${rows[r + 2]} origins=${rows[r + 3]}
-      [[ -e $row ]] || continue
+      [[ $state != hidden && -e $row ]] || continue
       physical_of "$row"
       rphys=$physical
       if [[ $rphys == "$cphys" || $rphys == "$cphys"/* || ( $cphys == / && $rphys != / ) ]]; then
-        faults+=("seat $seat: its row $row ($state, from $origins) is the directory $rphys, at or beneath $cphys, which the label at $lorigin closes as $label: no view holds a closed directory under another name (5.159 point 6)")
-      elif [[ ( $state == read-only || $state == read-write ) && ( $cphys == "$rphys"/* || ( $rphys == / && $cphys != / ) ) && $row > $label ]]; then
-        faults+=("seat $seat: its row $row ($state, from $origins) is the directory $rphys, which holds $cphys, closed by the label at $lorigin as $label, and is mounted after that path's tmpfs, so it would show the closed directory again (5.159 point 6, 5.162 point 6)")
+        [[ $kind == beneath ]] && continue
+        if [[ $kind == closed ]] && [[ $row == "$label" || $row == "$label"/* || $row == "$cphys" || $row == "$cphys"/* ]]; then continue; fi
+        faults+=("seat $seat: its row $row ($state, from $origins) is the directory $rphys, at or beneath $cphys, $name: no view holds a closed directory under another name (5.159 point 6)")
+      elif [[ ( $state == read-only || $state == read-write ) && ( $cphys == "$rphys"/* || ( $rphys == / && $cphys != / ) ) ]]; then
+        rest=${cphys#"${rphys%/}"/}
+        target=${row%/}/$rest
+        covered=0
+        if [[ $kind != label ]] && [[ $target == "$cphys" || $target == "$cphys"/* || $target == "$label" || $target == "$label"/* ]]; then covered=1; fi
+        for (( p = 0; ! covered && p + 3 < ${#rows[@]}; p += 4 )); do
+          [[ ${rows[p + 2]} == "$seat" ]] || continue
+          case ${rows[p + 1]} in hidden | scratch | searchable-only) ;; *) continue ;; esac
+          [[ ${rows[p]} == "${row%/}"/* ]] || continue
+          [[ $target == "${rows[p]}" || $target == "${rows[p]}"/* ]] && covered=1
+        done
+        (( covered )) && continue
+        faults+=("seat $seat: its row $row ($state, from $origins) is the directory $rphys, which holds $cphys, $name, and would show it at $target, where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it (5.159 point 6, 5.162 point 6)")
       fi
     done
   done

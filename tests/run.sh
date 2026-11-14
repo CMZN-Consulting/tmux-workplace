@@ -1612,17 +1612,45 @@ t_the_fold() {
   rm -rf -- "$clone/BUILD"
   check "[C31] 5.159 point 6: build refuses a row whose physical path is at or beneath a closed directory's, with exit 1" exit_is 1 wp build
   check "[C31] naming the row, its physical path and the label" \
-    said "its row $root/calias (read-only, from programs/policy.typify:10) is the directory $root/orchard/cellar, at or beneath $root/orchard/cellar, which the label at programs/policy.typify:11 closes as $root/orchard/cellar"
+    said "its row $root/calias (read-only, from programs/policy.typify:10) is the directory $root/orchard/cellar, at or beneath $root/orchard/cellar, closed by the label at programs/policy.typify:11 as $root/orchard/cellar"
   statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard"; "read-only"; 10)]'
   check "plan with a read-only row that holds the closed directory under another name and sorts after it" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
-  check "[C31] 5.162 point 6: build refuses a read-only row that holds a closed directory and is mounted after its tmpfs, with exit 1" exit_is 1 wp build
-  check "[C31] saying that it would show the closed directory again" \
-    said "its row $root/zz/orchard (read-only, from programs/policy.typify:10) is the directory $root/orchard, which holds $root/orchard/cellar, closed by the label at programs/policy.typify:11 as $root/orchard/cellar, and is mounted after that path's tmpfs"
+  check "[C31] 5.162 point 6: build refuses a read-only row that holds a closed directory under another name, with exit 1" exit_is 1 wp build
+  check "[C31] saying where it would show it, with nothing over it" \
+    said "its row $root/zz/orchard (read-only, from programs/policy.typify:10) is the directory $root/orchard, which holds $root/orchard/cellar, closed by the label at programs/policy.typify:11 as $root/orchard/cellar, and would show it at $root/zz/orchard/cellar, where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it"
   statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10)]'
   check "plan with a read-only row that holds the closed directory under another name and sorts before it" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
-  check "[C31] and builds one mounted before the tmpfs, which the tmpfs then hides under every name (measured, bubblewrap 0.13.1)" exit_is 0 wp build
+  check "[C31] review of 4a: build refuses it too, since the label lies beneath a searchable-only row and has no tmpfs of its own: that row's tmpfs lies at $root/orchard, and the bind shows the directory at $root/aa/cellar" exit_is 1 wp build
+  check "[C31] naming that path" said "and would show it at $root/aa/cellar, where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it"
+  statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
+                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 13)]'
+  check "plan with that row and a hidden row at the path where it would show the closed directory" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] builds, since the hidden row lies over that path and is mounted after the bind" exit_is 0 wp build
+  statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard"; "read-only"; 10)]'
+  check "plan with a read-only row at the closed directory's parent, written by its physical path" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] builds, since the label's own hidden row lies at the closed directory's path beneath it" exit_is 0 wp build
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/zz/orchard/cellar"; "closed"; 11), sc(12)]'
+  check "plan with a closed label written through a link before its last part" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] review of 4a: build refuses a closed label written through a link, with exit 1" exit_is 1 wp build
+  check "[C31] naming its physical path" said "programs/policy.typify:11: the label of closed names $root/zz/orchard/cellar, which is written through a link to $root/orchard/cellar"
+  ln -s -- config "$root/cfglink"
+  ln -s -- . "$root/up"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/cfglink"; "read-only"; 10)]'
+  check "plan with a read-only row written through a link to the clone" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] the addendum's 2(3): build refuses a row that shows the clone under another name, with exit 1" exit_is 1 wp build
+  check "[C31] naming the frame's mask" said "its row $root/cfglink (read-only, from programs/policy.typify:10) is the directory $clone, at or beneath $clone, the clone, which every view masks (C52)"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/up"; "read-only"; 10)]'
+  check "plan with a read-only row written through a link to the clone's parent" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] the addendum's 2(3): build refuses a row that would show the clone where its mask does not lie, with exit 1" exit_is 1 wp build
+  check "[C31] naming where" said "and would show it at $root/up/config, where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it"
+  rm -f -- "$root/cfglink" "$root/up"
   statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/calias"; "closed"; 11), sc(12)]'
   check "plan with a closed label whose last part is a link" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
@@ -2836,7 +2864,8 @@ t_plan_relative() {
 
 t_the_folded_view_in_the_panes() {
   scoped_clone
-  statements_plan '.state.view = [{key: ["harbor", "dock", "keeper", ($root + "/harbor/ledger")], value: ["read-write"]}]'
+  statements_plan '.state.view = [{key: ["harbor", "dock", "keeper", ($root + "/harbor/ledger")], value: ["read-write"]}]
+    | .programs[-1].recorded += [lb($root + "/harbor/ledger"; "closed"; 30), sc(31)]'
   check "plan" exit_is 0 wplan
   check "[C33] build" exit_is 0 wp build
   check "[C33] up" exit_is 0 wp up
@@ -2849,6 +2878,17 @@ t_the_folded_view_in_the_panes() {
   check "[C33] why names the statement behind a folded row" exit_is 0 wp why "Harbor Keeper" "$root/harbor/ledger/secret"
   check "[C33] the row and its origin" \
     bash -c 'grep -qxF "no row at the path; its nearest ancestor'"'"'s row is $1/harbor/ledger hidden" "$2" && grep -qxF "made by a statement, from programs/policy.typify:2" "$2"' _ "$root" "$scratch/out"
+  check "[C17] review of 4a: exec as a pane runs it, from BUILD's own copy of the frame, prints its call and nothing else" \
+    bash -c '"$BASH" "$1/BUILD/bin/workplace" exec --print -- "Harbor Keeper" > "$2/exec.out" 2> "$2/exec.err" && [[ -s $2/exec.out && ! -s $2/exec.err ]]' _ "$clone" "$scratch"
+  T capture-pane -p -S - -t "$(pane_by_title "Harbor Keeper")" > "$scratch/history" 2> /dev/null
+  check "[C17] and the pane's history holds no line of jq's" bash -c '[[ -s $1 ]] && ! grep -q "^jq: " "$1"' _ "$scratch/history"
+  mv -- "$root/harbor/berth" "$root/harbor/berth.real"
+  ln -s -- ledger "$root/harbor/berth"
+  check "[C31] review of 4a: exec as a pane runs it refuses, with exit 2, a view that would now hold the closed ledger under another name" \
+    exit_is 2 "$BASH" "$clone/BUILD/bin/workplace" exec --print -- "Harbor Keeper"
+  check "[C31] naming the row" said "its row $root/harbor/berth (read-write, from "
+  rm -f -- "$root/harbor/berth"
+  mv -- "$root/harbor/berth.real" "$root/harbor/berth"
   check "[C33] down" exit_is 0 wp down
   rm -rf -- "$clone/BUILD"
   rm -- "$clone/PLAN/view.json"

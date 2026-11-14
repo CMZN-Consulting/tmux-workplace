@@ -44,6 +44,17 @@ await_answer() {
 }
 say "probe $name start cwd=$PWD"
 for argument in "$@"; do
+  if [[ $argument == *=*/@DAY@.pane ]]; then
+    # A test names a day's record by @DAY@: the probe waits for the directory to hold a day's file, and takes
+    # the newest one's day, so the day is the one the frame wrote and not the clock's when the test began.
+    place=${argument#*=}
+    for (( i = 0; i < 200; i++ )); do
+      days=("${place%/*}"/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].pane)
+      [[ -e ${days[-1]} ]] && break
+      pause 0.05
+    done
+    [[ -e ${days[-1]} ]] && argument=${argument%@DAY@.pane}${days[-1]##*/}
+  fi
   case $argument in
     report=*) report=${argument#report=}; : > "$report" ;;
     hidden=*)

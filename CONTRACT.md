@@ -89,6 +89,7 @@
   - The declarations are one `#lang typify` header and each layer's whole body after its header line, in `workplace.json`'s order. No line is edited.
   - The tree is a generated root program with a copy of `programs/` beneath it, and nothing else. The root program is exactly two lines: `workdir : ROOT` and `server : NAME : CONF`.
   - CONF is the path of `tmux.conf` relative to the root, and NAME is derived (C25), or `default` when `workplace.json` says `"socket": "default"`.
+  - No word that the loop writes into the root program holds a `:`, which separates its words (5.131 point 4). So `plan` refuses, with exit 2, a root that holds one and a clone whose path relative to the root holds one, each named; a floor's key and conf are C100's.
   - It refuses, with exit 2:
     - a layer with a byte-order mark, CR line ends, a NUL byte, no `#lang typify` header or no final newline;
     - a program with a byte-order mark or CR line ends;
@@ -104,7 +105,7 @@
 - **C29.** `PLAN/` holds the following, and `build` checks them:
   - `plan.json`;
   - `view.json`, exactly when the plan holds statements, clearances or labels, all of which the fold reads. A `plan` that writes none removes the one before it;
-  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-v12`.
+  - `manifest.json`: the root, the name, the reader, each derivation's version, every input with its hash in a fixed order, each generated file with its hash, the source map and the outputs. The fold's version is `frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13`.
   - `plan` writes `manifest.json` after the outputs, and `build` refuses an output that is missing or whose hash differs from the manifest's, naming it. A `PLAN/` left half-written is never built.
   - `build` needs no reader. When the clone holds `workplace.json` or the manifest lists generated files, it assembles again, with the refusals of C27. It refuses a different name, an input that was added or is gone, and a generated file that differs, each by name.
   - It folds `plan.json` again, and refuses a `view.json` that differs, naming the seats and both fold versions, and saying to plan again. Where the manifest names another fold and the views are equal, it says so in one line and goes on.
@@ -120,8 +121,9 @@
 
     The row a label makes replaces nothing.
   - A hidden row that a label made becomes searchable-only when a row that is not hidden stands beneath it. It is then a passage to what lies beneath (5.124 point 7): a label beneath a labelled path governs that path.
-  - the rows stand in the byte order of their paths, each with the origins of the statement or label that made it.
+  - the rows stand in the byte order of their paths, each with the origins of the statement or label that made it, in the plan's order (5.18): equal statements at several scopes make one row whose origins follow the plan, whatever scope each stands at (5.131 point 4).
 - **C31.** The fold refuses the plan, naming the seat, the paths and the origins, for:
+  - a statement at the scope of a kind that the plan does not make, as a home and a wake of such a kind are refused. `none` is such a kind: it is the fold's word for a seat with no kind, and no kind is made so (5.131 point 4);
   - a term of the wrong shape, an unknown scope or state, a path that is not canonical, a number that is not whole, or a label that is neither a whole number nor `closed`;
   - a clearance at a seat's scope, since a seat has its room's clearance (5.118);
   - clearance or label terms with no `clearance-scale turned` term, naming the first three origins of the clearances followed by the labels. A configuration numbered before 5.122's turn is refused, until it is renumbered and says so;
@@ -148,7 +150,7 @@
   - `view.json` holds the rows and, for each seat in the order of the `pane` terms, its kind, clearance (with `null` for none), key, count of rows, replacement statements and their counts, and its statements at labelled paths.
   - `why` names the statement or the label behind a folded row, and what that statement replaced.
 - **C34.** The fold reads `key A B C SCOPE STATE`, with SCOPE `workplace`, `floor`, `office`, `room` or `seat` and STATE `held` or `none`. A seat holds a key by the narrowest scope that speaks: its own, else its room's, else its office's, else its floor's (C103), else the workplace's, else none. `view.json` gives each seat `key: {state, scope, origins}`.
-  - It refuses, naming the origins, two keys of one scope with different states, a key that names an office, room or seat the plan does not make, and any other state.
+  - It refuses, naming the origins, two keys of one scope with different states, a key that names a floor, office, room or seat the plan does not make or names a floor as an office or an office as a floor (C103), and any other state.
   - A plan that holds a key term is folded, so every seat of it has a view.
 - **C35.** The workplaces' state directory R is `${XDG_STATE_HOME:-$HOME/.local/state}/workplace`, and a workplace's own is S = `R/NAME`, with mode 0700, made by `build`.
   - For each seat that holds a key, in the order of the panes, `build` makes a home `S/keys/NN`, NN being the seat's place among the panes.
@@ -236,7 +238,7 @@
 
 ## The Comms layer: mail, grab and write
 
-- **C54.** The fold reads `mail PATH`, once for the workplace, and `reach A B C SCOPE ACTION TA TB TC TSCOPE STATE`. ACTION is `mail`, `grab` or `write`, STATE is `allowed` or `banned`, and each scope is `workplace`, `office`, `room` or `seat`, with `-` for the keys it does not use.
+- **C54.** The fold reads `mail PATH`, once for the workplace, and `reach A B C SCOPE ACTION TA TB TC TSCOPE STATE`. ACTION is `mail`, `grab` or `write`, STATE is `allowed` or `banned`, and each scope is `workplace`, `floor` (C103), `office`, `room` or `seat`, with `-` for the keys it does not use.
   - For one asking seat, one action and one target, of the terms whose scope holds the seat, whose target holds the target and whose action is that one, those of the narrowest asking scope are taken, and among them the one of the narrowest target. Its state decides. With none, a seat may mail every seat, and may grab and write none. No clearance is read.
   - `view.json` gives the mail path with its origins, and each seat `reach`: for each action, the names of the seats it may reach, in the plan's order. `plan` prints the path and, for each seat and action, those seats, each with the origins of the terms that decide it.
   - `plan` refuses, with exit 1, leaving `PLAN/` as it was and naming the origins:
@@ -362,7 +364,7 @@
 
 ## An ssh key granted to a seat's agent
 
-- **C85.** The fold reads `ssh-key NAME PATH` and `ssh-grant A B C SCOPE NAME STATE`. NAME is a word under the rule for a key of an office. PATH is as written, and the frame joins a relative one to the root. SCOPE is `workplace`, `office`, `room` or `seat`, with A, B and C as for `key`, and STATE is `granted` or `none`. For each NAME the narrowest scope that speaks decides, and with no term nothing is granted. A plan that holds either term is folded, so every seat of it has a view.
+- **C85.** The fold reads `ssh-key NAME PATH` and `ssh-grant A B C SCOPE NAME STATE`. NAME is a word under the rule for a key of an office. PATH is as written, and the frame joins a relative one to the root. SCOPE is `workplace`, `floor` (C103), `office`, `room` or `seat`, with A, B and C as for `key`, and STATE is `granted` or `none`. For each NAME the narrowest scope that speaks decides, and with no term nothing is granted. A plan that holds either term is folded, so every seat of it has a view.
   - It refuses, naming the origins: two `ssh-key` terms of one NAME that differ, two `ssh-grant` terms of one scope and one NAME with different states, a NAME that no `ssh-key` term declares, a grant at a seat's own scope to a seat that holds no key, and a word, a count of words or a scope that the terms do not take.
   - It refuses a key's file that any seat's table shows read-only or read-write, naming the seat, its row and the key's term: no seat is shown the file of a private key.
   - A grant of a wider scope reaches the seats of that scope that hold a key. `plan` prints each key with its file, and, for a key that no grant takes to a seat that holds a key, that it reaches no seat. It prints for each seat the names it is granted, with their terms, and, for a seat of the scope that holds no key, that the grant does not reach it. `view.json` gives each seat `ssh: {granted, unreached}`, and the keys under `ssh.keys`.
@@ -419,15 +421,15 @@
 ## Floors and rooms
 
 - **C100.** `workplace.json` may hold `floors`, a list of one or more floors, each with exactly `key`, `name`, `houses`, `enforced`, `socket`, `conf` and `smallest` (5.116, 5.117, 5.123, 5.124 points 1 and 2).
-  - **The members.** A key follows the rule for a key (C67), and no two floors share one. A name follows the rule for a name and holds no `:`. `houses` is `offices` or `rooms`, and `enforced` is `true` or `false`. `socket` is `run` or `tmux-default`, at most one floor takes `tmux-default`, and an enforced floor takes `run`. `conf` is a relative path to a file in the clone that is not a link. `smallest` is written `COLSxROWS`.
+  - **The members.** A key follows the rule for a key (C67), holds no `:`, and no two floors share one. A name follows the rule for a name and holds no `:`. `houses` is `offices` or `rooms`, and `enforced` is `true` or `false`. `socket` is `run` or `tmux-default`, at most one floor takes `tmux-default`, and an enforced floor takes `run`. `conf` is a relative path to a file in the clone that is not a link, and holds no `:`. The key, the name and the conf are words of the root program, whose words a `:` separates (5.131 point 4). `smallest` is written `COLSxROWS`.
   - **What else changes.** With `floors`, `workplace.json` holds no `socket` and the clone no `tmux.conf`. The name is the derived one (C25). Each floor's file is an input, in the floors' order, where `tmux.conf` was.
   - **The root program.** It is `workdir : ROOT`, `workplace : NAME`, and a line `floor : KEY : NAME : HOUSES : ENFORCEMENT : SOCKET : CONF : SMALLEST` for each floor, under the derivation `root-floors-v1`.
   - **What `plan` refuses.** It refuses each fault of these with exit 2, naming it.
 - **C101.** In a plan with floors the structure is checked at `plan` as well as at `build`. It holds no `server` and exactly one `workplace`.
-  - **Offices.** Each office stands in exactly one `house F A` of a floor that houses offices.
+  - **Offices.** Each office stands in exactly one `house F A` of a floor that houses offices. A house that names a key that is no floor is refused as naming a floor that the plan does not make (5.131 point 4).
   - **A floor of rooms** stands for its own session. It has no `session` and no `house`, and its rooms are `window F R NAME`.
   - **The keys.** No key names both a floor and an office.
-  - **Every floor** holds an office or a room.
+  - **Every floor** holds an office or a room. A floor of rooms that holds none is refused by that line alone: no other line follows for it, and no line calls a floor's term a session term (5.131 point 4).
   - **Without floors,** a `workplace` or `house` term is refused.
   - **`up` refuses a build that stands on floors** until S2's stop 4 brings floors up.
 - **C102.** With floors, a floor's state is `S/floors/F`, mode 0700. `build` makes `S/floors` and `S/floors/F` with mode 0700, and refuses with exit 2 either one that stands with another mode, naming it and its mode, as it refuses S (5.129 point 6).

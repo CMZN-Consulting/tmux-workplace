@@ -153,7 +153,7 @@ def floors_problems($binding):
       ($floors[] | select(.term[$fs.smallest] | test("^[1-9][0-9]*x[1-9][0-9]*$") | not)
        | "the floor \(.term[$fs.key]) says smallest \(.term[$fs.smallest] | tojson): COLSxROWS (\(term_at))"),
       ($houses[] | select(.term[1] as $f | $office_floors | index($f) | not)
-       | "the house of \(.term[2]) names the floor \(.term[1]), which houses no offices (\(term_at))"),
+       | "the house of \(.term[2]) names the floor \(.term[1]), \(if (.term[1] as $f | $room_floors | index($f)) != null then "which houses no offices" else "which the plan does not make" end) (\(term_at))"),
       ($houses | group_by(.term[2])[] | select(length > 1)
        | "the office \(.[0].term[2]) stands in \(length) houses, and it stands in one (\(map(term_at) | join("; ")))"),
       ($sessions[] | select(.term[1] as $a | ($room_floors | index($a) | not) and ([$houses[].term[2]] | index($a) | not))
@@ -173,7 +173,8 @@ def structure_problems($binding):
   | plan_terms as $all
   | ($s.floors // null) as $fs
   | ([$all[] | select($fs != null and .term[0] == $fs.floor)] | length > 0) as $floored
-  | def keyed($p; $pos): [$all[] | select(.term[0] == $p) | . + {k: [.term[$pos[]]]}]
+  | def keyed($p; $pos): [$all[] | select(.term[0] == $p) | . + {k: [.term[$pos[]]]}];
+    def standing($p; $pos): keyed($p; $pos)
       + (if $fs != null and $p == $fs.session
          then [$all[] | select(.term[0] == $fs.floor and .term[$fs.houses] == "rooms") | . + {k: [.term[$fs.key]]}] else [] end);
     floors_problems($binding),
@@ -182,7 +183,7 @@ def structure_problems($binding):
      | "the plan holds \($have | length) \($p) terms; it needs exactly one\(if ($have | length) > 1 then " (\($have | map(term_at) | join("; ")))" else "" end)"),
     (($s["unique-keys"] // [])[] | . as [$p, $pos] | keyed($p; $pos) | group_by(.k) | map(select(length > 1))[]
      | "the plan holds \(length) \($p) terms for \(.[0].k | join("/")); one is allowed (\(map(term_at) | join("; ")))"),
-    (($s.requires // [])[] | . as [$p, $pos, $q, $qpos] | [keyed($q; $qpos)[].k] as $have
+    (($s.requires // [])[] | . as [$p, $pos, $q, $qpos] | [standing($q; $qpos)[].k] as $have
      | keyed($p; $pos) | group_by(.k)[] | select(.[0].k as $k | $have | index([$k]) | not)
      | "the \($p) term for \(.[0].k | join("/")) has no \($q) term (\(map(term_at) | join("; ")))");
 

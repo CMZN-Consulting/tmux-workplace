@@ -46,7 +46,7 @@ joined($b[0]; $root) as $plan
   def occupants($k): [$seats[] | select(.[0:2] == $k[0:2])];
   def scoped_fault($t; $scope; $n):
     if $scope == "office" and ($floor_keys | index($n[0])) != null then "the \($t[0]) names the office \($n[0]), and \($n[0]) is a floor (5.125 point 1)"
-    elif $scope == "floor" and ($floor_keys | index($n[0])) == null and (($offices | index([$n[0]])) != null or ($housed | has($n[0])))
+    elif $scope == "floor" and ($floor_keys | index($n[0])) == null and (($offices | index([[$n[0]]])) != null or ($housed | has($n[0])))
     then "the \($t[0]) names the floor \($n[0]), and \($n[0]) is an office (5.125 point 1)"
     else null end;
   [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
@@ -57,6 +57,7 @@ joined($b[0]; $root) as $plan
     elif $scope == "office" then ($offices | index([$n[0:1]])) != null
     elif $scope == "room" then ($rooms | index([$n[0:2]])) != null
     elif $scope == "seat" then ($seats | index([$n])) != null
+    elif $scope == "kind" then ($made_kinds | index($n[0])) != null
     else true end;
   def shape($r):
     $r.term as $t | at($r.origin) as $where
@@ -282,7 +283,9 @@ joined($b[0]; $root) as $plan
           | "two statements about \(.[0].term[5]) at the room \($rm | join("/")) differ: \([group_by(.term[6])[] | "\(.[0].term[6]) from \(ats(map(.origin)))"] | join(", ")) (5.124 point 5)")] as $conflicts
       | if ($conflicts | length) > 0 then {errors: $conflicts}
         else
-          entities($said) as $statements
+          ($records | map(.origin)) as $plan_order
+          | def in_plan_order: sort_by(. as $o | $plan_order | index([$o]));
+            entities($said) as $statements
           | entities($cleared) as $clearances
           | entities($keyed) as $keys
           | entities($homed) as $homes
@@ -348,7 +351,7 @@ joined($b[0]; $root) as $plan
                 | group_by(.term[5])
                 | map({name: .[0].term[5], scopes: (map(.term[4]) | unique | sort_by(rank)), origins: [.[].origins[]]})) as $expecting
              | ([$remaining | group_by(.term[5])[]
-                 | {key: .[0].term[5], value: {key: ($k + [.[0].term[5]]), value: [.[0].term[6]], origins: [.[].origins[]], source: "statement", term: .[0].term}}]
+                 | {key: .[0].term[5], value: {key: ($k + [.[0].term[5]]), value: [.[0].term[6]], origins: ([.[].origins[]] | in_plan_order), source: "statement", term: .[0].term}}]
                 | from_entries) as $stated
              | ((if $mail == null then [] else ["mail", "grab", "write"] end) + (if $record_path == null then [] else ["record"] end)) as $actions
              | (if ($actions | length) == 0 then null

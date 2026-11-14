@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-v12
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
 floor_sub=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
@@ -223,9 +223,12 @@ work_dir() {
 }
 
 assemble() {
-  local into=$1 file=$clone/workplace.json problems line
+  local into=$1 file=$clone/workplace.json problems line relative=""
   [[ -f $file && ! -L $file ]] || die "$file is missing; the clone of a workplace holds workplace.json" 2
-  problems=$(jq -r -L "$tool/libexec" 'include "table";
+  if [[ $clone == "$root" ]]; then relative=""
+  elif [[ $root == / ]]; then relative=${clone#/}
+  else relative=${clone#"$root"/}; fi
+  problems=$(jq -r -L "$tool/libexec" --arg root "$root" --arg relative "$relative" 'include "table";
     def path_word: type == "string" and (test("[[:cntrl:]]") | not) and (startswith("/") | not)
       and (split("/") | all(. != "" and . != "." and . != ".."));
     def floor_words: ["key", "name", "houses", "enforced", "socket", "conf", "smallest"];
@@ -240,7 +243,8 @@ assemble() {
          (.floors | to_entries[] | .key as $i | .value as $f
           | ($f | keys[] | select(IN(floor_words[]) | not) | "the floor at index \($i) holds \(.), which the loop does not read"),
             (floor_words[] | select(. as $w | $f | has($w) | not) | "the floor at index \($i) lacks \(.)")),
-         (.floors[] | select(has("key")) | .key as $k | ($k | key_fault) as $fault | select($fault != null)
+         (.floors[] | select(has("key")) | .key as $k
+          | ($k | key_fault // (if contains(":") then "it holds a :, which separates the words of the root program" else null end)) as $fault | select($fault != null)
           | "the floor key \($k | tojson) is refused: \($fault)"),
          ([.floors[].key | strings] | group_by(.)[] | select(length > 1) | "the floor key \(.[0]) is listed \(length) times"),
          (.floors[] | . as $f | ($f.key | if type == "string" then . else tojson end) as $k
@@ -249,7 +253,9 @@ assemble() {
             (if $f | has("socket") and ($f.socket | IN("run", "tmux-default") | not) then "the floor \($k) takes the socket \($f.socket | tojson): run or tmux-default" else empty end),
             (if $f.enforced == true and $f.socket == "tmux-default"
              then "the floor \($k) is enforced and takes tmux-default: an enforced floor stands on a socket of its run, so that no plain tmux command reaches it (5.124 point 2)" else empty end),
-            (if $f | has("conf") and ($f.conf | path_word | not) then "the floor \($k) names its conf \($f.conf | tojson), which is not a relative path" else empty end),
+            (if $f | has("conf") and ($f.conf | path_word | not) then "the floor \($k) names its conf \($f.conf | tojson), which is not a relative path"
+             elif $f | has("conf") and ($f.conf | contains(":")) then "the floor \($k) names its conf \($f.conf | tojson), which is refused: it holds a :, which separates the words of the root program"
+             else empty end),
             (if $f | has("smallest") and (($f.smallest | type) != "string" or ($f.smallest | test("^[1-9][0-9]*x[1-9][0-9]*$") | not))
              then "the floor \($k) says smallest \($f.smallest | tojson): COLSxROWS" else empty end),
             (if $f | has("name") then
@@ -265,7 +271,9 @@ assemble() {
          ([.layers[] | strings | sub("^.*/"; "") | sub("\\.typify$"; "")] | group_by(.)[] | select(length > 1)
           | "the layer name \(.[0]) is listed \(length) times in workplace.json")
        end),
-      (if has("socket") and .socket != "default" then "workplace.json says socket \(.socket | tojson), and only \"default\" is known" else empty end)
+      (if has("socket") and .socket != "default" then "workplace.json says socket \(.socket | tojson), and only \"default\" is known" else empty end),
+      (if $root | contains(":") then "the root \($root) holds a :, which separates the words of the root program" else empty end),
+      (if $relative | contains(":") then "the configuration'"'"'s path relative to the root, \($relative), holds a :, which separates the words of the root program" else empty end)
     end' "$file" 2>&1) || die "workplace.json is not JSON that jq can read: $problems" 2
   if [[ -n $problems ]]; then
     while IFS= read -r line; do warn "$line"; done <<< "$problems"

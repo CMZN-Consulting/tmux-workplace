@@ -93,7 +93,8 @@
         "record-path",
         "ssh-key",
         "ssh-grant",
-        "wake"
+        "wake",
+        "wake-own"
       ],
       "programs": [
         "bwrap"

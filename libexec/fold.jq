@@ -51,7 +51,7 @@ joined($b[0]; $root) as $plan
     else null end;
   [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "clearance-scale", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "clearance-scale", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake", "wake-own")))] as $records
 | def known($scope; $n):
     if $scope == "floor" then ($floor_keys | index($n[0])) != null
     elif $scope == "office" then ($offices | index([$n[0:1]])) != null
@@ -82,6 +82,7 @@ joined($b[0]; $root) as $plan
         elif scoped_fault($t; $t[4]; $t[1:4]) != null then "\($where): \(scoped_fault($t; $t[4]; $t[1:4]))"
         elif known($t[4]; $t[1:4]) | not then "\($where): the clearance names \(scope_text($t; $t[4]; $t[1:4])), which the plan does not make"
         elif $t[5] | whole | not then "\($where): \($t[5]) is not a whole number"
+        elif ($t[5] | length) > 15 then "\($where): \($t[5]) has more than 15 digits, and the frame compares no clearance that long"
         else empty end
       elif $t[0] == "key" then
         if ($t | length) != 6 then "\($where): a key has the words key A B C SCOPE STATE, not \($t | length)"
@@ -178,11 +179,18 @@ joined($b[0]; $root) as $plan
         elif ($made_kinds | index($t[1])) == null then "\($where): the wake names the kind \($t[1]), which the plan does not make"
         elif $t[2] == "" then "\($where): the wake's pattern is empty, and an empty pattern finds every screen ready"
         else empty end
+      elif $t[0] == "wake-own" then
+        if ($t | length) != 4 then "\($where): a wake-own has the words wake-own KIND MODE ITEM, not \($t | length)"
+        elif ($made_kinds | index($t[1])) == null then "\($where): the wake-own names the kind \($t[1]), which the plan does not make"
+        elif $t[2] | IN("enforced", "unenforced") | not then "\($where): \($t[2]) is not enforced or unenforced, the floors where a kind's own wake can have been measured"
+        elif $t[3] == "" then "\($where): the wake-own names no item, and the item that rules the measure is what it carries (5.146)"
+        else empty end
       else
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
         elif $t[1] == "/" then "\($where): a label on / refuses the plan"
         elif ($t[2] | whole | not) and $t[2] != "closed" then "\($where): \($t[2]) is neither a whole number nor closed"
+        elif ($t[2] | whole) and ($t[2] | length) > 15 then "\($where): \($t[2]) has more than 15 digits, and the frame compares no label that long"
         else empty end
       end;
   [$records[] | shape(.)] as $shapes
@@ -210,6 +218,7 @@ joined($b[0]; $root) as $plan
       | ([$sshkeys, $sshgrants] | add | length > 0) as $ssh
       | ($sshkeys | map(.term[1]) | unique) as $ssh_names
       | [$records[] | select(.term[0] == "wake")] as $waked
+      | [$records[] | select(.term[0] == "wake-own")] as $owned
       | [$records[] | select(.term[0] == "clearance-scale")] as $scaled
       | [($said | group_by(.term[1:6])[] | select((map(.term[6]) | unique | length) > 1)
           | "two statements of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) about \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
@@ -249,6 +258,12 @@ joined($b[0]; $root) as $plan
           | "two ssh-grant terms of \(scope_text(.[0].term; .[0].term[4]; .[0].term[1:4])) for the key \(.[0].term[5]) differ: \(map("\(.term[6]) from \(at(.origin))") | join(", "))"),
          ($waked | group_by(.term[1])[] | select((map(.term[2]) | unique | length) > 1)
           | "two wake terms of the kind \(.[0].term[1]) differ: \(map("\(.term[2] | tojson) from \(at(.origin))") | join(", "))"),
+         ($owned | group_by(.term[1:3])[] | select((map(.term[3]) | unique | length) > 1)
+          | "two wake-own terms of the kind \(.[0].term[1]) on an \(.[0].term[2]) floor differ: \(map("\(.term[3]) from \(at(.origin))") | join(", "))"),
+         ($owned[] | select(.term[1] as $kk | [$waked[] | select(.term[1] == $kk)] | length == 0)
+          | "\(at(.origin)): the wake-own names the kind \(.term[1]), which has no wake term: a kind that wakes by itself keeps its pattern for the pointers that stay (5.146)"),
+         (if ($owned | length) > 0 and ($floored | not)
+          then "wake-own speaks only in a plan with floors, and this plan holds none (the wake-own at \(ats([$owned[].origin])))" else empty end),
          (if ($waked | length) > 0 and ($mailed | length) == 0
           then "the plan holds wake terms and no mail term, so no mail is delivered to point out (the wake at \(ats([$waked[].origin])))" else empty end),
          ($sshgrants[] | select(.term[5] as $n | $ssh_names | index($n) | not)
@@ -297,6 +312,7 @@ joined($b[0]; $root) as $plan
           | entities($sshkeys) as $ssh_keys_e
           | entities($sshgrants) as $ssh_grants_e
           | entities($waked) as $wakes
+          | entities($owned) as $owns
           | (if ($rpaths | length) == 0 then null else $record_paths[0] end) as $record_path
           | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
           | def holds($scope; $n; $k):
@@ -413,7 +429,9 @@ joined($b[0]; $root) as $plan
                 elif $key.state == "held" then {granted: $ssh_granted, unreached: []}
                 else {granted: [], unreached: $ssh_granted} end) as $ssh_seat
              | ([$wakes[] | select(.term[1] == $kind)][0]) as $w
-             | (if $w == null then null else {pattern: $w.term[2], origins: $w.origins} end) as $wake
+             | ([$owns[] | select(.term[1] == $kind and .term[2] == $mode)][0]) as $o
+             | (if $w == null then null
+                else {pattern: $w.term[2], origins: $w.origins} + (if $o == null then {} else {own: {mode: $o.term[2], item: $o.term[3], origins: $o.origins}} end) end) as $wake
              | {seat: $k, name: $pane[4], kind: $kind, mode: $mode, clearance: $clearance, key: $key, home: $home, expects: $expecting, mine: $mine, remaining: $remaining, stated: $stated, reach: $reach, record: $record, ssh: $ssh_seat, wake: $wake}]
           as $folds
           | [$folds[] | select(.home != null) | . as $f
@@ -550,8 +568,9 @@ joined($b[0]; $root) as $plan
                      record_path_origins: [$rpaths[].origin],
                      reach: [$done[] | select(.reach != null) | {key: (.seat | tojson), value: .reach}] | from_entries,
                      unnumbered: [$window_rooms[] as $rm | [$done[] | select(.seat[0:2] == $rm)] as $occ
-                       | select(($occ | length) > 0 and $occ[0].mode == "enforced" and $occ[0].clearance.value == null)
-                       | {room: $rm, floor: floor_of($rm[0]), of: (if ($room_floor_keys | index($rm[0])) != null then "floor" else "office" end)}],
+                       | select(($occ | length) > 0 and ($occ[0].mode | IN("enforced", "unenforced")) and $occ[0].clearance.value == null)
+                       | {room: $rm, floor: floor_of($rm[0]), of: (if ($room_floor_keys | index($rm[0])) != null then "floor" else "office" end),
+                          enforced: ($occ[0].mode == "enforced")}],
                      unenforced: [$floors[] | select(.enforced | not) | .key],
                      passages: [$labels[] | . as $l
                        | {label: $l, seats: [$done[] | select(any(.rows[]; .passage == true and .key[3] == $l.path)) | .name]}

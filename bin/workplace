@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
 floor_sub=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
@@ -37,7 +37,8 @@ case $source_dir in
   */*) source_dir=${source_dir%/*} ;;
   *) source_dir=. ;;
 esac
-tool=$(cd -P -- "$source_dir/.." && pwd -P) || die "cannot find the tool's directory" 2
+tool=$(cd -P -- "$source_dir/.." && pwd -P && printf .) || die "cannot find the tool's directory" 2
+tool=${tool%$'\n.'}
 
 version_key() {
   [[ $1 =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))?([a-z]?)$ ]] || return 1
@@ -88,8 +89,12 @@ locate() {
     || die "WORKPLACE_ROOT must be the absolute path of a directory: $WORKPLACE_ROOT" 2
   [[ $WORKPLACE_CONFIG == /* && -d $WORKPLACE_CONFIG ]] \
     || die "WORKPLACE_CONFIG must be the absolute path of a directory: $WORKPLACE_CONFIG" 2
-  root=$(cd -P -- "$WORKPLACE_ROOT" && pwd -P) || die "cannot enter WORKPLACE_ROOT: $WORKPLACE_ROOT" 2
-  clone=$(cd -P -- "$WORKPLACE_CONFIG" && pwd -P) || die "cannot enter WORKPLACE_CONFIG: $WORKPLACE_CONFIG" 2
+  # A command substitution drops trailing newlines, so each path is read with a dot after it, which keeps a path that
+  # ends in a newline as it is, rather than turning it into another directory's.
+  root=$(cd -P -- "$WORKPLACE_ROOT" && pwd -P && printf .) || die "cannot enter WORKPLACE_ROOT: $WORKPLACE_ROOT" 2
+  root=${root%$'\n.'}
+  clone=$(cd -P -- "$WORKPLACE_CONFIG" && pwd -P && printf .) || die "cannot enter WORKPLACE_CONFIG: $WORKPLACE_CONFIG" 2
+  clone=${clone%$'\n.'}
   if [[ $root != / && $clone != "$root" && $clone != "$root"/* ]]; then
     die "WORKPLACE_CONFIG ($clone) is not at or below WORKPLACE_ROOT ($root)" 2
   fi
@@ -280,7 +285,7 @@ assemble() {
       (if has("socket") and (has("floors") | not) and .socket != "default" then "workplace.json says socket \(.socket | tojson), and only \"default\" is known" else empty end),
       (if rootsep then "the root \($root) is refused: \(separated)" else empty end),
       (if relsep then "the configuration'"'"'s path relative to the root, \($relative), is refused: \(separated)" else empty end),
-      (if (has("floors") or ((.socket // "") != "default")) and ($base | test("^[A-Za-z0-9][A-Za-z0-9_-]*$") | not)
+      (if (has("floors") or ((.socket // "") != "default")) and ($base | test("^[A-Za-z0-9][A-Za-z0-9_-]*$") and (contains("\n") | not) | not)
           and ((($base | separator) and (rootsep or relsep)) | not)
        then "the configuration'"'"'s base name \($base | tojson) is refused: the workplace'"'"'s name is derived from it, and it does not fit the class of that name, /[A-Za-z0-9][A-Za-z0-9_-]*/ (5.142)" else empty end)
     end' "$file" 2>&1) || die "workplace.json is not JSON that jq can read: $problems" 2
@@ -531,12 +536,14 @@ print_fold_report() {
           end),
          (.ssh.granted[]? | "  ssh key \(.name): granted, by the \(.scope)'"'"'s term (\(ats(.origins)))"),
          (.ssh.unreached[]? | "  ssh key \(.name): the \(.scope)'"'"'s grant does not reach it, since the seat holds no key (\(ats(.origins)))"),
-         (.wake // empty | "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \(.pattern | tojson), by its kind'"'"'s term (\(ats(.origins)))"),
+         (.wake // empty | "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \(.pattern | tojson), by its kind'"'"'s term (\(ats(.origins)))"
+            + (if .own == null then "" else "; on this floor its kind wakes by itself, as \(.own.item) rules, so mail to it from a room cleared less is delivered without a pointer (\(ats(.own.origins)))" end)),
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
       (.report.passages[] | "label \(.label.path) (\(.label.value)) is searchable only, a passage to the labels beneath it that a seat is cleared for (5.124 point 7), for: \(.seats | join(", ")) (\(ats(.label.origins)))"),
-      (.report.unnumbered[]? | "room \(.room | join("/")), on the enforced floor \(.floor), has no number: it is cleared for no label, and least among its \(.of)'"'"'s rooms (5.125 point 7)"),
+      (.report.unnumbered[]? | if .enforced then "room \(.room | join("/")), on the enforced floor \(.floor), has no number: it is cleared for no label, and least among its \(.of)'"'"'s rooms (5.125 point 7)"
+        else "room \(.room | join("/")), on the unenforced floor \(.floor), has no number: the pointer'"'"'s direction reads it as cleared least (5.125 point 7, 5.146)" end),
       (.report.unenforced[]? | "the unenforced floor \(.) has no view: its occupants read the machine as the user does, and labels, closed paths and bans bind them as conduct (5.124 point 3)")
   ' <<< "$folded"
 }
@@ -581,7 +588,7 @@ cmd_plan() {
   locate
   local reader version
   reader=$(command -v typify) || die "plan needs the reader, the program typify on PATH, and it is not there" 2
-  work=$(work_dir plan)
+  work=$(work_dir plan) || exit 2
   trap 'rm -rf -- "$work"' EXIT
   trap 'exit 130' INT TERM
   assemble "$work"
@@ -653,7 +660,7 @@ cmd_plan() {
 
 reassemble_and_compare() {
   local manifest=$1 differences line
-  work=$(work_dir build)
+  work=$(work_dir build) || exit 2
   trap 'rm -rf -- "$work"' EXIT
   trap 'exit 130' INT TERM
   assemble "$work"
@@ -1118,7 +1125,7 @@ make_mail() {
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg store "$store" --arg comms "$comms" \
       '. + [$s + {box: $box, in: "\($store)/\($box)/in", sent: "\($store)/\($box)/sent", out: "\($comms)/\($box)/out", answers: "\($comms)/\($box)/answers"}]' <<< "$entries")
   done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)
-    + (if has("floor") then {floor, number: .clearance.value} else {} end)' <<< "$folded")
+    + (if has("floor") then {floor, number: .clearance.value, own: (.wake.own.item // null)} else {} end)' <<< "$folded")
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
     '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
     || die "cannot write $build_dir/mail.json" 2
@@ -2538,17 +2545,38 @@ carrier_wake_load() {
   done
 }
 
+carrier_wake_decision() {
+  jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg target "$1" --arg id "$carrier_id" --arg outcome "$2" --arg reason "$3" '
+    {at: $at, seat: "the frame", action: "wake", target: [$target], covers: [$id], outcome: $outcome, reason: $reason}' >> "$comms/record"
+}
+
+carrier_cleared_more() {
+  # Whether reader $1's room is cleared more than writer $2's: a smaller number, and a room with no number is cleared least.
+  local reader=${seat_number[$1]} writer=${seat_number[$2]}
+  [[ $reader != null && ( $writer == null || reader -lt writer ) ]]
+}
+
 carrier_wake_note() {
-  local at=$1 writer=$2 p j noted=0
+  # At delivery, each reader gets one decision, with its trace (5.146): due, kept in wake.json until a pointer is
+  # typed; withheld, where its room is cleared more than the writer's and its kind wakes by itself on its floor; or
+  # none, for the writer's own mail and for a kind with no pattern. The writer is not told which.
+  local at=$1 writer=$2 p j w noted=0
   shift 2
+  w=$(carrier_seat_of "$writer") || w=""
   for p in "$@"; do
-    [[ $p == "$writer" ]] && continue
     j=$(carrier_seat_of "$p") || continue
-    [[ -n ${seat_wake[j]} ]] || continue
-    (( wake_n[j] )) || wake_since[j]=$at
-    wake_n[j]=$(( wake_n[j] + 1 ))
-    wake_ids[j]+="${wake_ids[j]:+ }$carrier_id"
-    noted=1
+    if [[ $p == "$writer" ]]; then
+      carrier_wake_decision "$p" none "the writer's own mail is pointed out to no one (5.79)"
+    elif [[ -n ${seat_own[j]} && -n $w ]] && carrier_cleared_more "$j" "$w"; then
+      carrier_wake_decision "$p" withheld "the room of $p, at ${seat_number[j]}, is cleared more than the writer's, $( [[ ${seat_number[w]} == null ]] && printf 'with no number' || printf 'at %s' "${seat_number[w]}" ), and its kind wakes by itself on its floor, as ${seat_own[j]} rules (5.124 point 8, 5.125 point 17)"
+    elif [[ -n ${seat_wake[j]} ]]; then
+      (( wake_n[j] )) || wake_since[j]=$at
+      wake_n[j]=$(( wake_n[j] + 1 ))
+      wake_ids[j]+="${wake_ids[j]:+ }$carrier_id"
+      noted=1
+    else
+      carrier_wake_decision "$p" none "its kind has no wake pattern, so no pointer is typed for it (C94)"
+    fi
   done
   (( noted )) && carrier_wake_save
   return 0
@@ -2610,7 +2638,24 @@ carrier_recover() {
   answers=$comms/$box/answers
   if [[ $action == mail ]] && subject=$(carrier_git log -1 --format=%s 2> /dev/null) && [[ $subject == "deliver $carrier_id" ]]; then
     [[ -d $answers ]] && carrier_answer "$answers" "$request" "ok $carrier_id"
-    carrier_record "$seat" "$request" mail '[]' ok "the carrier stopped after it delivered this, and answers it as it starts again"
+    # The readers are those the delivery's commit gave the mail to. Each that the stopped carrier did not decide for,
+    # by a line in the record or an entry in wake.json, is decided now, so the record holds a decision for every reader.
+    local path box_in reader j k
+    local -a undecided=() all=()
+    while IFS= read -r -d '' path; do
+      [[ $path == */in/"$carrier_id".md ]] || continue
+      box_in=${path%/in/"$carrier_id".md} j=""
+      for k in "${!seat_boxes[@]}"; do [[ ${seat_boxes[k]} == "$box_in" ]] && { j=$k; break; }; done
+      [[ -n $j ]] || continue
+      reader=${seat_names[j]}
+      all+=("$j")
+      [[ " ${wake_ids[j]-} " == *" $carrier_id "* ]] && continue
+      jq -e --arg id "$carrier_id" --arg t "$reader" 'select(.seat == "the frame" and .action == "wake" and .covers == [$id] and .target == [$t])' \
+        "$comms/record" > /dev/null 2>&1 && continue
+      undecided+=("$reader")
+    done < <(carrier_git show -z --name-only --format= HEAD 2> /dev/null)
+    (( ${#undecided[@]} )) && carrier_wake_note "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$seat" "${undecided[@]}"
+    carrier_record "$seat" "$request" mail "$(jq -n -c --argjson names "$carrier_names" --arg all "${all[*]}" '[$all | splits(" ") | select(. != "") | $names[tonumber]]')" ok "the carrier stopped after it delivered this, and answers it as it starts again"
   else
     if [[ $action == mail ]]; then
       carrier_git reset -q > /dev/null 2>&1
@@ -2722,7 +2767,7 @@ cmd_carry() {
   trap 'carrier_stop=1' TERM INT
   trap '' HUP
   exec {pause_fd}<> <(:)
-  seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=()
+  seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=() seat_number=() seat_own=()
   wake_n=() wake_ids=() wake_since=() wake_last=() wake_any=0
   comms_record=""
   if [[ -f $mail ]]; then
@@ -2734,6 +2779,9 @@ cmd_carry() {
       seat_reach+=("$(jq -c '.reach' <<< "$entry")")
       seat_keys+=("$(jq -c '.seat' <<< "$entry")")
       seat_wake+=("$(jq -r '.wake // ""' <<< "$entry")")
+      # With floors: the room's number (null where it has none) and the item that rules its kind's own wake there.
+      seat_number+=("$(jq -r 'if has("number") then (.number // "null" | tostring) else "" end' <<< "$entry")")
+      seat_own+=("$(jq -r '.own // ""' <<< "$entry")")
     done < <(jq -c '.seats[]' "$mail")
     carrier_names=$(jq -c '[.seats[].name]' "$mail")
     comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail") mail_path=$(jq -r '.path' "$mail")
@@ -2744,8 +2792,8 @@ cmd_carry() {
       [[ -d ${seat_out[i]} && ! -L ${seat_out[i]} && $(stat -c %d -- "${seat_out[i]}") == "$dev" ]] \
         || die "the out of ${seat_names[i]} is not a directory on the file system of $taken, and the carrier moves by renaming alone" 2
     done
-    carrier_recover
     carrier_wake_load
+    carrier_recover
   fi
   record_names=() record_boxes=() record_dirs=() record_keys=() record_kept=() record_pane=()
   chain_sink="" chain_last=0 chain_failed="" chain_refusing=0
@@ -2975,6 +3023,8 @@ cmd_why() {
                + (if $keyview == "" then "" else "; the seat is shown its public file at \($keyview)/ssh/\(.name).pub" end)),
             (($folded_seat.ssh.unreached? // [])[]
              | "ssh key \(.name): granted by the \(.scope)'s term, from \([.origins[] | at(.)] | join(", ")), and it does not reach the seat, which holds no key"),
+            (if $folded_seat.wake.own? == null then empty
+             else "own wake: on this floor the seat's kind wakes by itself, as \($folded_seat.wake.own.item) rules, by its kind's wake-own term, from \([$folded_seat.wake.own.origins[] | at(.)] | join(", ")); mail to it from a room cleared less is delivered without a pointer" end),
             (if $folded_seat.home? == null then empty
              else $folded_seat.home as $h
                | "home: \($h.state)\(if $h.state == "kept" then " at" else ", a file system made when its pane starts at" end) \($home_path // "the state directory, which this shell does not name"), named to its program by \($h.variable), by the kind \($h.kind)'s term, from \([$h.origins[] | at(.)] | join(", "))",

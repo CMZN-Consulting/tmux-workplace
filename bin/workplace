@@ -3882,6 +3882,26 @@ cmd_down() {
   say "down: ${run_floor:+the floor $run_floor, }done"
 }
 
+# The holder of the store's lock, as S/store.holder names it (floors only). status takes no lock: it reads the file,
+# and tells a holder that runs, a carrier of the floor it names, from a name left by a carrier that stopped while it
+# held the lock, which the next hold replaces.
+store_status() {
+  local file=${1%/mail}/store.holder fields cmd=""
+  [[ -f $file && ! -L $file ]] || return 0
+  fields=$(jq -r '[.floor, .pid, .at, (.id // "")] | map(tostring) | join("\u001f")' "$file" 2> /dev/null) || {
+    say "store   $file cannot be read; the next hold replaces it"
+    return 0
+  }
+  local floor pid at id
+  IFS=$'\x1f' read -r floor pid at id <<< "$fields"
+  if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/cmdline ]]; then cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2> /dev/null); fi
+  if [[ $cmd == *" carry $floor " ]]; then
+    say "store   held by the carrier of the floor $floor, process $pid, since $at${id:+, for the request $id}"
+  else
+    say "store   $file names the carrier of the floor $floor, process $pid, and no carrier of that floor runs as $pid; the next hold replaces it"
+  fi
+}
+
 seats_report() {
   local bad=0 entry path file="" state_dir workplace key names line i name waiting=0
   local -a problems fields parts inside
@@ -3895,6 +3915,7 @@ seats_report() {
     done < <(jq -c '.seats[]' "$b_mail")
     say "mail    the store $(jq -r '.store' "$b_mail"), shown at $(jq -r '.path' "$b_mail"); requests waiting in the seats' out: $waiting"
     (( ${#waits[@]} )) && printf '%s\n' "${waits[@]}"
+    store_status "$(jq -r '.store' "$b_mail")"
     file=$(jq -r '.comms' "$b_mail")/wake.json
     if [[ -f $file ]]; then
       jq -r --slurpfile w "$file" '.seats[] | select(.wake != null) | . as $s | ($w[0].seats[$s.box] // null) as $p
@@ -4010,6 +4031,7 @@ cmd_status() {
   elif verify_build ${verify_floor:+"$verify_floor"}; then
     sum=$b_top_sha
     say "build: verified, manifest $sum"
+    [[ $b_layout == generations ]] && say "shared  generation ${b_shared##*/}"
     seats_report || bad=1
   else
     say "build: does not match its manifest"
@@ -4031,7 +4053,7 @@ cmd_status() {
 status_run() {
   local bad=0 run
   if [[ -n $run_floor ]]; then
-    say "floor   $run_floor"
+    say "floor   $run_floor${b_floor[$run_floor]:+: generation ${b_floor[$run_floor]##*/}}"
     say "conf    the floor's own file is not read in 4a: its server reads an empty file and stands on tmux's defaults, and the floor's file comes with the frame's set after it in 4a2 (5.167)"
     if [[ $(jq -r --arg f "$run_floor" '[.programs[].plan[]? | (if type == "object" then .term else . end)
         | select(type == "array" and .[0] == "floor" and .[1] == $f) | .[4]][0] // ""' "$b_plan" 2> /dev/null) == unenforced ]]; then
@@ -4041,6 +4063,15 @@ status_run() {
   fi
   if [[ ! -d $run_dir ]]; then
     say "run: ${run_floor:+floor $run_floor is }down"
+    if [[ -n $run_floor && -f $b_mail ]]; then
+      local out waiting=0
+      local -a inside
+      while IFS= read -r out; do
+        inside=("$out"/[!.]*)
+        waiting=$(( waiting + ${#inside[@]} ))
+      done < <(jq -r --arg f "$run_floor" '.seats[] | select(.floor == $f) | .out' "$b_mail")
+      (( waiting == 0 )) || say "waiting the floor $run_floor is down: $waiting requests of its writers wait in out, and none is served until up $run_floor"
+    fi
     [[ -d $build_dir ]] && records_status 0
     return "$(( bad || records_bad ))"
   fi

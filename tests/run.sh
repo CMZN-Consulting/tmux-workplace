@@ -2584,6 +2584,18 @@ t_floors_up() {
   check "[C22] 5.167: and what the unenforced floor lacks in 4a" said "lacks   the floor bridge is unenforced, and in 4a its server runs under the bar"
   check "[C22] status of one floor" exit_is 0 wp status deck
   check "[C22] reports that floor alone" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && ! grep -q "floor lodge" "$1"' _ "$scratch/out"
+  check "[C22] 5.160: with the shared generation and the floor's, as the top names them" \
+    bash -c 'grep -qx "shared  generation $2" "$1" && grep -qx "floor   deck: generation $3" "$1"' _ "$scratch/out" \
+      "$(sed -n 's|^[0-9a-f]*  shared/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")" "$(sed -n 's|^[0-9a-f]*  floors/deck/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")"
+  check "[C57] 5.162: with no hold of the store's lock, status prints no holder" bash -c '! grep -q "^store " "$1"' _ "$scratch/out"
+  printf '%s\n' "{\"floor\": \"deck\", \"pid\": $(carrier_pid deck), \"at\": \"2026-11-14T00:00:00Z\", \"id\": \"20261114T000000Z-000042\"}" > "$s/store.holder"
+  check "[C57] 5.162: a holder that is the running carrier of the floor it names is reported as holding the store's lock" exit_is 0 wp status deck
+  check "[C57] naming the floor, the process, the time and the request" \
+    said "store   held by the carrier of the floor deck, process $(carrier_pid deck), since 2026-11-14T00:00:00Z, for the request 20261114T000000Z-000042"
+  printf '%s\n' "{\"floor\": \"deck\", \"pid\": $(carrier_pid lodge), \"at\": \"2026-11-14T00:00:00Z\", \"id\": null}" > "$s/store.holder"
+  check "[C57] 5.162: a holder that names a process that is no carrier of that floor is reported as a name the next hold replaces, with exit 0" exit_is 0 wp status deck
+  check "[C57] saying so" said "names the carrier of the floor deck, process $(carrier_pid lodge), and no carrier of that floor runs as $(carrier_pid lodge); the next hold replaces it"
+  rm -f -- "$s/store.holder"
   local lodge_pid lodge_carrier
   lodge_pid=$(on lodge T display-message -p '#{pid}')
   lodge_carrier=$(carrier_pid lodge)
@@ -2593,6 +2605,13 @@ t_floors_up() {
     bash -c '[[ -d $1/lodge && $2 == "$3" && -n $4 ]] && kill -0 "$4"' _ "$run" "$lodge_pid" "$(on lodge T display-message -p '#{pid}')" "$lodge_carrier"
   check "[C17] exec of a seat whose floor is not up refuses, with exit 2" exit_is 2 wp exec --print -- "Harbor Keeper"
   check "[C17] saying so" said "nothing is up on the floor deck"
+  request keeper k9.md "to: Lodge Ida" "subject: waits" --- "body"
+  request pilot p9.md "to: Lodge Ida" "subject: waits" --- "body"
+  check "[C22] status of a floor that is down, with requests of its writers waiting, exits 0" exit_is 0 wp status deck
+  check "[C22] and counts them: none is served until up" said "waiting the floor deck is down: 2 requests of its writers wait in out, and none is served until up deck"
+  sleep 2
+  check "[C57] 5.160 point 8: the other floor's carrier serves none of them" \
+    bash -c '[[ -e $1/comms/Harbor\ Keeper/out/k9.md && -e $1/comms/Harbor\ Pilot/out/p9.md ]]' _ "$s"
   check "[C18] down of a floor that is down says so, with exit 0" exit_is 0 wp down deck
   check "[C18] saying it" said "down: the floor deck is not up"
   check "[C99] unbuild refuses while a floor is up, with exit 1" exit_is 1 wp unbuild

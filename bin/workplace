@@ -502,7 +502,9 @@ show_diagnostics() {
           | if $m == null then "the assembled declarations, line \($l)"
             else "\($m.source):\($l - $m.assembled_start_line + $m.source_start_line)" end
         end
-      elif ($f | type) == "string" and ($f | startswith($t)) then
+      elif ($f | type) == "string" and (($f | startswith($t)) or ($f != "" and ($f | startswith("/") | not))) then
+        # The reader names a file of the tree relative to the tree (5.168); a name from the absolute path of the tree
+        # is read the same.
         ($f | ltrimstr($t)) as $r
         | if $r == "ROOT.typify" then "the generated root program, line \($l // "?")" else "\($r):\($l // "?")" end
       else "\($f // "the reader"):\($l // "?")" end;

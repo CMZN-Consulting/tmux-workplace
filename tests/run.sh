@@ -1341,6 +1341,16 @@ t_plan_refusals() {
   check "[C28] an error in the root program is shown as the generated program's" said "the generated root program, line 2: error E_PROGRAM: root words"
   check "[C28] a program's at its path in the clone" said "programs/policy.typify:1: error E_PROGRAM: program words"
   rm -- "$STUB_DIR/plan-diagnostics.json"
+  # The real reader names a file of the tree relative to the tree (5.168, measured by the DA with the reader at 4bb7584).
+  printf '%s' '{"diagnostics":[{"code":"E_LINE_SHAPE","severity":"error","file":"ROOT.typify","range":{"start":{"line":3,"column":1},"end":{"line":3,"column":3}},"message":"The line has none of the three shapes"},
+    {"code":"E_PROGRAM","severity":"error","file":"programs/policy.typify","range":{"start":{"line":1,"column":1},"end":{"line":1,"column":3}},"message":"program words"}],"status":"failed"}' \
+    > "$STUB_DIR/plan-diagnostics.json"
+  check "[C28] 5.168: a program's error stops plan with exit 1 where the reader names the file relative to the tree" exit_is 1 wplan
+  check "[C28] 5.168: an error in the root program is shown as the generated program's where the reader names it relative to the tree, as the real reader does" \
+    said "the generated root program, line 3: error E_LINE_SHAPE: The line has none of the three shapes"
+  check "[C28] 5.168: and not by the reader's name for it" bash -c '! grep -qF -- "$1" "$2"' _ "ROOT.typify:3:" "$scratch/out"
+  check "[C28] 5.168: a program's so named at its path in the clone" said "programs/policy.typify:1: error E_PROGRAM: program words"
+  rm -- "$STUB_DIR/plan-diagnostics.json"
   statements_plan '.facts = "sha256:" + ("0" * 64)'
   check "[C28] a plan made on facts is refused with exit 1" exit_is 1 wplan
   check "[C28] with the open item of 5.15 as the reason" said "a plan whose facts member is not none is refused for now, since 5.15 leaves open which facts build compares"

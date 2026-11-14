@@ -1517,6 +1517,21 @@ t_the_fold() {
   check "[C32] the directories beneath it that no row names are listed as held by nobody" \
     bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && grep -qxF "  $1/orchard/cellar" "$2" && grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
   check "[C32] and not one that a row names" bash -c '! grep -qxF "  $1/orchard/almanac" "$2"' _ "$root" "$scratch/out"
+  mkdir -p -- "$root/orchard/cellar/casks"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
+                                              st("orchard"; "-"; "-"; "office"; $root + "/orchard/cellar"; "hidden"; 11),
+                                              lb($root + "/orchard/cellar"; "closed"; 12), sc(13)]'
+  check "plan with a closed path that an office's statement names, beneath the closed root" exit_is 0 wplan
+  check "[C32] 5.149: the listing does not go beneath the closed path, and names nothing at or beneath it" \
+    bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && ! grep -qF "  $1/orchard/cellar" "$2"' _ "$root" "$scratch/out"
+  check "[C32] and names what no row names beside it" bash -c 'grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
+                                              st("orchard"; "-"; "-"; "office"; $root + "/orchard/cellar"; "hidden"; 11), sc(13)]'
+  check "plan with the same statement and no closed label" exit_is 0 wplan
+  check "[C32] the listing goes beneath that path, which is not closed" bash -c 'grep -qxF "  $1/orchard/cellar/casks" "$2"' _ "$root" "$scratch/out"
+  rm -rf -- "$root/orchard/cellar/casks"
   statements_plan '.programs[-1].recorded = [lb($root + "/orchard"; "1"; 9), sc(10)]'
   check "[C31] a plan with a label and no statement is folded, and refused for want of a row for /" exit_is 1 wplan
   check "[C31] naming a seat" said "seat Harbor Keeper (harbor/dock/keeper): no row for /"

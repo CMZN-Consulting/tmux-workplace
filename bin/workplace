@@ -549,8 +549,12 @@ print_fold_report() {
 }
 
 held_by_nobody() {
-  local view=$1 path child verdict
-  local -a queue
+  # A closed path stands in no view (5.124 point 6), so the listing does not go beneath one and names nothing
+  # beneath one (5.149). The closed paths are the plan's labels of closed. No searchable-only row stands at or
+  # beneath one, since the fold refuses every row there that is not hidden (rule 6), so the listing starts outside.
+  local view=$1 plan=$2 path child verdict c open
+  local -a queue closed
+  mapfile -t closed < <(jq -r '[.programs[]?.recorded[]? | select((.term | type) == "array" and .term[0] == "label" and .term[2] == "closed") | .term[1]] | unique[]' "$plan")
   mapfile -t queue < <(jq -r '[.rows[] | select(.value[0] == "searchable-only") | .key[3]] | unique[]' "$view")
   local -a found=()
   while (( ${#queue[@]} )); do
@@ -572,7 +576,10 @@ held_by_nobody() {
           else "through" end' "$view")
       case $verdict in
         nobody) found+=("$child") ;;
-        through) queue+=("$child") ;;
+        through)
+          open=1
+          for c in "${closed[@]}"; do [[ $child == "$c" ]] && open=0; done
+          (( open )) && queue+=("$child") ;;
       esac
     done
   done
@@ -653,7 +660,7 @@ cmd_plan() {
   done
   if [[ -n $folded ]]; then
     print_fold_report
-    held_by_nobody "$plan_dir/view.json"
+    held_by_nobody "$plan_dir/view.json" "$plan_dir/plan.json"
   fi
   return 0
 }

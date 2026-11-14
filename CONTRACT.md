@@ -142,7 +142,7 @@
   - each statement that stands at a labelled path;
   - the counts.
 
-  It prints each label whose row is a passage (C30), with the seats that pass through it, and lists the directories held by nobody as a report. None of this is in the plan.
+  It prints each label whose row is a passage (C30), with the seats that pass through it, and lists the directories held by nobody as a report. That listing goes no deeper than a closed path and names nothing beneath one, since a closed path stands in no view (5.124 point 6, 5.149). None of this is in the plan.
 - **C33.** A seat's table is `view.json` when the plan holds statements, and the plan's `view` cell when it holds none.
   - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance`, `label`, `key`, `home`, `home-variable`, `home-seed` and `expect`.
   - `plan`, `build`, `up` and `why` all call it. A plan that holds any of them without a statement is folded too, and refused, since no seat has a row for `/`.

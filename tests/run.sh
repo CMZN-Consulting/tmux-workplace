@@ -1203,7 +1203,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1534,6 +1534,35 @@ t_the_fold() {
   check "[C32] 5.149: the listing does not go beneath the closed path, and names nothing at or beneath it" \
     bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && ! grep -qF "  $1/orchard/cellar" "$2"' _ "$root" "$scratch/out"
   check "[C32] and names what no row names beside it" bash -c 'grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
+                                              st("orchard"; "-"; "-"; "office"; $root + "/orchard/cellar"; "hidden"; 11),
+                                              lb("orchard/cellar"; "closed"; 12), sc(13)]'
+  check "plan with the same closed path, its label written relative to the root, as the house writes its four (C4)" exit_is 0 wplan
+  check "[C32] 5.153: the listing goes beneath no closed path however its label is written, and names nothing at or beneath it" \
+    bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && ! grep -qF "  $1/orchard/cellar" "$2" && grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
+                                              lb("orchard/cellar"; "closed"; 12), sc(13)]'
+  check "plan with a closed path that no row names, beneath a searchable-only row, its label written relative to the root" exit_is 0 wplan
+  check "[C32] 5.153: the listing does not name the closed path itself, which its label covers, nor anything beneath it, where no seat holds it" \
+    bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && ! grep -qF "  $1/orchard/cellar" "$2" && grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
+  ln -s -- orchard "$root/grove"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
+                                              lb("grove/cellar"; "closed"; 12), sc(13)]'
+  check "plan with a closed label written through a link to the directory the listing walks" exit_is 0 wplan
+  check "[C32] 5.153: the listing names no closed directory under another path's name" \
+    bash -c 'grep -qxF "held by nobody, a report and no part of the plan:" "$2" && ! grep -qF "  $1/orchard/cellar" "$2" && grep -qxF "  $1/orchard/crate-picker" "$2"' _ "$root" "$scratch/out"
+  rm -f -- "$root/grove"
+  mkdir -p -- "$root/orchard/cel"$'\n'"lar"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
+                                              lb("orchard/cellar"; "closed"; 11), lb("orchard/cel\nlar"; "closed"; 12), sc(13)]'
+  check "plan with a closed label whose path holds a newline" exit_is 0 wplan
+  check "[C32] 5.153: the listing reads the closed paths whole, and names no part of that one" \
+    bash -c 'grep -qxF "  $1/orchard/crate-picker" "$2" && ! grep -qF "  $1/orchard/cel" "$2" && ! grep -qx "lar" "$2"' _ "$root" "$scratch/out"
+  rm -rf -- "$root/orchard/cel"$'\n'"lar"
   statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
                                               st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
                                               st("orchard"; "-"; "-"; "office"; $root + "/orchard/cellar"; "hidden"; 11), sc(13)]'
@@ -2168,11 +2197,14 @@ t_pointer_floors() {
   local kinds='| kinds([["harbor", "dock", "keeper", "clerk"], ["harbor", "dock", "pilot", "courier"], ["harbor", "tower", "watch", "clerk"],
       ["orchard", "barn", "grower", "clerk"], ["orchard", "barn", "picker", "scribe"], ["orchard", "field", "reaper", "scribe"],
       ["lodge", "east", "ida", "clerk"], ["lodge", "west", "ivo", "clerk"], ["lodge", "west", "ira", "courier"], ["orchard", "field", "gleaner", "courier"]])'
-  local terms='| .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "1"; 20), cl("harbor"; "tower"; "-"; "room"; "3"; 21),
-      cl("orchard"; "barn"; "-"; "room"; "2"; 22), cl("lodge"; "east"; "-"; "room"; "1"; 23), cl("lodge"; "west"; "-"; "room"; "2"; 24), sc(25),
+  # The rooms are numbered 0, 9 and 10, so that a comparison of strings, or one that reads 0 as no number, decides
+  # otherwise than the comparison of numbers (5.153).
+  local terms='| .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "0"; 20), cl("harbor"; "tower"; "-"; "room"; "10"; 21),
+      cl("orchard"; "barn"; "-"; "room"; "9"; 22), cl("lodge"; "east"; "-"; "room"; "0"; 23), cl("lodge"; "west"; "-"; "room"; "9"; 24), sc(25),
       m(["reach", "orchard", "-", "-", "office", "mail", "-", "-", "-", "workplace", "allowed"]; 2),
       m(["reach", "harbor", "-", "-", "office", "mail", "orchard", "-", "-", "office", "allowed"]; 3),
       m(["reach", "lodge", "-", "-", "floor", "mail", "lodge", "-", "-", "floor", "allowed"]; 4),
+      m(["reach", "harbor", "dock", "-", "room", "mail", "harbor", "dock", "-", "room", "allowed"]; 9),
       m(["wake", "clerk", "^waiting>$"]; 5), m(["wake", "scribe", "^waiting>$"]; 6),
       m(["wake-own", "clerk", "enforced", "5.150"]; 7), m(["wake-own", "scribe", "unenforced", "5.151"]; 8)]'
 
@@ -2181,6 +2213,10 @@ t_pointer_floors() {
     '| .programs[-1].recorded += [m(["wake-own", "ghost", "enforced", "5.150"]; 30)]|programs/COMMS.typify:30: the wake-own names the kind ghost, which the plan does not make'
     '| .programs[-1].recorded += [m(["wake-own", "clerk", "measured", "5.150"]; 30)]|programs/COMMS.typify:30: measured is not enforced or unenforced, the floors where a kind'"'"'s own wake can have been measured'
     '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", ""]; 30)]|programs/COMMS.typify:30: the wake-own names no item, and the item that rules the measure is what it carries (5.146)'
+    '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", "\n"]; 30)]|programs/COMMS.typify:30: the wake-own'"'"'s item holds a control character, which would break the line that plan prints and could be lost where the carrier reads the item back (5.153)'
+    '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", "5.1\u001b[2J50"]; 30)]|programs/COMMS.typify:30: the wake-own'"'"'s item holds a control character, which would break the line that plan prints and could be lost where the carrier reads the item back (5.153)'
+    '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", "5.150\u007f"]; 30)]|programs/COMMS.typify:30: the wake-own'"'"'s item holds a control character, which would break the line that plan prints and could be lost where the carrier reads the item back (5.153)'
+    '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", "5.150\u0085"]; 30)]|programs/COMMS.typify:30: the wake-own'"'"'s item holds a control character, which would break the line that plan prints and could be lost where the carrier reads the item back (5.153)'
     '| .programs[-1].recorded += [m(["wake-own", "courier", "enforced", "5.150"]; 30)]|programs/COMMS.typify:30: the wake-own names the kind courier, which has no wake term: a kind that wakes by itself keeps its pattern for the pointers that stay (5.146)'
     '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", "5.160"]; 30)]|two wake-own terms of the kind clerk on an enforced floor differ: 5.150 from programs/COMMS.typify:7, 5.160 from programs/COMMS.typify:30'
   )
@@ -2192,7 +2228,7 @@ t_pointer_floors() {
   done
   # A number the frame compares has at most 15 digits; each input below holds that fault alone.
   local bounds=(
-    '| .programs[-1].recorded |= map(if .term == ["clearance", "harbor", "tower", "-", "room", "3"] then .term[5] = "1234567890123456" | .origin.line = 30 else . end)|programs/policy.typify:30: 1234567890123456 has more than 15 digits, and the frame compares no clearance that long'
+    '| .programs[-1].recorded |= map(if .term == ["clearance", "harbor", "tower", "-", "room", "10"] then .term[5] = "1234567890123456" | .origin.line = 30 else . end)|programs/policy.typify:30: 1234567890123456 has more than 15 digits, and the frame compares no clearance that long'
     '| .programs[-1].recorded += [lb($root + "/tools"; "1234567890123456"; 30)]|programs/policy.typify:30: 1234567890123456 has more than 15 digits, and the frame compares no label that long'
   )
   for entry in "${bounds[@]}"; do
@@ -2222,7 +2258,7 @@ t_pointer_floors() {
   check "naming it in its last line" bash -c 'tail -n 1 "$1" | grep -qF "workplace: cannot make $2/workplace-build-"' _ "$scratch/out" "$scratch/none"
   check "build" exit_is 0 wp build
   check "[C56] with floors mail.json gives each seat its kind's own wake for its floor's mode, null where none" \
-    test "$(jq -c '[.seats[] | [.name, .number, (if has("own") then .own else "absent" end)]]' "$clone/BUILD/mail.json")" = '[["Harbor Keeper",1,"5.150"],["Harbor Pilot",1,null],["Harbor Watch",3,"5.150"],["Orchard Grower",2,null],["Orchard Picker",2,"5.151"],["Lodge Ida",1,"5.150"],["Lodge Ivo",2,"5.150"],["Orchard Reaper",null,"5.151"],["Lodge Ira",2,null],["Orchard Gleaner",null,null]]'
+    test "$(jq -c '[.seats[] | [.name, .number, (if has("own") then .own else "absent" end)]]' "$clone/BUILD/mail.json")" = '[["Harbor Keeper",0,"5.150"],["Harbor Pilot",0,null],["Harbor Watch",10,"5.150"],["Orchard Grower",9,null],["Orchard Picker",9,"5.151"],["Lodge Ida",0,"5.150"],["Lodge Ivo",9,"5.150"],["Orchard Reaper",null,"5.151"],["Lodge Ira",9,null],["Orchard Gleaner",null,null]]'
 
   # A run made by hand, with no panes: the decision is taken at delivery and needs none (5.146 point 5).
   mkdir -p -- "$clone/BUILD/RUN/carrier"
@@ -2234,14 +2270,16 @@ t_pointer_floors() {
   request keeper k1.md "to: Orchard Picker" "subject: from the dock" --- "five"
   request grower g2.md "to: Orchard Reaper, Orchard Gleaner" "subject: to the field" --- "six"
   request gleaner l1.md "to: Orchard Reaper" "subject: within the field" --- "seven"
+  request watch w1.md "to: Orchard Picker" "subject: from the tower" --- "eight"
+  request pilot p1.md "to: Harbor Keeper" "subject: within the dock" --- "nine"
   local carrier s started
   s=$(state_of)
   started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   "$BASH" "$clone/BUILD/bin/workplace" carry > "$scratch/carry" 2>&1 &
   carrier=$!
-  check "[C59] a carrier on a run made by hand delivers the seven mails" \
+  check "[C59] a carrier on a run made by hand delivers the nine mails" \
     bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of grower g1.md)" "$(answer_of reaper r1.md)" "$(answer_of ivo v1.md)" \
-      "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)" "$(answer_of gleaner l1.md)"
+      "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)" "$(answer_of gleaner l1.md)" "$(answer_of watch w1.md)" "$(answer_of pilot p1.md)"
   rm -rf -- "$clone/BUILD/RUN/carrier"
   wait "$carrier"
   # The record is read line by line, and a line that does not parse is passed over, as the carrier passes it over.
@@ -2254,31 +2292,34 @@ t_pointer_floors() {
       | ($m | length) == 1 and (($k | length) == 0 or $k == [range($m[0] - ($k | length); $m[0])])' "$1" > /dev/null
   }
   all_together() { local f=$1 id; shift; for id in "$@"; do together "$f" "$id" || return 1; done; }
-  local g r v d k g2 l store
+  local g r v d k g2 l w p store
   g=$(idof "Orchard Grower" g1.md) r=$(idof "Orchard Reaper" r1.md) v=$(idof "Lodge Ivo" v1.md) d=$(idof "Lodge Ida" d1.md)
-  k=$(idof "Harbor Keeper" k1.md) g2=$(idof "Orchard Grower" g2.md) l=$(idof "Orchard Gleaner" l1.md)
+  k=$(idof "Harbor Keeper" k1.md) g2=$(idof "Orchard Grower" g2.md) l=$(idof "Orchard Gleaner" l1.md) w=$(idof "Harbor Watch" w1.md) p=$(idof "Harbor Pilot" p1.md)
   store=$(jq -r '.store' "$clone/BUILD/mail.json")
-  check "[C94] 5.146: toward a room cleared more whose kind wakes by itself, withheld; a kind with no pattern and the writer, none; each reader on its own, and a due reader has no line" \
+  check "[C94] 5.146: toward a room cleared more whose kind wakes by itself, withheld, 0 as the reader's number below 9; a kind with no pattern and the writer, none; each reader on its own, and a due reader has no line" \
     test "$(decided "$g")" = "Harbor Keeper:withheld,Harbor Pilot:none,Orchard Grower:none,"
-  check "[C94] toward rooms of the same number and cleared less, due, in wake.json" test "$(due "$g")" = '["Harbor Watch","Lodge Ivo"]'
+  check "[C94] toward rooms of the same number and cleared less, due, in wake.json: a reader at 10 from a writer at 9 is cleared less (5.153)" test "$(due "$g")" = '["Harbor Watch","Lodge Ivo"]'
+  check "[C94] 5.153: a reader at 0 from a writer at 0 is cleared as much, and due even where its kind wakes by itself" test "$(decided "$p")$(due "$p")" = '["Harbor Keeper"]'
+  check "[C94] 5.153: and a reader at 9 from a writer at 10 is cleared more, and withheld: the numbers are compared as numbers" \
+    test "$(decided "$w")$(due "$w")|$(jq -r -R --arg id "$w" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$s/comms/record")" = "Orchard Picker:withheld,[]|the room of Orchard Picker, at 9, is cleared more than the writer's, at 10, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)"
   check "[C94] a writer with no number counts as cleared least: withheld toward a numbered room above it, and on an unenforced floor by its mode's own wake; due by an own wake of the other mode" \
     test "$(decided "$r")$(due "$r")" = 'Harbor Keeper:withheld,Orchard Picker:withheld,["Orchard Grower"]'
   check "[C96] the withheld line of a writer with no number says so" \
-    test "$(jq -r -R --arg id "$r" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$s/comms/record" | tr '\n' '|')" = "the room of Harbor Keeper, at 1, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)|the room of Orchard Picker, at 2, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)|"
-  check "[C94] on a floor of rooms the numbers decide the pointer: from 2 to 1 withheld, and a kind with no pattern there gets none (5.132 point 4)" \
+    test "$(jq -r -R --arg id "$r" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$s/comms/record" | tr '\n' '|')" = "the room of Harbor Keeper, at 0, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)|the room of Orchard Picker, at 9, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)|"
+  check "[C94] on a floor of rooms the numbers decide the pointer: from 9 to 0 withheld, and a kind with no pattern there gets none (5.132 point 4)" \
     test "$(decided "$v")" = "Lodge Ida:withheld,Lodge Ira:none,"
-  check "[C94] on a floor of rooms from 1 to 2 due, and the writer's own copy none" test "$(decided "$d")$(due "$d")" = 'Lodge Ida:none,["Lodge Ivo"]'
-  check "[C94] toward a room cleared less whose kind wakes by itself on its floor, due by the direction" test "$(decided "$k")$(due "$k")" = '["Orchard Picker"]'
+  check "[C94] on a floor of rooms from 0 to 9 due, 0 as the writer's number, and the writer's own copy none" test "$(decided "$d")$(due "$d")" = 'Lodge Ida:none,["Lodge Ivo"]'
+  check "[C94] toward a room cleared less whose kind wakes by itself on its floor, due by the direction: from 0 to 9, across floors" test "$(decided "$k")$(due "$k")" = '["Orchard Picker"]'
   check "[C94] toward a reader with no number, due even where its kind wakes by itself; and a kind with no pattern on an unenforced floor gets none" \
     test "$(decided "$g2")$(due "$g2")" = 'Orchard Gleaner:none,["Orchard Reaper"]'
   check "[C94] 5.146: between two rooms with no number, both cleared least, due even where the reader's kind wakes by itself" \
     test "$(decided "$l")$(due "$l")" = '["Orchard Reaper"]'
   check "[C96] a withheld line names the mail, both rooms' numbers and the item" \
-    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "withheld") | .reason' "$s/comms/record")" = "the room of Harbor Keeper, at 1, is cleared more than the writer's, at 2, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)"
+    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "withheld") | .reason' "$s/comms/record")" = "the room of Harbor Keeper, at 0, is cleared more than the writer's, at 9, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)"
   check "[C96] and a none line its reason" \
     test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "none") | .reason' "$s/comms/record" | tr '\n' '|')" = "its kind has no wake pattern, so no pointer is typed for it (C94)|the writer's own mail is pointed out to no one (5.79)|"
   check "[C96] each mail's decision lines stand together, just before the line of its delivery" \
-    all_together "$s/comms/record" "$g" "$r" "$v" "$d" "$k" "$g2" "$l"
+    all_together "$s/comms/record" "$g" "$r" "$v" "$d" "$k" "$g2" "$l" "$w" "$p"
   check "[C96] each decision line carries the time it was made, in the record's form" \
     bash -c 'jq -R -s -e --arg t "$2" "[split(\"\n\")[] | fromjson? | objects | select(.seat == \"the frame\" and .action == \"wake\" and (has(\"length\") | not))] | length > 0 and all(.at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\") and . >= \$t)" "$1" > /dev/null' _ "$s/comms/record" "$started"
   check "[C59] the writer is told only that its mail was delivered" test "$(cat "$s/comms/Orchard Grower/answers/g1.md")" = "ok $g"
@@ -2290,12 +2331,15 @@ t_pointer_floors() {
       "Lodge Ida" "$d" 2 "Lodge Ivo" "Lodge Ida" \
       "Harbor Keeper" "$k" 1 "Orchard Picker" \
       "Orchard Grower" "$g2" 2 "Orchard Reaper" "Orchard Gleaner" \
-      "Orchard Gleaner" "$l" 1 "Orchard Reaper"
+      "Orchard Gleaner" "$l" 1 "Orchard Reaper" \
+      "Harbor Watch" "$w" 1 "Orchard Picker" \
+      "Harbor Pilot" "$p" 1 "Harbor Keeper"
 
   # A carrier stopped between a delivery's commit and the end of its decisions. It had decided for Ira by a line and
   # noted Grower in wake.json; Watch it had found due and not saved, and Ida it had not reached. The commit also gives
   # the mail to a box that the build no longer makes. A torn line stands in the record. The next carrier answers the
   # mail and decides for Gone, Watch and Ida alone, in the store's order, Watch due from the time of the delivery.
+  # The torn line was cut before its newline, so the next carrier ends it before it writes (5.153).
   mkdir -p -- "$store/Gone Seat/in"
   printf '%s\n' "a mail of the stopped carrier" > "$store/Lodge Ida/in/recovered-1.md"
   local box
@@ -2304,10 +2348,11 @@ t_pointer_floors() {
   git -C "$store" add -A > /dev/null 2>&1 \
     && GIT_COMMITTER_DATE="2026-01-02T03:04:05Z" git -C "$store" -c user.name=test -c user.email=test@test commit -q -m "deliver recovered-1" > /dev/null 2>&1
   printf '%s\n' '{"at":"2026-01-01T00:00:00Z","seat":"the frame","action":"wake","target":["Lodge Ira"],"covers":["recovered-1"],"outcome":"none","reason":"its kind has no wake pattern, so no pointer is typed for it (C94)"}' >> "$s/comms/record"
-  printf '%s\n' '{"at":"2026' >> "$s/comms/record"
+  printf '%s' '{"at":"2026' >> "$s/comms/record"
   jq '.seats["Orchard Grower"] |= (.count += 1 | .ids += ["recovered-1"]) | del(.seats["Harbor Watch"])' "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
   printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/comms/serving"
   mkdir -p -- "$clone/BUILD/RUN/carrier"
+  started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   "$BASH" "$clone/BUILD/bin/workplace" carry > "$scratch/carry" 2>&1 &
   carrier=$!
   check "[C57] a carrier that finds a delivery's commit of a stopped carrier answers it ok" test "$(answer_of ivo v9.md)" = "ok recovered-1"
@@ -2322,13 +2367,18 @@ t_pointer_floors() {
   check "[C57] its line names the readers the delivery's commit gave the mail to, in the store's order" \
     test "$(jq -c -R 'fromjson? | objects | select(.id == "recovered-1" and .action == "mail") | [.target, .outcome]' "$s/comms/record")" = '[["Gone Seat","Harbor Watch","Lodge Ida","Lodge Ira","Orchard Grower"],"ok"]'
   check "[C96] the recovered mail's decision lines, the stopped carrier's and the new one's, stand together just before its ok line" together "$s/comms/record" recovered-1
+  check "[C57] 5.153: a torn last line cut before its newline swallows nothing: it stands alone, and every line the next carrier writes after it parses by itself" \
+    bash -c 'n=$(grep -c -xF "{\"at\":\"2026" "$1") && [[ $n == 1 ]] && tail -n +$(( $(grep -n -xF "{\"at\":\"2026" "$1" | cut -d: -f1) + 1 )) "$1" \
+      | jq -R -s -e "split(\"\n\") as \$l | (\$l | last) == \"\" and (\$l[:-1] | length > 0 and all(.[]; (try fromjson catch null) | type == \"object\"))" > /dev/null' _ "$s/comms/record"
+  check "[C57] 5.153: a recovered decision line carries the time it is written, at the restart, and only the due entry the commit's time" \
+    bash -c 'jq -R -s -e --arg t "$2" "[split(\"\n\")[] | fromjson? | objects | select(.covers == [\"recovered-1\"] and (.target == [\"Gone Seat\"] or .target == [\"Lodge Ida\"]))] | length == 2 and all(.[]; .at >= \$t)" "$1" > /dev/null' _ "$s/comms/record" "$started"
 
   rm -rf -- "$clone/BUILD/RUN"
   wp status > "$scratch/out" 2>&1
   check "[C95] status lists the due readers, each with its count" \
-    bash -c 'for line in "Harbor Watch (harbor/tower/watch): 1" "Lodge Ivo (lodge/west/ivo): 2" "Orchard Grower (orchard/barn/grower): 2" "Orchard Picker (orchard/barn/picker): 1" "Orchard Reaper (orchard/field/reaper): 2"; do
+    bash -c 'for line in "Harbor Keeper (harbor/dock/keeper): 1" "Harbor Watch (harbor/tower/watch): 1" "Lodge Ivo (lodge/west/ivo): 2" "Orchard Grower (orchard/barn/grower): 2" "Orchard Picker (orchard/barn/picker): 1" "Orchard Reaper (orchard/field/reaper): 2"; do
       grep -qF "wake    $line delivered and not yet pointed out" "$1" || exit 1; done' _ "$scratch/out"
-  check "[C95] and no reader that is due nothing: withheld, or of a kind with no pattern" bash -c '! grep -qE "^wake    (Harbor Keeper|Lodge Ida|Harbor Pilot|Lodge Ira|Orchard Gleaner) " "$1"' _ "$scratch/out"
+  check "[C95] and no reader that is due nothing: withheld, or of a kind with no pattern" bash -c '! grep -qE "^wake    (Lodge Ida|Harbor Pilot|Lodge Ira|Orchard Gleaner) " "$1"' _ "$scratch/out"
 }
 
 t_plan_relative() {
@@ -2472,7 +2522,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -2492,7 +2542,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -2501,7 +2551,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -2745,7 +2795,7 @@ t_ssh_grants_fold() {
   check "[C85] and, for a seat of the scope that holds no key, that the grant does not reach it" \
     said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
   check "[C85] the fold's version is one that reads ssh grants" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
   statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "node", "keys/node"]; 10), s(["ssh-key", "tower", "keys/tower"]; 11), s(["ssh-grant", "harbor", "tower", "-", "room", "tower", "granted"]; 12)]'
   check "plan with a key that no grant takes, and one granted to a room whose seat holds no key" exit_is 0 wplan
   check "[C85] plan names a key that no grant takes to a seat that holds a key as reaching no seat" \
@@ -3084,7 +3134,7 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
   check "[C32] plan prints each seat's home and the names it expects" \
     bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; cleared for no label, since neither its room nor its office has a clearance; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; cleared for no label, since neither its room nor its office has a clearance; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
@@ -3664,7 +3714,7 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
   check "[C54] without floors, with no reach term, every seat mails every seat, and grabs and writes none" \
@@ -4340,7 +4390,7 @@ t_wake_fold() {
     bash -c '(( $(grep -cxF -- "$2" "$1") == 3 ))' _ "$scratch/out" \
     "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \"^waiting>\$\", by its kind's term (programs/COMMS.typify:9)"
   check "[C29] the fold's version is the one that reads the wake" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
   local planned entry
   planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
   local refusals=(
@@ -4578,7 +4628,7 @@ t_records_fold() {
   check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
   check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
   check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; cleared for no label, since neither its room nor its office has a clearance; its pane not kept; 1 rows"
-  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
   statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
   check "plan with a record and no chain" exit_is 0 wplan
   check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"
@@ -4828,9 +4878,19 @@ t_records_verify() {
   check "[C75] its whole length" said "comms/record agrees with its chain up to byte $(stat -c %s "$(state_of)/comms/record"), its whole length"
   check "[C75] 5.146: the record it verifies holds the frame's decision lines at delivery, as written" \
     test "$(jq -c 'select(.seat == "the frame" and .action == "wake") | [.target, .outcome, .reason]' "$(state_of)/comms/record" | head -n 1)" = '[["Harbor Keeper"],"none","its kind has no wake pattern, so no pointer is typed for it (C94)"]'
+  # A carrier stopped as it wrote a line leaves that line without its newline (5.153).
+  local torn
+  printf '%s' '{"at":"2026-' >> "$(state_of)/comms/record"
+  torn=$(stat -c %s "$(state_of)/comms/record")
   check "up again, the same day" exit_is 0 wp up
   check "keeper ran again" wait_for_probe "Harbor Keeper" keeper
+  request pilot note2.md "to: Harbor Keeper" "subject: a second note" --- "body"
+  check "a mail is served after the torn line" answered_ok pilot note2.md
   check "down" exit_is 0 wp down
+  check "[C57] 5.153: the carrier that starts ends the torn line with one newline before it writes, and every line after it parses by itself" \
+    bash -c 'tail -c +$(( $2 + 1 )) "$1" | jq -R -s -e "split(\"\n\") as \$l | (\$l[0]) == \"\" and (\$l | last) == \"\" and (\$l[1:-1] | length >= 2 and all(.[]; (try fromjson catch null) | type == \"object\"))" > /dev/null' _ "$(state_of)/comms/record" "$torn"
+  check "[C75] 5.153: record verify --requests reads bytes and not lines: the torn line, its newline and what follows agree with the chain" exit_is 0 wp record verify --requests
+  check "[C75] over the record's whole length" said "comms/record agrees with its chain up to byte $(stat -c %s "$(state_of)/comms/record"), its whole length"
   d=$(record_of keeper)
   day=$(day_written "$d")
   file=$d/$day.pane
@@ -4897,6 +4957,8 @@ t_records_verify() {
   check "[C75] a refused entry moved nothing forward: the entry the sink took next begins at byte $stood of the frame's record, where the chain stood before the refusal" \
     bash -c 'jq -s -e --argjson o "$2" "[.[] | select(.file == \"comms/record\" and .offset == \$o)] | length == 1" "$1" > /dev/null' _ "$(state_of)/records/chain" "$stood"
   check "down" exit_is 0 wp down
+  check "[C57] 5.153: a carrier that starts on a record whose last line is whole adds nothing to it: after three such starts no line of the record is empty" \
+    bash -c '! grep -qx "" "$1"' _ "$(state_of)/comms/record"
 }
 
 status_exits() {

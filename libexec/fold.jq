@@ -184,6 +184,7 @@ joined($b[0]; $root) as $plan
         elif ($made_kinds | index($t[1])) == null then "\($where): the wake-own names the kind \($t[1]), which the plan does not make"
         elif $t[2] | IN("enforced", "unenforced") | not then "\($where): \($t[2]) is not enforced or unenforced, the floors where a kind's own wake can have been measured"
         elif $t[3] == "" then "\($where): the wake-own names no item, and the item that rules the measure is what it carries (5.146)"
+        elif $t[3] | explode | any(. < 32 or (. >= 127 and . < 160)) then "\($where): the wake-own's item holds a control character, which would break the line that plan prints and could be lost where the carrier reads the item back (5.153)"
         else empty end
       else
         if ($t | length) != 3 then "\($where): a label has the words label PATH NUMBER, not \($t | length)"

@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-v16
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
 floor_sub=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
@@ -549,13 +549,18 @@ print_fold_report() {
 }
 
 held_by_nobody() {
-  # A closed path stands in no view (5.124 point 6), so the listing does not go beneath one and names nothing
-  # beneath one (5.149). The closed paths are the plan's labels of closed. No searchable-only row stands at or
-  # beneath one, since the fold refuses every row there that is not hidden (rule 6), so the listing starts outside.
+  # A closed path stands in no view (5.124 point 6), so the listing neither goes beneath one nor names one, and so
+  # names nothing at or beneath it (5.149, 5.153): a label of closed covers its path. The closed paths are the plan's
+  # labels of closed, joined to the root as the fold joins them, however they are written (C4), and a directory is
+  # closed whatever path names it. No searchable-only row stands at or beneath one, since the fold refuses every row
+  # there that is not hidden (rule 6), so the listing starts outside them. Paths are read NUL-separated.
   local view=$1 plan=$2 path child verdict c open
   local -a queue closed
-  mapfile -t closed < <(jq -r '[.programs[]?.recorded[]? | select((.term | type) == "array" and .term[0] == "label" and .term[2] == "closed") | .term[1]] | unique[]' "$plan")
-  mapfile -t queue < <(jq -r '[.rows[] | select(.value[0] == "searchable-only") | .key[3]] | unique[]' "$view")
+  mapfile -d '' -t closed < <(jq --raw-output0 -L "$tool/libexec" --arg root "$root" --slurpfile b "$tool/host/binding.json" '
+    include "table";
+    joined($b[0]; $root)
+    | [.programs[]?.recorded[]? | select((.term | type) == "array" and .term[0] == "label" and .term[2] == "closed") | .term[1]] | unique[]' "$plan")
+  mapfile -d '' -t queue < <(jq --raw-output0 '[.rows[] | select(.value[0] == "searchable-only") | .key[3]] | unique[]' "$view")
   local -a found=()
   while (( ${#queue[@]} )); do
     path=${queue[0]}
@@ -564,6 +569,9 @@ held_by_nobody() {
       child=${child%/}
       [[ $child == //* ]] && child=${child#/}
       [[ -L $child ]] && continue
+      open=1
+      for c in "${closed[@]}"; do [[ $child == "$c" || $child -ef $c ]] && open=0; done
+      (( open )) || continue
       verdict=$(jq -r --arg d "$child" '
         def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
         [.rows | group_by(.key[0:3])[]
@@ -576,10 +584,7 @@ held_by_nobody() {
           else "through" end' "$view")
       case $verdict in
         nobody) found+=("$child") ;;
-        through)
-          open=1
-          for c in "${closed[@]}"; do [[ $child == "$c" ]] && open=0; done
-          (( open )) && queue+=("$child") ;;
+        through) queue+=("$child") ;;
       esac
     done
   done
@@ -2642,6 +2647,16 @@ carrier_wake() {
   done
 }
 
+carrier_record_mend() {
+  # A carrier stopped as it wrote a line of the record can leave that line without its newline, and the next line
+  # would be written onto it, so that neither parses. The carrier ends such a line before it writes, so every line it
+  # writes parses by itself (5.153). The torn bytes stay as they were, a line of their own, which parses as nothing
+  # unless the stop fell just before the newline; the chain covers them and the newline after them as every byte.
+  [[ -s $comms/record ]] || return 0
+  [[ $(tail -c 1 -- "$comms/record"; printf .) == $'\n.' ]] && return 0
+  printf '\n' >> "$comms/record"
+}
+
 carrier_recover() {
   local journal box request action seat answers subject reason
   rm -rf -- "$taken"/* 2> /dev/null
@@ -2652,10 +2667,11 @@ carrier_recover() {
   answers=$comms/$box/answers
   if [[ $action == mail ]] && subject=$(carrier_git log -1 --format=%s 2> /dev/null) && [[ $subject == "deliver $carrier_id" ]]; then
     # The readers are those the delivery's commit gave the mail to, read before the answer. For each that the stopped
-    # carrier did not decide for, by a line in the record or an entry in wake.json, the carrier decides now, dated by
-    # the delivery's commit, in the store's order, so the record holds a decision for every reader (5.146 point 3).
+    # carrier did not decide for, by a line in the record or an entry in wake.json, the carrier decides now, by the build
+    # that is up, in the store's order, so the record holds a decision for every reader (5.146 point 3). A due entry is
+    # dated by the delivery's commit; a line of the record carries the time it is written (5.153).
     local path box_in reader j k delivered_at listed=1 targets
-    local -a names=() gone=()
+    local -a names=()
     carrier_git show -z --name-only --format= HEAD > "$taken/recovered.paths" 2> /dev/null || listed=0
     delivered_at=$(carrier_git log -1 --format=%ct 2> /dev/null) || delivered_at=""
     if [[ $delivered_at =~ ^[0-9]+$ ]]; then delivered_at=$(date -u -d "@$delivered_at" +%Y-%m-%dT%H:%M:%SZ); else delivered_at=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
@@ -2817,6 +2833,7 @@ cmd_carry() {
         || die "the out of ${seat_names[i]} is not a directory on the file system of $taken, and the carrier moves by renaming alone" 2
     done
     carrier_wake_load
+    carrier_record_mend
     carrier_recover
   fi
   record_names=() record_boxes=() record_dirs=() record_keys=() record_kept=() record_pane=()

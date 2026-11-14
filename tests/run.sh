@@ -310,6 +310,13 @@ t_inputs_and_refusals() {
   check "[C3] a plan whose status is failed does not build" exit_is 1 wp build
   make_plan '.programs[1].plan[0][2] = "Har\u0007bor"'
   check "[C3] a plan with a control character does not build" exit_is 1 wp build
+  make_plan '.programs[1].path = "harbor/dock/seat\u0085.typify"'
+  check "[C3] 5.159 point 6: nor one with a control character of C1, NEL, in any string" exit_is 1 wp build
+  check "[C3] naming it as the fold names it" said "the plan holds a control character"
+  make_plan '.state["seat\u009fkinds"] = []'
+  check "[C3] nor one with U+009F in a member's name" exit_is 1 wp build
+  make_plan '.programs[1].path = "harbor/dock/seat\u00a0.typify"'
+  check "[C3] while a plan with U+00A0, which is no control character, builds" exit_is 0 wp build
   make_plan '.programs[6].plan[1].term[4] = "harbor"'
   check "[C4] a relative path in a term builds: the frame joins it to the root" exit_is 0 wp build
   make_plan '.state.view[1].key[3] = "harbor/holdall"'
@@ -1203,7 +1210,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -2005,6 +2012,13 @@ t_floors_assembly() {
   check "[C27] 5.142: a root with a bare colon passes the assembler, the last word of its line, which the reader reads whole" \
     bash -c 'grep -qxF "workdir : $1" "$2" && ! grep -qF "is refused" "$3"' _ "$colon" "$STUB_DIR/root-program" "$scratch/out"
   rm -rf -- "$scratch/r : t" "$scratch/ro:ot"
+  local nel
+  mkdir -- "$scratch/r"$'\xc2\x85'"t" && cp -R -- "$clone" "$scratch/r"$'\xc2\x85'"t/config"
+  nel=$(cd -P -- "$scratch/r"$'\xc2\x85'"t" && pwd -P && printf .) && nel=${nel%$'\n.'}
+  check "[C1] 5.159 point 6: a root whose name holds a control character of C1, NEL, refuses plan, with exit 2" \
+    exit_is 2 env WORKPLACE_ROOT="$nel" WORKPLACE_CONFIG="$nel/config" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C1] naming the control character" said "workplace: the root, the name or the configuration's path holds a control character"
+  rm -rf -- "$scratch/r"$'\xc2\x85'"t"
   rm -f -- "$clone/floors/bri : dge.conf"
   rm -rf -- "$root/config"$'\n' && cp -R -- "$clone" "$root/config"$'\n'
   check "[C27] 5.144: a configuration whose base name ends in a newline refuses plan, with exit 2" \
@@ -2567,7 +2581,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -2587,7 +2601,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -2596,7 +2610,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -2840,7 +2854,7 @@ t_ssh_grants_fold() {
   check "[C85] and, for a seat of the scope that holds no key, that the grant does not reach it" \
     said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
   check "[C85] the fold's version is one that reads ssh grants" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
   statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "node", "keys/node"]; 10), s(["ssh-key", "tower", "keys/tower"]; 11), s(["ssh-grant", "harbor", "tower", "-", "room", "tower", "granted"]; 12)]'
   check "plan with a key that no grant takes, and one granted to a room whose seat holds no key" exit_is 0 wplan
   check "[C85] plan names a key that no grant takes to a seat that holds a key as reaching no seat" \
@@ -3179,7 +3193,7 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
   check "[C32] plan prints each seat's home and the names it expects" \
     bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; cleared for no label, since neither its room nor its office has a clearance; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; cleared for no label, since neither its room nor its office has a clearance; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
@@ -3761,7 +3775,7 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
   check "[C54] without floors, with no reach term, every seat mails every seat, and grabs and writes none" \
@@ -3864,6 +3878,11 @@ t_keys_and_names() {
     'Harbor/Pilot|it holds a /'
     $'Harbor\tPilot|it holds a control character'
     '|it is empty'
+    'taken|it is one of the carrier'"'"'s own names beside the seats'"'"' boxes, next, record, serving, taken, wake.json, and its box would stand on the carrier'"'"'s files (5.162 point 5)'
+    'next|it is one of the carrier'"'"'s own names beside the seats'"'"' boxes, next, record, serving, taken, wake.json, and its box would stand on the carrier'"'"'s files (5.162 point 5)'
+    'record|it is one of the carrier'"'"'s own names beside the seats'"'"' boxes, next, record, serving, taken, wake.json, and its box would stand on the carrier'"'"'s files (5.162 point 5)'
+    'serving|it is one of the carrier'"'"'s own names beside the seats'"'"' boxes, next, record, serving, taken, wake.json, and its box would stand on the carrier'"'"'s files (5.162 point 5)'
+    'wake.json|it is one of the carrier'"'"'s own names beside the seats'"'"' boxes, next, record, serving, taken, wake.json, and its box would stand on the carrier'"'"'s files (5.162 point 5)'
   )
   for entry in "${names[@]}"; do
     json=$(jq -n --arg k "${entry%%|*}" '$k')
@@ -4437,7 +4456,7 @@ t_wake_fold() {
     bash -c '(( $(grep -cxF -- "$2" "$1") == 3 ))' _ "$scratch/out" \
     "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \"^waiting>\$\", by its kind's term (programs/COMMS.typify:9)"
   check "[C29] the fold's version is the one that reads the wake" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
   local planned entry
   planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
   local refusals=(
@@ -4445,6 +4464,8 @@ t_wake_fold() {
     "$comms_terms $wake_kinds"' | .programs[-1].recorded += [m(["wake", "ghost", "x"]; 10)]|programs/COMMS.typify:10: the wake names the kind ghost, which the plan does not make'
     "$comms_terms $wake_kinds"' | .programs[-1].recorded += [m(["wake", "none", "x"]; 10)]|programs/COMMS.typify:10: the wake names the kind none, which the plan does not make'
     "$comms_terms $wake_kinds"' | .programs[-1].recorded += [m(["wake", "clerk", ""]; 10)]|programs/COMMS.typify:10: the wake'"'"'s pattern is empty, and an empty pattern finds every screen ready'
+    "$comms_terms $wake_kinds"' | .programs[-1].recorded += [m(["wake", "clerk", "^wait\u0085ing>$"]; 10)]|programs/COMMS.typify:10: the wake'"'"'s pattern holds a control character, which build refuses in a plan, so plan refuses it too (5.162 point 5)'
+    "$comms_terms $wake_kinds"' | .programs[-1].recorded += [m(["wake", "clerk", "^wait\u0007ing>$"]; 10)]|programs/COMMS.typify:10: the wake'"'"'s pattern holds a control character, which build refuses in a plan, so plan refuses it too (5.162 point 5)'
     "$comms_terms $wake_kinds $wake_terms"' | .programs[-1].recorded += [m(["wake", "clerk", "^ready$"]; 10)]|two wake terms of the kind clerk differ: "^waiting>$" from programs/COMMS.typify:9, "^ready$" from programs/COMMS.typify:10'
     "$comms_terms $wake_kinds"' | .programs[-1].recorded += [m(["wake", "clerk", "(waiting"]; 10)]|programs/COMMS.typify:10: the wake'"'"'s pattern "(waiting" is not an extended regular expression that the frame'"'"'s bash reads'
     'def m($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/COMMS.typify"}}; .'" $wake_kinds $wake_terms"'|the plan holds wake terms and no mail term, so no mail is delivered to point out (the wake at programs/COMMS.typify:9)'
@@ -4675,7 +4696,7 @@ t_records_fold() {
   check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
   check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
   check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; cleared for no label, since neither its room nor its office has a clearance; its pane not kept; 1 rows"
-  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
   statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
   check "plan with a record and no chain" exit_is 0 wplan
   check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"

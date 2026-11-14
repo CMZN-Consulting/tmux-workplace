@@ -72,7 +72,7 @@ $b[0] as $binding
      then "the plan holds statements, clearances or labels, and no folded view was given with it" else empty end),
     (if (.status | type) != "string" or (.status | IN("ok", "unchecked") | not)
      then "the plan's status is \(.status // "absent"), not ok or unchecked" else empty end),
-    (if [.. | strings | explode[] | select(. < 32 or . == 127)] | length > 0
+    (if [.. | (strings, (objects | keys[])) | explode[] | select(. < 32 or (. >= 127 and . < 160))] | length > 0
      then "the plan holds a control character" else empty end),
     (.programs | to_entries[] | .key as $i | .value
      | if type != "object" or (.path | type) != "string" then "program \($i + 1) has no path"

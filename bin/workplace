@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
 floor_sub=""
 # Where build writes a floor's keys, homes and records: BUILD itself without floors, and the floor's generation
 # BUILD/floors/F/N with them (5.160 point 2). floor_sub stays the floor's state path, filter and unit.
@@ -388,7 +388,8 @@ assemble() {
   else
     root_lines+=("server : $assembled_name : $conf")
   fi
-  [[ ${root_lines[*]} != *[[:cntrl:]]* ]] || die "the root, the name or the configuration's path holds a control character" 2
+  [[ ${root_lines[*]} != *[[:cntrl:]]* && ${root_lines[*]} != *$'\xc2'[$'\x80'-$'\x9f']* ]] \
+    || die "the root, the name or the configuration's path holds a control character" 2
   mkdir -- "$into/tree" && cp -R -- "$clone/programs" "$into/tree/programs" || die "cannot copy the programs into $into/tree" 2
   printf '%s\n' "${root_lines[@]}" > "$into/tree/ROOT.typify" || die "cannot write the root program" 2
   local -a inputs

@@ -178,6 +178,7 @@ joined($b[0]; $root) as $plan
         if ($t | length) != 3 then "\($where): a wake has the words wake KIND PATTERN, not \($t | length)"
         elif ($made_kinds | index($t[1])) == null then "\($where): the wake names the kind \($t[1]), which the plan does not make"
         elif $t[2] == "" then "\($where): the wake's pattern is empty, and an empty pattern finds every screen ready"
+        elif $t[2] | explode | any(. < 32 or (. >= 127 and . < 160)) then "\($where): the wake's pattern holds a control character, which build refuses in a plan, so plan refuses it too (5.162 point 5)"
         else empty end
       elif $t[0] == "wake-own" then
         if ($t | length) != 4 then "\($where): a wake-own has the words wake-own KIND MODE ITEM, not \($t | length)"

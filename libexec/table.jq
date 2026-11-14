@@ -121,9 +121,17 @@ def name_fault:
   elif test("^\\s|\\s$") then "it begins or ends with white space"
   else null end;
 
+# The carrier's own names beside the seats' boxes in the store and its comms (5.162 point 5).
+def carrier_names: ["next", "record", "serving", "taken", "wake.json"];
+
 def name_problems($binding):
   plan_terms[] | . as $r | ($binding.unique // [])[] | select(.[0] == $r.term[0] and .[1] < ($r.term | length))
-  | $r.term[.[1]] as $v | ($v | name_fault) as $fault | select($fault != null)
+  | $r.term[.[1]] as $v
+  | ($v | name_fault
+     // (if [carrier_names[] | . == $v] | any
+         then "it is one of the carrier's own names beside the seats' boxes, \(carrier_names | join(", ")), and its box would stand on the carrier's files (5.162 point 5)"
+         else null end)) as $fault
+  | select($fault != null)
   | "\($r | term_at) (\($r.term[0])): the seat's name \($v | tojson) is refused: \($fault)";
 
 def unique_problems($binding):

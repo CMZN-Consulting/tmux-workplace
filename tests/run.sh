@@ -1571,6 +1571,48 @@ t_the_fold() {
     bash -c 'grep -qxF "  $1/orchard/crate-picker" "$2" && ! grep -qF "  $1/orchard/cel" "$2" && ! grep -qx "lar" "$2"' _ "$root" "$scratch/out"
   rm -rf -- "$root/orchard/cel"$'\n'"lar"
   statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
+                                              st("-"; "-"; "-"; "workplace"; $root + "/orchard/cellar"; "searchable-only"; 10),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 11)]'
+  check "plan with a searchable-only row beneath another" exit_is 0 wplan
+  check "[C32] 5.160 point 9: the listing names a directory once, however many searchable-only rows lie above it" \
+    test "$(grep -cxF "  $root/orchard/cellar/casks" "$scratch/out")" = 1
+  ln -s -- orchard "$root/grove"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/grove"; "searchable-only"; 9),
+                                              st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 10),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 11)]'
+  check "plan with searchable-only rows on a directory and on a link to it" exit_is 0 wplan
+  check "[C32] 5.160 point 9: the listing names a directory once whatever names lead to it, by its physical path" \
+    bash -c '[[ $(grep -cxF "  $1/orchard/crate-picker" "$2") == 1 ]] && ! grep -qF "/grove/" "$2"' _ "$root" "$scratch/out"
+  check "[C32] and a directory that a row holds under one name is held under every name" bash -c '! grep -qF "almanac" "$1"' _ "$scratch/out"
+  rm -f -- "$root/grove"
+  ln -s -- orchard/cellar "$root/calias"
+  ln -s -- . "$root/zz"
+  ln -s -- orchard "$root/aa"
+  local closed_base='st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/orchard/cellar"; "closed"; 11), sc(12)'
+  statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/calias"; "read-only"; 10)]'
+  check "plan with a read-only row written through a link to a closed directory, which the fold reads as written" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.159 point 6: build refuses a row whose physical path is at or beneath a closed directory's, with exit 1" exit_is 1 wp build
+  check "[C31] naming the row, its physical path and the label" \
+    said "its row $root/calias (read-only, from programs/policy.typify:10) is the directory $root/orchard/cellar, at or beneath $root/orchard/cellar, which the label at programs/policy.typify:11 closes as $root/orchard/cellar"
+  statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard"; "read-only"; 10)]'
+  check "plan with a read-only row that holds the closed directory under another name and sorts after it" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.162 point 6: build refuses a read-only row that holds a closed directory and is mounted after its tmpfs, with exit 1" exit_is 1 wp build
+  check "[C31] saying that it would show the closed directory again" \
+    said "its row $root/zz/orchard (read-only, from programs/policy.typify:10) is the directory $root/orchard, which holds $root/orchard/cellar, closed by the label at programs/policy.typify:11 as $root/orchard/cellar, and is mounted after that path's tmpfs"
+  statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10)]'
+  check "plan with a read-only row that holds the closed directory under another name and sorts before it" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] and builds one mounted before the tmpfs, which the tmpfs then hides under every name (measured, bubblewrap 0.13.1)" exit_is 0 wp build
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/calias"; "closed"; 11), sc(12)]'
+  check "plan with a closed label whose last part is a link" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.162 point 6: build refuses a closed label whose last part is a link, with exit 1" exit_is 1 wp build
+  check "[C31] since bubblewrap mounts nothing on a link" said "programs/policy.typify:11: the label of closed names $root/calias, whose last part is a link, and bubblewrap mounts nothing on a link (5.162 point 6)"
+  rm -rf -- "$clone/BUILD"
+  rm -f -- "$root/calias" "$root/zz" "$root/aa"
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9),
                                               st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard/almanac"; "read-only"; 10),
                                               st("orchard"; "-"; "-"; "office"; $root + "/orchard/cellar"; "hidden"; 11), sc(13)]'
   check "plan with the same statement and no closed label" exit_is 0 wplan

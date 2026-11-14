@@ -553,19 +553,101 @@ print_fold_report() {
   ' <<< "$folded"
 }
 
+# The physical path of PATH, in the global physical: a directory's own, another file's under its parent's, and the
+# path as written where neither resolves. A final newline is kept.
+physical_of() {
+  local p=$1 r parent
+  physical=$p
+  if [[ -d $p ]]; then
+    r=$(cd -P -- "$p" 2> /dev/null && pwd -P && printf .) && physical=${r%$'\n.'}
+  else
+    parent=${p%/*}
+    [[ -z $parent ]] && parent=/
+    if [[ $p == */* && -d $parent ]]; then
+      r=$(cd -P -- "$parent" 2> /dev/null && pwd -P && printf .) && { r=${r%$'\n.'}; physical=${r%/}/${p##*/}; }
+    fi
+  fi
+}
+
+# No view holds a closed directory under another name (5.159 point 6). The fold compares paths as written; this reads
+# the machine. A closed label's last part may not be a link, since bubblewrap mounts nothing on a link (5.162 point
+# 6). A seat's row that is not hidden may not be, by its physical path, at or beneath a closed directory's. And a
+# read-only or read-write row that holds a closed directory may not be mounted after the closed path's tmpfs, which
+# it would undo: the rows are mounted in the code-point order of their written paths, and a bind of an ancestor
+# brings back what a tmpfs mounted before it hid (measured, bubblewrap 0.13.1). A path that does not exist is
+# passed over. With a seat named, only that seat's rows are read.
+refuse_closed_names() {
+  local view=$1 plan=$2 only=${3-} c rpath row state seat origins label lorigin cphys rphys
+  local -a closed=() rows=() faults=()
+  [[ -f $view ]] || return 0
+  mapfile -d '' -t closed < <(jq --raw-output0 -L "$tool/libexec" --arg root "$root" --slurpfile b "$tool/host/binding.json" '
+    include "table";
+    def at: "\(.path // "?"):\(.line // "?")";
+    joined($b[0]; $root)
+    | .programs[]?.recorded[]? | select((.term | type) == "array" and .term[0] == "label" and .term[2] == "closed")
+    | .term[1], (.origin | at)' "$plan") || return 0
+  (( ${#closed[@]} )) || return 0
+  mapfile -d '' -t rows < <(jq --raw-output0 --arg only "$only" --slurpfile p "$plan" '
+    ([$p[0].programs[]?.plan[]? | (if type == "object" then .term else . end) | select(type == "array" and .[0] == "pane")
+      | {key: (.[1:4] | tojson), value: .[4]}] | from_entries) as $names
+    | .rows[] | select(.value[0] != "hidden") | select($only == "" or (.key[0:3] | join("/")) == $only)
+    | .key[3], .value[0], "\($names[.key[0:3] | tojson] // "?") (\(.key[0:3] | join("/")))",
+      ([.origins[]? | "\(.path // "?"):\(.line // "?")"] | join(", "))' "$view") || return 0
+  for (( c = 0; c + 1 < ${#closed[@]}; c += 2 )); do
+    label=${closed[c]} lorigin=${closed[c + 1]}
+    if [[ -L $label ]]; then
+      faults+=("$lorigin: the label of closed names $label, whose last part is a link, and bubblewrap mounts nothing on a link (5.162 point 6)")
+      continue
+    fi
+    [[ -e $label ]] || continue
+    physical_of "$label"
+    cphys=$physical
+    for (( r = 0; r + 3 < ${#rows[@]}; r += 4 )); do
+      row=${rows[r]} state=${rows[r + 1]} seat=${rows[r + 2]} origins=${rows[r + 3]}
+      [[ -e $row ]] || continue
+      physical_of "$row"
+      rphys=$physical
+      if [[ $rphys == "$cphys" || $rphys == "$cphys"/* || ( $cphys == / && $rphys != / ) ]]; then
+        faults+=("seat $seat: its row $row ($state, from $origins) is the directory $rphys, at or beneath $cphys, which the label at $lorigin closes as $label: no view holds a closed directory under another name (5.159 point 6)")
+      elif [[ ( $state == read-only || $state == read-write ) && ( $cphys == "$rphys"/* || ( $rphys == / && $cphys != / ) ) && $row > $label ]]; then
+        faults+=("seat $seat: its row $row ($state, from $origins) is the directory $rphys, which holds $cphys, closed by the label at $lorigin as $label, and is mounted after that path's tmpfs, so it would show the closed directory again (5.159 point 6, 5.162 point 6)")
+      fi
+    done
+  done
+  (( ${#faults[@]} )) || return 0
+  printf 'workplace: %s\n' "${faults[@]}" >&2
+  return 1
+}
+
 held_by_nobody() {
   # A closed path stands in no view (5.124 point 6), so the listing neither goes beneath one nor names one, and so
   # names nothing at or beneath it (5.149, 5.153): a label of closed covers its path. The closed paths are the plan's
-  # labels of closed, joined to the root as the fold joins them, however they are written (C4), and a directory is
-  # closed whatever path names it. No searchable-only row stands at or beneath one, since the fold refuses every row
-  # there that is not hidden (rule 6), so the listing starts outside them. Paths are read NUL-separated.
-  local view=$1 plan=$2 path child verdict c open
-  local -a queue closed
+  # labels of closed, joined to the root as the fold joins them, however they are written (C4). No searchable-only
+  # row stands at or beneath one, since the fold refuses every row there that is not hidden (rule 6).
+  # The listing walks physical paths, the rows' and the labels' read the same way, and judges each directory once,
+  # however many searchable-only rows lie above it and whatever names lead to it, so it names a directory once
+  # (5.160 point 9). Paths are read NUL-separated.
+  local view=$1 plan=$2 path child verdict c open physical rview
+  local -a queue=() closed=() rows=() starts=()
+  local -A seen=()
+  mapfile -d '' -t rows < <(jq --raw-output0 '[.rows[].key[3]] | unique[]' "$view")
+  rview=$(for path in "${rows[@]}"; do physical_of "$path"; printf '%s\0%s\0' "$path" "$physical"; done \
+    | jq -R -s -c --slurpfile v "$view" '(split("\u0000")[:-1] | . as $l | [range(0; length; 2) | {key: $l[.], value: $l[. + 1]}] | from_entries) as $m
+      | $v[0] | .rows |= map(.key[3] = ($m[.key[3]] // .key[3]))') || return 0
   mapfile -d '' -t closed < <(jq --raw-output0 -L "$tool/libexec" --arg root "$root" --slurpfile b "$tool/host/binding.json" '
     include "table";
     joined($b[0]; $root)
     | [.programs[]?.recorded[]? | select((.term | type) == "array" and .term[0] == "label" and .term[2] == "closed") | .term[1]] | unique[]' "$plan")
-  mapfile -d '' -t queue < <(jq --raw-output0 '[.rows[] | select(.value[0] == "searchable-only") | .key[3]] | unique[]' "$view")
+  for c in "${!closed[@]}"; do physical_of "${closed[c]}"; closed[c]=$physical; done
+  mapfile -d '' -t starts < <(jq --raw-output0 '[.rows[] | select(.value[0] == "searchable-only") | .key[3]] | unique[]' <<< "$rview")
+  for path in "${starts[@]}"; do
+    [[ -n ${seen[$path]+x} ]] && continue
+    open=1
+    for c in "${closed[@]}"; do [[ $path == "$c" || $path == "$c"/* ]] && open=0; done
+    (( open )) || continue
+    seen[$path]=1
+    queue+=("$path")
+  done
   local -a found=()
   while (( ${#queue[@]} )); do
     path=${queue[0]}
@@ -574,6 +656,8 @@ held_by_nobody() {
       child=${child%/}
       [[ $child == //* ]] && child=${child#/}
       [[ -L $child ]] && continue
+      [[ -n ${seen[$child]+x} ]] && continue
+      seen[$child]=1
       open=1
       for c in "${closed[@]}"; do [[ $child == "$c" || $child -ef $c ]] && open=0; done
       (( open )) || continue
@@ -586,7 +670,7 @@ held_by_nobody() {
            end] as $all
         | if any($all[]; . == "seen") then "seen"
           elif all($all[]; . == "unseen") then "nobody"
-          else "through" end' "$view")
+          else "through" end' <<< "$rview")
       case $verdict in
         nobody) found+=("$child") ;;
         through) queue+=("$child") ;;
@@ -1350,6 +1434,7 @@ cmd_build() {
     view_file=$plan_dir/view.json
   fi
   refuse_rows "$plan_dir/plan.json" "$view_file" no || die "build refuses: PLAN/plan.json shows a seat a place the frame closes"
+  refuse_closed_names "$view_file" "$plan_dir/plan.json" || die "build refuses: a seat's view would hold a closed directory under another name"
   plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq" "$view_file"
   check_name "$manifest" || die "build refuses: the plan's workplace name is not the one its clone gives"
   if [[ $facts_member == none ]]; then
@@ -2212,6 +2297,7 @@ cmd_up() {
     || die "the server's socket would be $socket, ${#socket} bytes, and a socket's path holds at most 107; give the clone a shorter path" 2
   [[ -d $tmux_dir ]] || tmux_dir=""
   [[ -d $tmux_default && $tmux_default != "$tmux_dir" ]] || tmux_default=""
+  refuse_closed_names "$b_view" "$b_plan" || die "up refuses: a seat's view would hold a closed directory under another name"
   mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
   local run
   printf -v run 'workplace-%08x%08x' "$SRANDOM" "$SRANDOM"
@@ -2299,6 +2385,8 @@ cmd_exec() {
   [[ -f $file ]] || die "no seat is named $seat in this workplace" 2
   record=$(jq -c --arg n "$seat" 'select(.name == $n)' "$file") || die "cannot read $file"
   [[ -n $record ]] || die "the record at $file is not the seat $seat's" 2
+  refuse_closed_names "$b_view" "$b_plan" "$(jq -r '.key | join("/")' <<< "$record")" \
+    || die "exec refuses: the seat's view would hold a closed directory under another name" 2
   local -a inherit pairs command assignments=()
   mapfile -t inherit < <(jq -r '.inherit[]' <<< "$record")
   local name directory
@@ -3661,6 +3749,7 @@ cmd_restart() {
   [[ -f $b_view ]] && view_file=$b_view
   plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
+  refuse_closed_names "$b_view" "$b_plan" || die "restart refuses: a seat's view would hold a closed directory under another name"
   state=$(< "$run_dir/state.json")
   local verdict=0
   run_server || verdict=$?

@@ -17,6 +17,9 @@ ENV_FLOOR=8.30
 GIT_FLOOR=2.32
 FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-v17
 floor_sub=""
+# Where build writes a floor's keys, homes and records: BUILD itself without floors, and the floor's generation
+# BUILD/floors/F/N with them (5.160 point 2). floor_sub stays the floor's state path, filter and unit.
+build_out=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
 LOG_PROGRAMS=(dd date tail head)
@@ -101,6 +104,7 @@ locate() {
   plan_dir=$clone/PLAN
   build_dir=$clone/BUILD
   run_dir=$build_dir/RUN
+  build_resolve
 }
 
 jq_message() {
@@ -911,8 +915,8 @@ make_keys() {
              public_key: $pub, ssh: $ssh, ssh_fingerprint: $sshfp, grants: $grants}]' <<< "$entries")
   done < <(jq -c '.[]' <<< "$holders")
   rm -f -- "$build_dir/key.out"
-  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir${floor_sub:+/$floor_sub}/keys.json" \
-    || die "cannot write $build_dir${floor_sub:+/$floor_sub}/keys.json" 2
+  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "${build_out:-$build_dir}/keys.json" \
+    || die "cannot write ${build_out:-$build_dir}/keys.json" 2
   say "keys: $count made in $state_dir/keys"
   jq -r '[.[].grants[]] | group_by(.) | map("\(.[0]) for \(length) seat\(if length > 1 then "s" else "" end)") | select(length > 0)
     | "ssh keys loaded: \(join(", "))"' <<< "$holders"
@@ -1069,8 +1073,8 @@ make_homes() {
              environment: $pairs, seed: (if $seed == "" then null else $seed end), made: $made}]' <<< "$entries")
   done < <(jq -c '.[]' <<< "$holders")
   rm -f -- "$build_dir/seed.out"
-  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "$build_dir${floor_sub:+/$floor_sub}/homes.json" \
-    || die "cannot write $build_dir${floor_sub:+/$floor_sub}/homes.json" 2
+  jq -n --arg w "$workplace" --arg s "$state_dir" --argjson seats "$entries" '{workplace: $w, state: $s, seats: $seats}' > "${build_out:-$build_dir}/homes.json" \
+    || die "cannot write ${build_out:-$build_dir}/homes.json" 2
 }
 
 make_dirs() { home_parents "$1" "$2/x" make; }
@@ -1139,8 +1143,8 @@ make_mail() {
   done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)
     + (if has("floor") then {floor, number: .clearance.value, own: (.wake.own.item // null)} else {} end)' <<< "$folded")
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
-    '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
-    || die "cannot write $build_dir/mail.json" 2
+    '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "${build_out:-$build_dir}/mail.json" \
+    || die "cannot write ${build_out:-$build_dir}/mail.json" 2
   cp -- "$tool/share/seat-page.md" "$build_dir/seat-page.md" && [[ $(sha_of "$tool/share/seat-page.md") == "$(sha_of "$build_dir/seat-page.md")" ]] \
     || die "cannot copy the frame's page for a seat, $tool/share/seat-page.md, into $build_dir" 2
   say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path, each with the frame's page for a seat"
@@ -1191,12 +1195,23 @@ make_records() {
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --argjson o "$origins" --arg c "$chain" --arg u "$(carrier_unit "$workplace${floor_sub:+-${floor_sub#floors/}}")" \
     --arg m "$state_mark" --argjson limit "$(jq '.view.records.limit' <<< "$folded")" --argjson seats "$entries" \
     '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), origins: $o, limit: $limit,
-      chain: (if $c == "" then null else $c end), unit: $u, mark: $m, seats: $seats}' > "$build_dir${floor_sub:+/$floor_sub}/records.json" \
-    || die "cannot write $build_dir${floor_sub:+/$floor_sub}/records.json" 2
+      chain: (if $c == "" then null else $c end), unit: $u, mark: $m, seats: $seats}' > "${build_out:-$build_dir}/records.json" \
+    || die "cannot write ${build_out:-$build_dir}/records.json" 2
   say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
 }
 
-manifest_files=(plan.json plan-manifest.json binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
+frame_files=(binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
+manifest_files=(plan.json plan-manifest.json "${frame_files[@]}")
+
+# A generation's MANIFEST: a hash and a name for each file in its directory, in the C locale's order.
+generation_manifest() {
+  local dir=$1 file
+  local -a names=()
+  for file in "$dir"/*; do
+    [[ -f $file && ! -L $file && ${file##*/} != MANIFEST ]] && names+=("${file##*/}")
+  done
+  if (( ${#names[@]} )); then (cd -- "$dir" && sha256sum -- "${names[@]}") > "$dir/MANIFEST"; else : > "$dir/MANIFEST"; fi
+}
 
 build_floor_seats() {
   local floor=$1 holders='[]'
@@ -1326,26 +1341,39 @@ cmd_build() {
     meets "${tests[i]}" "${tests[i + 1]}" || bad=1
   done
   (( bad == 0 )) || die "build refuses: a path the plan names is missing or of the wrong kind"
+  # The floors, in the order of their terms: the fold's where the plan is folded, else the plan's floor terms. With
+  # floors BUILD is laid out in generations (5.160 point 2): BUILD/shared/N holds the plan's copies and mail.json,
+  # BUILD/floors/F/N a floor's keys, homes and records, each generation with its own MANIFEST, and BUILD/MANIFEST, the
+  # top, lists the frame and those MANIFESTs. A whole build writes generation 1 of each. Without floors BUILD is laid
+  # out as accepted.
+  local -a floor_keys=()
+  [[ -n $folded ]] && mapfile -t floor_keys < <(jq -r '.view.floors[]?.key' <<< "$folded")
+  (( ${#floor_keys[@]} )) || mapfile -t floor_keys < <(jq -r '.programs[].plan[]? | (if type == "object" then .term else . end)
+    | select(type == "array" and .[0] == "floor") | .[1]' "$plan_dir/plan.json")
+  local gen=1 shared=""
+  (( ${#floor_keys[@]} )) && shared=shared/$gen
+  local copies=$build_dir${shared:+/$shared}
   local -a sources=("$plan_dir/plan.json" "$plan_dir/manifest.json" "$tool/host/binding.json"
     "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq")
-  local -a listed=("${manifest_files[@]}")
+  local -a listed=("${shared:+$shared/}plan.json" "${shared:+$shared/}plan-manifest.json" "${frame_files[@]}")
   if [[ -f $plan_dir/facts.json ]]; then
     sources+=("$plan_dir/facts.json")
-    listed+=(plan-facts.json)
+    listed+=("${shared:+$shared/}plan-facts.json")
   fi
   if [[ -f $plan_dir/view.json ]]; then
     sources+=("$plan_dir/view.json")
-    listed+=(plan-view.json)
+    listed+=("${shared:+$shared/}plan-view.json")
   fi
   mkdir -- "$build_dir" || die "cannot make $build_dir"
   trap 'rm -rf -- "$build_dir"' EXIT
   trap 'exit 130' INT TERM
   if ! {
     mkdir -- "$build_dir/libexec" "$build_dir/bin" &&
-      cp -- "$plan_dir/plan.json" "$build_dir/plan.json" &&
-      { [[ ! -f $plan_dir/facts.json ]] || cp -- "$plan_dir/facts.json" "$build_dir/plan-facts.json"; } &&
-      { [[ ! -f $plan_dir/view.json ]] || cp -- "$plan_dir/view.json" "$build_dir/plan-view.json"; } &&
-      cp -- "$plan_dir/manifest.json" "$build_dir/plan-manifest.json" &&
+      { [[ -z $shared ]] || mkdir -p -- "$copies"; } &&
+      cp -- "$plan_dir/plan.json" "$copies/plan.json" &&
+      { [[ ! -f $plan_dir/facts.json ]] || cp -- "$plan_dir/facts.json" "$copies/plan-facts.json"; } &&
+      { [[ ! -f $plan_dir/view.json ]] || cp -- "$plan_dir/view.json" "$copies/plan-view.json"; } &&
+      cp -- "$plan_dir/manifest.json" "$copies/plan-manifest.json" &&
       cp -- "$tool/host/binding.json" "$build_dir/binding.json" &&
       cp -- "$tool/bin/workplace" "$build_dir/bin/workplace" &&
       cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$build_dir/libexec/"
@@ -1363,28 +1391,38 @@ cmd_build() {
       die "the copy of ${sources[i]} differs from its source; $build_dir was removed"
     fi
   done
-  local floor_keys="" fk floor_files=()
-  [[ -n $folded ]] && floor_keys=$(jq -r '.view.floors[]?.key' <<< "$folded")
-  floor_sub=""
-  if [[ -n $floor_keys ]]; then
-    for fk in $floor_keys; do
-      floor_sub=floors/$fk
-      mkdir -p -- "$build_dir/$floor_sub" || die "cannot make $build_dir/$floor_sub" 2
+  local fk
+  floor_sub="" build_out=""
+  if [[ -n $shared ]]; then
+    for fk in "${floor_keys[@]}"; do
+      floor_sub=floors/$fk build_out=$build_dir/floors/$fk/$gen
+      mkdir -p -- "$build_out" || die "cannot make $build_out" 2
       build_floor_seats "$fk"
-      floor_files+=("$floor_sub/keys.json" "$floor_sub/homes.json" "$floor_sub/records.json")
     done
-    floor_sub=""
-    make_mail "$(jq -r '.name // "default"' <<< "$report")"
+    floor_sub="" build_out=$copies
+    [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
+    build_out=""
+    local -a top=()
+    for name in "${frame_files[@]}" seat-page.md; do
+      [[ -f $build_dir/$name ]] && top+=("$(cd -- "$build_dir" && sha256sum -- "$name")")
+    done
+    for name in "$shared" "${floor_keys[@]/#/floors/}"; do
+      [[ $name == floors/* ]] && name=$name/$gen
+      generation_manifest "$build_dir/$name" || die "cannot write $build_dir/$name/MANIFEST" 2
+      top+=("$(cd -- "$build_dir" && sha256sum -- "$name/MANIFEST")") || die "cannot hash $build_dir/$name/MANIFEST" 2
+    done
+    printf '%s\n' "${top[@]}" > "$build_dir/MANIFEST.new" && mv -T -- "$build_dir/MANIFEST.new" "$build_dir/MANIFEST" \
+      || die "cannot write $build_dir/MANIFEST"
   else
     build_floor_seats ""
     [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
+    for name in keys.json homes.json mail.json seat-page.md records.json; do
+      if [[ -f $build_dir/$name ]]; then
+        copy_sums+=("$(cd -- "$build_dir" && sha256sum -- "$name")") || die "cannot hash $build_dir/$name"
+      fi
+    done
+    printf '%s\n' "${copy_sums[@]}" > "$build_dir/MANIFEST" || die "cannot write $build_dir/MANIFEST"
   fi
-  for name in keys.json homes.json mail.json seat-page.md records.json "${floor_files[@]}"; do
-    if [[ -f $build_dir/$name ]]; then
-      copy_sums+=("$(cd -- "$build_dir" && sha256sum -- "$name")") || die "cannot hash $build_dir/$name"
-    fi
-  done
-  printf '%s\n' "${copy_sums[@]}" > "$build_dir/MANIFEST" || die "cannot write $build_dir/MANIFEST"
   local sum
   sum=$(sha_of "$build_dir/MANIFEST") || die "cannot hash $build_dir/MANIFEST"
   trap - EXIT INT TERM
@@ -1393,33 +1431,109 @@ cmd_build() {
   say "its derivations: $(jq -r '(.derivations // {}) | to_entries | map("\(.key) \(.value)") | join(", ")' "$manifest")"
 }
 
+# The build's files, by the top's names. Without floors BUILD is laid out as accepted. With floors the top names one
+# shared generation and one generation for each floor, and every reader of the build reads the plan's copies and
+# mail.json through it, so that no code reads a plan beside the top (5.160 point 2). The top is read once, here.
+build_resolve() {
+  local top=${1-} line name at
+  b_shared="" b_layout=flat b_floors=()
+  declare -gA b_floor=()
+  if [[ -z $top && -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]]; then
+    top=$(< "$build_dir/MANIFEST") || top=""
+  fi
+  while IFS= read -r line; do
+    name=${line#*  }
+    if [[ $name =~ ^shared/[0-9]+/MANIFEST$ ]]; then
+      b_shared=${name%/MANIFEST}
+    elif [[ $name =~ ^floors/([^/]+)/[0-9]+/MANIFEST$ ]]; then
+      b_floor[${BASH_REMATCH[1]}]=${name%/MANIFEST}
+      b_floors+=("${BASH_REMATCH[1]}")
+    fi
+  done <<< "$top"
+  [[ -n $b_shared ]] && b_layout=generations
+  at=$build_dir${b_shared:+/$b_shared}
+  b_plan=$at/plan.json b_pmanifest=$at/plan-manifest.json b_facts=$at/plan-facts.json b_view=$at/plan-view.json b_mail=$at/mail.json
+}
+
+# Verify the build against its MANIFEST. With floors and a floor named, only the top, the frame, the shared generation
+# and that floor's own tree are read; with none named, all of BUILD is walked (5.160 point 3).
 verify_build() {
+  local floor=${1-}
   [[ -d $build_dir ]] || { warn "no build at $build_dir"; return 1; }
   [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]] || { warn "$build_dir has no MANIFEST"; return 1; }
-  local -A want=()
-  local line name file rel
+  local top line name file rel gen g shared_lines=0
+  top=$(< "$build_dir/MANIFEST") || { warn "cannot read $build_dir/MANIFEST"; return 1; }
+  build_resolve "$top"
+  local -A want=() skip=()
   while IFS= read -r line; do
     name=${line#*  }
     [[ $line == *"  "* && -n $name ]] || { warn "MANIFEST holds a line that is not a hash and a name"; return 1; }
     want[$name]=${line%%  *}
-  done < "$build_dir/MANIFEST"
+    [[ $name == shared/* ]] && shared_lines=$(( shared_lines + 1 ))
+  done <<< "$top"
+  if [[ $b_layout == flat ]]; then
+    [[ -z $floor ]] || { warn "the build stands on no floors, so it has no floor $floor"; return 1; }
+    for name in "${manifest_files[@]}"; do
+      [[ -n ${want[$name]+x} ]] || { warn "MANIFEST does not list $name"; return 1; }
+    done
+  else
+    (( shared_lines == 1 )) || { warn "MANIFEST names $shared_lines shared generations, and a build has one"; return 1; }
+    for name in "${!want[@]}"; do
+      [[ $name =~ ^(shared/[0-9]+|floors/[^/]+/[0-9]+)/MANIFEST$ ]] && continue
+      [[ " ${frame_files[*]} seat-page.md " == *" $name "* ]] \
+        || { warn "MANIFEST names $name, which is neither a file of the frame nor a generation's MANIFEST"; return 1; }
+    done
+    for name in "${frame_files[@]}"; do
+      [[ -n ${want[$name]+x} ]] || { warn "MANIFEST does not list $name"; return 1; }
+    done
+    if [[ -n $floor && -z ${b_floor[$floor]+x} ]]; then warn "the build has no floor $floor"; return 1; fi
+    local -a gens=("$b_shared")
+    if [[ -n $floor ]]; then
+      gens+=("${b_floor[$floor]}")
+      for g in "${b_floors[@]}"; do [[ $g == "$floor" ]] || skip[${b_floor[$g]}/MANIFEST]=1; done
+    else
+      for g in "${b_floors[@]}"; do gens+=("${b_floor[$g]}"); done
+    fi
+    for gen in "${gens[@]}"; do
+      [[ -f $build_dir/$gen/MANIFEST && ! -L $build_dir/$gen/MANIFEST ]] || { warn "$build_dir/$gen has no MANIFEST"; return 1; }
+      while IFS= read -r line; do
+        [[ -n $line ]] || continue
+        name=${line#*  }
+        [[ $line == *"  "* && -n $name && $name != */* && $name != MANIFEST ]] \
+          || { warn "$gen/MANIFEST holds a line that is not a hash and a name"; return 1; }
+        want[$gen/$name]=${line%%  *}
+      done < "$build_dir/$gen/MANIFEST"
+    done
+    for name in plan.json plan-manifest.json; do
+      [[ -n ${want[$b_shared/$name]+x} ]] || { warn "$b_shared/MANIFEST does not list $name"; return 1; }
+    done
+  fi
   for file in "$build_dir"/**; do
     rel=${file#"$build_dir"/}
     [[ $rel == MANIFEST || $rel == RUN || $rel == RUN/* ]] && continue
+    if [[ -n $floor && $rel == floors/* ]]; then
+      g=${rel#floors/}
+      [[ ${g%%/*} == "$floor" ]] || continue
+    fi
     if [[ -L $file ]]; then warn "$build_dir holds a symbolic link: $rel"; return 1; fi
     [[ -d $file ]] && continue
     [[ -n ${want[$rel]+x} ]] || { warn "$build_dir holds a file its MANIFEST does not list: $rel"; return 1; }
   done
-  for name in "${manifest_files[@]}"; do
-    [[ -n ${want[$name]+x} ]] || { warn "MANIFEST does not list $name"; return 1; }
-  done
-  local -a sums
-  mapfile -t sums < <(cd -- "$build_dir" && sha256sum -- "${!want[@]}" 2> /dev/null)
-  (( ${#sums[@]} == ${#want[@]} )) || { warn "a file the MANIFEST lists is missing from $build_dir"; return 1; }
+  local -a sums names=()
+  for name in "${!want[@]}"; do [[ -n ${skip[$name]+x} ]] || names+=("$name"); done
+  mapfile -t sums < <(cd -- "$build_dir" && sha256sum -- "${names[@]}" 2> /dev/null)
+  (( ${#sums[@]} == ${#names[@]} )) || { warn "a file the MANIFEST lists is missing from $build_dir"; return 1; }
   for line in "${sums[@]}"; do
     name=${line#*  }
     [[ ${line%%  *} == "${want[$name]}" ]] || { warn "$build_dir/$name does not match its MANIFEST"; return 1; }
   done
+  if [[ $b_layout == generations ]]; then
+    local planned
+    planned=$(jq -r '[.programs[].plan[]? | (if type == "object" then .term else . end) | select(type == "array" and .[0] == "floor") | .[1]] | join(" ")' "$b_plan" 2> /dev/null) \
+      || { warn "$b_plan is not JSON that jq can read"; return 1; }
+    [[ $planned == "${b_floors[*]}" ]] \
+      || { warn "MANIFEST names the floors ${b_floors[*]:-none}, and the plan's floors are ${planned:-none}"; return 1; }
+  fi
   return 0
 }
 
@@ -1773,7 +1887,7 @@ values_problems() {
 }
 
 value_places() {
-  local plan=$build_dir/plan.json name
+  local plan=$b_plan name
   [[ -f $plan ]] || plan=$clone/PLAN/plan.json
   name=$(jq -r --argjson k "$2" 'def term: if type == "object" then .term else . end;
     [.programs[].plan[] | term | select(.[0] == "pane" and .[1:4] == $k) | .[4]][0] // ""' "$plan" 2> /dev/null)
@@ -1797,7 +1911,7 @@ check_values() {
   state_dir=$(workplace_state "$workplace") || state_dir=""
   [[ -n $state_dir ]] && state=$(jq -c --arg f "$state_dir/values.json" '.slots[(["values-file"] | tojson)] = $f' <<< "$state")
   seats='[]'
-  [[ -f $build_dir/plan-view.json ]] && seats=$(jq -c '[.seats[] | select(has("expects")) | {seat, names: [.expects[].name]}]' "$build_dir/plan-view.json")
+  [[ -f $b_view ]] && seats=$(jq -c '[.seats[] | select(has("expects")) | {seat, names: [.expects[].name]}]' "$b_view")
   file=$state_dir/values.json
   if [[ -n $state_dir && ( -e $file || -L $file ) ]]; then
     mapfile -t problems < <(values_problems "$file")
@@ -1830,7 +1944,7 @@ check_values() {
 
 seat_name() {
   jq -r --argjson k "$1" 'def term: if type == "object" then .term else . end;
-    [.programs[].plan[] | term | select(.[0] == "pane" and .[1:4] == $k) | .[4]][0] // "?"' "$build_dir/plan.json"
+    [.programs[].plan[] | term | select(.[0] == "pane" and .[1:4] == $k) | .[4]][0] // "?"' "$b_plan"
 }
 
 set_homes() {
@@ -1857,7 +1971,7 @@ set_homes() {
 }
 
 set_mail() {
-  local mail=$build_dir/mail.json made_in state_dir entry dir
+  local mail=$b_mail made_in state_dir entry dir
   [[ -f $mail ]] || return 0
   made_in=$(jq -r '.state' "$mail")
   state_dir=$(workplace_state "$(jq -r '.workplace' "$mail")") || state_dir=""
@@ -1956,7 +2070,7 @@ set_pipes() {
 }
 
 start_carrier() {
-  [[ -f $build_dir/mail.json || -f $build_dir/records.json ]] || return 0
+  [[ -f $b_mail || -f $build_dir/records.json ]] || return 0
   local setpriv_program stat_program systemctl_program pid="" ident i fd now chain="" unit="" invocation
   setpriv_program=$(command -v setpriv) && stat_program=$(command -v stat) || { warn "up needs setpriv and stat for the carrier"; return 1; }
   mkdir -- "$run_dir/carrier" && ident=$(stat -c %d:%i -- "$run_dir/carrier") || { warn "cannot make $run_dir/carrier"; return 1; }
@@ -2043,14 +2157,14 @@ cmd_up() {
   need_tmux
   locate
   verify_build || die "up starts only a verified build, and never builds"
-  if jq -e 'any(.programs[].plan[]?; (if type == "object" then .term else . end) | .[0] == "floor")' "$build_dir/plan.json" > /dev/null 2>&1; then
+  if jq -e 'any(.programs[].plan[]?; (if type == "object" then .term else . end) | .[0] == "floor")' "$b_plan" > /dev/null 2>&1; then
     die "the build stands on floors; this frame plans and builds floors and does not yet stand them up, which comes with S2's stop 4" 2
   fi
   local view_file=/dev/null
-  [[ -f $build_dir/plan-view.json ]] && view_file=$build_dir/plan-view.json
-  plan_report "$build_dir/plan.json" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
+  [[ -f $b_view ]] && view_file=$b_view
+  plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
-  if [[ -f $build_dir/plan-view.json ]] && jq -e 'any(.seats[]?; has("expects"))' "$build_dir/plan-view.json" > /dev/null 2>&1; then
+  if [[ -f $b_view ]] && jq -e 'any(.seats[]?; has("expects"))' "$b_view" > /dev/null 2>&1; then
     need_version env --version "$ENV_FLOOR"
   fi
   local socket=$run_dir/$(jq -r '.name // "default"' <<< "$report") tmux_dir=${TMUX_TMPDIR:-/tmp}/tmux-$EUID tmux_default=/tmp/tmux-$EUID
@@ -2088,7 +2202,7 @@ cmd_up() {
     | joined($b[0]; $root)
     | [.programs[] | .path as $p | .plan | to_entries[]
        | {path: $p, n: (.key + 1), term: (.value | if type == "object" then .term else . end)}]
-    | sort_by(.term[0] as $name | $order | index($name))[]' "$build_dir/plan.json") \
+    | sort_by(.term[0] as $name | $order | index($name))[]' "$b_plan") \
     || { rm -rf -- "$run_dir"; die "cannot order the plan's terms"; }
   mapfile -t records <<< "$ordered"
   if (( ${#records[@]} != plan_terms )); then
@@ -2796,7 +2910,7 @@ cmd_carry() {
   locate
   umask 077
   verify_build || die "the carrier serves only a verified build" 2
-  local mail=$build_dir/mail.json records=$build_dir/records.json entry i dev state_dir
+  local mail=$b_mail records=$build_dir/records.json entry i dev state_dir
   [[ -f $mail || -f $records ]] || die "the build holds no mail and keeps no record, and the carrier has nothing to do" 2
   [[ -d $run_dir/carrier ]] || die "the carrier is started by up, which makes $run_dir/carrier" 2
   cd -- "$run_dir/carrier" || die "cannot enter $run_dir/carrier" 2
@@ -2912,9 +3026,9 @@ cmd_record() {
   [[ -n $(jq -r '.chain // empty' "$records") ]] || die "this workplace keeps no chain, so its records cannot be verified" 2
   records_marked "$records" || exit 2
   if [[ $name == --requests ]]; then
-    [[ -f $build_dir/mail.json ]] || die "this workplace holds no mail, so it keeps no record of requests" 2
+    [[ -f $b_mail ]] || die "this workplace holds no mail, so it keeps no record of requests" 2
     rel=comms/record
-    file=$(jq -r '.comms' "$build_dir/mail.json")/record
+    file=$(jq -r '.comms' "$b_mail")/record
   else
     seat=$(jq -c --arg n "$name" '.seats[] | select(.name == $n)' "$records")
     [[ -n $seat ]] || die "no seat is named $name in this workplace" 2
@@ -2988,8 +3102,8 @@ cmd_why() {
   need_jq
   locate
   local plan=$plan_dir/plan.json binding=$tool/host/binding.json view=$plan_dir/view.json lib=$tool/libexec
-  if [[ -f $build_dir/plan.json ]]; then
-    plan=$build_dir/plan.json binding=$build_dir/binding.json view=$build_dir/plan-view.json lib=$build_dir/libexec
+  if [[ -f $b_plan ]]; then
+    plan=$b_plan binding=$build_dir/binding.json view=$b_view lib=$build_dir/libexec
   fi
   [[ -f $plan ]] || die "no plan in $plan_dir" 2
   [[ -f $view ]] || view=/dev/null
@@ -3331,21 +3445,21 @@ cmd_down() {
 seats_report() {
   local bad=0 entry path file="" state_dir workplace key names line i name waiting=0
   local -a problems fields parts inside
-  if [[ -f $build_dir/mail.json ]]; then
+  if [[ -f $b_mail ]]; then
     local -a waits=()
     while IFS= read -r entry; do
       path=$(jq -r '.out' <<< "$entry")
       inside=("$path"/[!.]*)
       waiting=$(( waiting + ${#inside[@]} ))
       (( ${#inside[@]} )) && waits+=("mail    $(jq -r '"\(.name) (\(.seat | join("/")))"' <<< "$entry"): ${#inside[@]} waiting in out")
-    done < <(jq -c '.seats[]' "$build_dir/mail.json")
-    say "mail    the store $(jq -r '.store' "$build_dir/mail.json"), shown at $(jq -r '.path' "$build_dir/mail.json"); requests waiting in the seats' out: $waiting"
+    done < <(jq -c '.seats[]' "$b_mail")
+    say "mail    the store $(jq -r '.store' "$b_mail"), shown at $(jq -r '.path' "$b_mail"); requests waiting in the seats' out: $waiting"
     (( ${#waits[@]} )) && printf '%s\n' "${waits[@]}"
-    file=$(jq -r '.comms' "$build_dir/mail.json")/wake.json
+    file=$(jq -r '.comms' "$b_mail")/wake.json
     if [[ -f $file ]]; then
       jq -r --slurpfile w "$file" '.seats[] | select(.wake != null) | . as $s | ($w[0].seats[$s.box] // null) as $p
         | select($p != null and ($p.count // 0) > 0)
-        | "wake    \($s.name) (\($s.seat | join("/"))): \($p.count) delivered and not yet pointed out, the first at \($p.since)"' "$build_dir/mail.json" 2> /dev/null
+        | "wake    \($s.name) (\($s.seat | join("/"))): \($p.count) delivered and not yet pointed out, the first at \($p.since)"' "$b_mail" 2> /dev/null
     fi
     file=""
   fi
@@ -3362,8 +3476,8 @@ seats_report() {
       fi
     done < <(jq -c '.seats[]' "$build_dir/homes.json")
   fi
-  [[ -f $build_dir/plan-view.json ]] || return "$bad"
-  workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$build_dir/plan.json")
+  [[ -f $b_view ]] || return "$bad"
+  workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$b_plan")
   state_dir=$(workplace_state "$workplace") && file=$state_dir/values.json
   if [[ -n $file && ( -e $file || -L $file ) ]]; then
     mapfile -t problems < <(values_problems "$file")
@@ -3391,7 +3505,7 @@ seats_report() {
     done
     line=$(printf '%s, ' "${parts[@]}")
     say "values  $(seat_name "$key") ($(jq -r 'join("/")' <<< "$key")): ${line%, }"
-  done < <(jq -c '.seats[] | select(has("expects"))' "$build_dir/plan-view.json")
+  done < <(jq -c '.seats[] | select(has("expects"))' "$b_view")
   return "$bad"
 }
 
@@ -3488,9 +3602,9 @@ cmd_status() {
 
 restart_state_dir() {
   local name dir
-  for name in keys.json homes.json mail.json records.json; do
-    [[ -f $build_dir/$name && ! -L $build_dir/$name ]] || continue
-    dir=$(jq -r '.state // empty' "$build_dir/$name" 2> /dev/null)
+  for name in "$build_dir/keys.json" "$build_dir/homes.json" "$b_mail" "$build_dir/records.json"; do
+    [[ -f $name && ! -L $name ]] || continue
+    dir=$(jq -r '.state // empty' "$name" 2> /dev/null)
     [[ -n $dir ]] && { printf '%s\n' "$dir"; return 0; }
   done
   workplace_state "$(jq -r '.name // "default"' <<< "$report")"
@@ -3504,8 +3618,8 @@ cmd_restart() {
   [[ -f $run_dir/state.json ]] || die "the run under $run_dir did not finish up; restart refuses it" 2
   verify_build || die "restart starts a seat only from a verified build, as up does"
   local view_file=/dev/null
-  [[ -f $build_dir/plan-view.json ]] && view_file=$build_dir/plan-view.json
-  plan_report "$build_dir/plan.json" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
+  [[ -f $b_view ]] && view_file=$b_view
+  plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
   state=$(< "$run_dir/state.json")
   local verdict=0
@@ -3589,16 +3703,16 @@ cmd_restart() {
 
 unbuild_state() {
   local name state plan derived default term arg
-  for name in keys.json homes.json mail.json records.json; do
-    [[ -f $build_dir/$name && ! -L $build_dir/$name ]] || continue
-    state=$(jq -r '.state // empty' "$build_dir/$name" 2> /dev/null) || state=""
+  for name in "$build_dir/keys.json" "$build_dir/homes.json" "$b_mail" "$build_dir/records.json"; do
+    [[ -f $name && ! -L $name ]] || continue
+    state=$(jq -r '.state // empty' "$name" 2> /dev/null) || state=""
     [[ -n $state ]] && { printf '%s\n' "$state"; return 0; }
   done
   derived=$(derive_name sha256-path-prefix12-v1) || return 1
   default=$(jq -r '.name.default // ""' "$tool/host/binding.json") || return 1
   term=$(jq -r '.name.term // ""' "$tool/host/binding.json") || return 1
   arg=$(jq -r '.name.arg // 1' "$tool/host/binding.json") || return 1
-  for plan in "$build_dir/plan.json" "$clone/PLAN/plan.json"; do
+  for plan in "$b_plan" "$clone/PLAN/plan.json"; do
     [[ -f $plan && ! -L $plan ]] || continue
     name=$(jq -r --arg t "$term" --argjson a "$arg" '
       [.programs[]?.plan[]? | (if type == "object" then .term else . end)

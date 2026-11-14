@@ -427,13 +427,14 @@
 
 - **C100.** `workplace.json` may hold `floors`, a list of one or more floors, each with exactly `key`, `name`, `houses`, `enforced`, `socket`, `conf` and `smallest` (5.116, 5.117, 5.123, 5.124 points 1 and 2).
   - **The members.** A key follows the rule for a key (C67), holds no `:`, and no two floors share one. A name follows the rule for a name and holds no `:`. `houses` is `offices` or `rooms`, and `enforced` is `true` or `false`. `socket` is `run` or `tmux-default`, at most one floor takes `tmux-default`, and an enforced floor takes `run`. `conf` is a relative path to a file in the clone that is not a link, and holds no `:`. The key, the name and the conf are words of the root program, whose words a `:` separates (5.131 point 4). `smallest` is written `COLSxROWS`.
-  - **What else changes.** With `floors`, `workplace.json` holds no `socket` and the clone no `tmux.conf`. The name is the derived one (C25). Each floor's file is an input, in the floors' order, where `tmux.conf` was.
+  - **What else changes.** With `floors`, `workplace.json` holds no `socket` and the clone no `tmux.conf`. A `socket` beside `floors` is refused by that one line, and its value is not judged (5.135). The name is the derived one (C25). Each floor's file is an input, in the floors' order, where `tmux.conf` was.
   - **The root program.** It is `workdir : ROOT`, `workplace : NAME`, and a line `floor : KEY : NAME : HOUSES : ENFORCEMENT : SOCKET : CONF : SMALLEST` for each floor, under the derivation `root-floors-v1`.
   - **What `plan` refuses.** It refuses each fault of these with exit 2, naming it.
 - **C101.** In a plan with floors the structure is checked at `plan` as well as at `build`. It holds no `server` and exactly one `workplace`.
+  - **The counts of servers and floors** (5.135, 5.136). A plan holds one server and no floor, or no server, one workplace and at least one floor, and each count outside these is refused by one line, at `plan` and at `build`: no server and no floor, and servers beside floors, by that sentence; two or more servers with no floor by C3's line, which names the terms and which `plan` runs as well.
   - **Offices.** Each office stands in exactly one `house F A` of a floor that houses offices. A house that names a key that is no floor is refused as naming a floor that the plan does not make (5.131 point 4).
   - **A floor of rooms** stands for its own session. It has no `session` and no `house`, and its rooms are `window F R NAME`.
-  - **The keys.** No key names both a floor and an office.
+  - **The keys.** No key names both a floor and an office. The refusal names every term in which the key stands as a floor or as an office: the floor's term, each `house` term that names it, and each `session` term of that office, not one whose name only equals the key (5.135).
   - **Every floor** holds an office or a room. A floor of rooms that holds none is refused by that line alone: no other line follows for it, and no line calls a floor's term a session term (5.131 point 4).
   - **Without floors,** a `workplace` or `house` term is refused.
   - **`up` refuses a build that stands on floors** until S2's stop 4 brings floors up.

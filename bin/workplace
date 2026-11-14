@@ -271,7 +271,7 @@ assemble() {
          ([.layers[] | strings | sub("^.*/"; "") | sub("\\.typify$"; "")] | group_by(.)[] | select(length > 1)
           | "the layer name \(.[0]) is listed \(length) times in workplace.json")
        end),
-      (if has("socket") and .socket != "default" then "workplace.json says socket \(.socket | tojson), and only \"default\" is known" else empty end),
+      (if has("socket") and (has("floors") | not) and .socket != "default" then "workplace.json says socket \(.socket | tojson), and only \"default\" is known" else empty end),
       (if $root | contains(":") then "the root \($root) holds a :, which separates the words of the root program" else empty end),
       (if $relative | contains(":") then "the configuration'"'"'s path relative to the root, \($relative), holds a :, which separates the words of the root program" else empty end)
     end' "$file" 2>&1) || die "workplace.json is not JSON that jq can read: $problems" 2
@@ -431,7 +431,7 @@ refuse_terms() {
   found=$(jq -r -L "$tool/libexec" --arg root "$root" --arg clone "$clone" --slurpfile b "$tool/host/binding.json" '
     include "table";
     joined($b[0]; $root) | key_problems($b[0]), name_problems($b[0]), unique_problems($b[0]), mail_problems($b[0]; $clone),
-      (if any(plan_terms[]; .term[0] == ($b[0].structure.floors.floor // "")) then structure_problems($b[0]) else floors_problems($b[0]) end)' "$1") \
+      (if any(plan_terms[]; .term[0] == ($b[0].structure.floors.floor // "")) then structure_problems($b[0]) else floors_problems($b[0]), count_problems($b[0]) end)' "$1") \
     || { warn "cannot read $1 for its keys, its names and its mail path"; return 1; }
   [[ -z $found ]] && return 0
   mapfile -t faults <<< "$found"

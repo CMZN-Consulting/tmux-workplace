@@ -143,6 +143,8 @@ def floors_problems($binding):
   | [$floors[] | select(.term[$fs.houses] == "rooms") | .term[$fs.key]] as $room_floors
   | ([$sessions[] | .term[1]] + [$houses[] | .term[2]] | unique) as $offices
   | if ($floors | length) == 0 then
+      (if ($servers | length) == 0
+       then "the plan holds 0 server terms and 0 floor terms: a plan holds one server and no floor, or no server, one workplace and at least one floor" else empty end),
       (($workplaces + $houses)[] | "\(.term[0]) speaks only in a plan with floors, and this plan holds none (\(term_at))")
     else
       (if ($servers | length) > 0
@@ -161,12 +163,24 @@ def floors_problems($binding):
       ($sessions[] | select(.term[1] as $a | $room_floors | index($a))
        | "the floor \(.term[1]) houses rooms, and the plan holds a session or a house for it (\(term_at))"),
       ($offices[] as $k | select([$floors[].term[$fs.key]] | index($k))
-       | "the key \($k) names a floor and an office (\(([$floors[] | select(.term[$fs.key] == $k)] + [($sessions + $houses)[] | select(.term[1] == $k or .term[2] == $k)]) | map(term_at) | unique | join("; ")))"),
+       | "the key \($k) names a floor and an office (\(([$floors[] | select(.term[$fs.key] == $k)] + [$sessions[] | select(.term[1] == $k)] + [$houses[] | select(.term[1] == $k or .term[2] == $k)]) | map(term_at) | unique | join("; ")))"),
       ($office_floors[] as $f | select([$houses[] | select(.term[1] == $f)] | length == 0)
        | "the floor \($f) holds no office and no room"),
       ($room_floors[] as $f | select([$windows[] | select(.term[1] == $f)] | length == 0)
        | "the floor \($f) holds no office and no room")
     end;
+
+def count_problems($binding):
+  # The binding's exactly-one terms in a plan without floors. With floors S1 speaks of the server instead, and
+  # without floors a plan with no server is refused by S1 (floors_problems), so one fault gives one line (5.136).
+  ($binding.structure // {}) as $s
+  | plan_terms as $all
+  | ($s.floors // null) as $fs
+  | select(any($all[]; $fs != null and .term[0] == $fs.floor) | not)
+  | ($s["exactly-one"] // [])[] | . as $p | [$all[] | select(.term[0] == $p)] as $have
+  | select(($have | length) != 1)
+  | select($fs != null and $p == $fs.server and ($have | length) == 0 | not)
+  | "the plan holds \($have | length) \($p) terms; it needs exactly one\(if ($have | length) > 1 then " (\($have | map(term_at) | join("; ")))" else "" end)";
 
 def structure_problems($binding):
   ($binding.structure // {}) as $s
@@ -178,9 +192,7 @@ def structure_problems($binding):
       + (if $fs != null and $p == $fs.session
          then [$all[] | select(.term[0] == $fs.floor and .term[$fs.houses] == "rooms") | . + {k: [.term[$fs.key]]}] else [] end);
     floors_problems($binding),
-    (($s["exactly-one"] // [])[] | select($floored | not) | . as $p | [$all[] | select(.term[0] == $p)] as $have
-     | select(($have | length) != 1)
-     | "the plan holds \($have | length) \($p) terms; it needs exactly one\(if ($have | length) > 1 then " (\($have | map(term_at) | join("; ")))" else "" end)"),
+    count_problems($binding),
     (($s["unique-keys"] // [])[] | . as [$p, $pos] | keyed($p; $pos) | group_by(.k) | map(select(length > 1))[]
      | "the plan holds \(length) \($p) terms for \(.[0].k | join("/")); one is allowed (\(map(term_at) | join("; ")))"),
     (($s.requires // [])[] | . as [$p, $pos, $q, $qpos] | [standing($q; $qpos)[].k] as $have

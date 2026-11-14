@@ -1708,6 +1708,7 @@ t_floors() {
     'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the floor attic holds no office and no room'
     'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "rooms", "enforced", "run", $root + "/config/floors/deck.conf", "80"]]|the floor attic says smallest "80": COLSxROWS'
     'C101|(.programs[0].plan) += [["floor", "orchard", "Orchard", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the key orchard names a floor and an office (orchard/office.typify, term 1; orchard/office.typify, term 2; workplace.typify, term 5)'
+    'C101|(.programs[0].plan) += [["floor", "orchard", "Orchard", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]] | (.programs[] | select(.path == "harbor/office.typify") | .plan) |= map(if .[0] == "session" then .[2] = "orchard" else . end)|the key orchard names a floor and an office (orchard/office.typify, term 1; orchard/office.typify, term 2; workplace.typify, term 5)'
     'C101|(.programs[0].plan) += [["floor", "attic", "Attic", "rooms", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the floor attic holds no office and no room'
     'C101|(.programs[0].plan) += [["floor", "deck", "Deck", "offices", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]|the floor deck is declared 2 times (workplace.typify, term 3; workplace.typify, term 5)'
     'C101|(.programs[0].plan) += [["window", "ghost", "w", "Ghost"]]|the window term for ghost has no session term (workplace.typify, term 5)'
@@ -1752,6 +1753,15 @@ t_floors() {
     test "$(jq -c --arg p "$root/tools" '[.rows[] | select(.key[2] == "keeper" and .key[3] == $p) | .origins[].line]' "$clone/PLAN/view.json")" = '[9,10,11,12]'
   check "[C104] and so does the room's row" \
     test "$(jq -c --arg p "$root/tools" '[.rooms[] | select(.room == ["harbor", "dock"]) | .rows[] | select(.key[2] == $p) | .origins[].line]' "$clone/PLAN/view.json")" = '[9,10,11,12]'
+  statements_plan '(.programs[0].plan) |= map(select(.[0] != "server"))'
+  check "[C101] 5.135: a plan with no server and no floor refuses at plan, with exit 1" exit_is 1 wplan
+  check "[C101] with the sentence on servers and floors" said "workplace: the plan holds 0 server terms and 0 floor terms: a plan holds one server and no floor, or no server, one workplace and at least one floor"
+  check "[C101] then the structure's closing line, and no other line on the server (5.136)" \
+    bash -c 'grep -qxF "workplace: the plan refuses a key, a name or its mail path; PLAN/ is as it was" "$1" && ! grep -qF "needs exactly one" "$1"' _ "$scratch/out"
+  statements_plan '(.programs[0].plan) += [.programs[0].plan[0]]'
+  check "[C3] 5.136: two servers and no floor refuse at plan too, with exit 1" exit_is 1 wplan
+  check "[C3] by the accepted line, with its origins, and not by the sentence" \
+    bash -c 'grep -qxF "workplace: the plan holds 2 server terms; it needs exactly one (workplace.typify, term 1; workplace.typify, term 2)" "$1" && ! grep -qF "floor terms:" "$1"' _ "$scratch/out"
   statements_plan "$floors_terms"' | (.programs[0].plan) += [["floor", "attic", "Attic", "rooms", "enforced", "run", $root + "/config/floors/deck.conf", "80x24"]]'
   check "[C101] 5.131 point 4: a floor of rooms with no room refuses the plan, with exit 1" exit_is 1 wplan
   check "[C101] saying so" said "the floor attic holds no office and no room"
@@ -1842,6 +1852,11 @@ t_floors_assembly() {
     check "[C100] naming it" said "${entry##*|}"
     cp -- "$scratch/w-saved" "$clone/workplace.json"
   done
+  jq '. + {socket: "run"}' "$clone/workplace.json" > "$scratch/w2" && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json"
+  check "[C100] 5.135: a socket of any value beside floors refuses plan, with exit 2" exit_is 2 wplan
+  check "[C100] by its one line, which does not judge the socket's value" \
+    bash -c 'grep -qxF "workplace: workplace.json holds socket beside floors: with floors, each floor names its socket" "$1" && ! grep -qF "says socket" "$1"' _ "$scratch/out"
+  cp -- "$scratch/w-saved" "$clone/workplace.json"
   jq '.floors[0].conf = "floors/none.conf"' "$clone/workplace.json" > "$scratch/w2" && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json"
   check "[C100] a floor whose conf is no file in the clone refuses plan, with exit 2" exit_is 2 wplan
   check "[C100] naming it" said "the floor bridge names its conf floors/none.conf, which is not a file in the clone"
@@ -3363,6 +3378,10 @@ t_keys_and_names() {
   make_plan '.programs[0].plan += [.programs[0].plan[0]]'
   check "[C3] build refuses two server terms" exit_is 1 wp build
   check "[C3] naming the origin of each" said "the plan holds 2 server terms; it needs exactly one (workplace.typify, term 1; workplace.typify, term 2)"
+  make_plan '.programs[0].plan |= map(select(.[0] != "server"))'
+  check "[C3] 5.136: build refuses a plan with no server and no floor" exit_is 1 wp build
+  check "[C3] by the sentence on servers and floors alone" \
+    bash -c 'grep -qF "the plan holds 0 server terms and 0 floor terms: a plan holds one server and no floor, or no server, one workplace and at least one floor" "$1" && ! grep -qF "needs exactly one" "$1"' _ "$scratch/out"
   make_plan '.programs[6].plan[0][3] = "kee per" | .programs[6].plan[1].term[3] = "kee per"'
   check "[C67] build refuses a key that is not one, in a plan written by hand" exit_is 1 wp build
   check "[C67] naming the term" said 'harbor/dock/keeper/seat.typify, term 1 (pane): the key "kee per" is refused: it holds white space'

@@ -1855,7 +1855,7 @@ t_floors() {
   check "[C102] the seat's key home stands in its floor's state, by its place among that floor's panes" \
     bash -c '[[ -d $1/floors/deck/keys/01 && ! -e $1/keys ]]' _ "$s"
   check "[C102] 5.160: BUILD holds the floor's keys.json in the floor's generation, whose MANIFEST lists it and which the top names" \
-    bash -c '[[ $(jq -r ".state + \" \" + .seats[0].name + \" \" + .seats[0].home" "$1/BUILD/floors/deck/1/keys.json") == "$2/floors/deck Harbor Keeper keys/01" ]] && grep -q "  keys.json$" "$1/BUILD/floors/deck/1/MANIFEST" && grep -q "  floors/deck/1/MANIFEST$" "$1/BUILD/MANIFEST"' _ "$clone" "$s"
+    bash -c '[[ $(jq -r ".state + \" \" + .seats[0].name + \" \" + .seats[0].home" "$1/BUILD/floors/deck/$3/keys.json") == "$2/floors/deck Harbor Keeper keys/01" ]] && grep -q "  keys.json$" "$1/BUILD/floors/deck/$3/MANIFEST" && grep -q "  floors/deck/$3/MANIFEST$" "$1/BUILD/MANIFEST"' _ "$clone" "$s" "$(top_gen)"
   chmod 0750 -- "$s/floors/deck"
   rm -rf -- "$clone/BUILD"
   check "[C102] a floor's state directory that stands with a mode other than 700 refuses the build, with exit 2" exit_is 2 wp build
@@ -1867,22 +1867,44 @@ t_floors() {
   check "[C102] naming it" said "the state directory $s/floors has the mode 750, not 700"
   chmod 0700 -- "$s/floors"
   rm -rf -- "$clone/BUILD"
+  check "[C102] 5.162 (the addendum's Q8): the build's state stands in S, each a file of this user's with mode 600: its lock, its holder, the generations' lock and the counter" \
+    bash -c 'for f in build.lock build.holder generations.lock generation.next; do [[ -f $1/$f && ! -L $1/$f && $(stat -c %a "$1/$f") == 600 ]] || exit 1; done' _ "$s"
+  check "[C102] and no process that build started, its agents and its key's gpg among them, holds the build's lock once it has ended" flock -n "$s/build.lock" true
+  local counter
+  counter=$(< "$s/generation.next")
+  chmod 0644 -- "$s/generations.lock"
+  check "[C102] a state file of another mode refuses the build, with exit 1" exit_is 1 wp build
+  check "[C102] naming it" said "build refuses: $s/generations.lock is not a file of this user's with mode 600"
+  chmod 0600 -- "$s/generations.lock"
+  rm -rf -- "$clone/BUILD"
+  printf '%s\n' '{"command":"build","pid":4242,"at":"2026-01-01T00:00:00Z"}' > "$s/build.holder"
+  flock -o "$s/build.lock" sleep 8 &
+  local holder=$!
+  check "a process of the test holds the build's lock" eventually bash -c '! flock -n "$1" true' _ "$s/build.lock"
+  check "[C102] 5.162 (Q8): build refuses while another build holds the build's lock, after a wait of two seconds, with exit 1" exit_is 1 wp build
+  check "[C102] naming its holder" said "build refuses: another build of this workplace holds its lock, $s/build.lock: build, process 4242, since 2026-01-01T00:00:00Z"
+  kill "$holder" 2> /dev/null
+  wait "$holder" 2> /dev/null
+  rm -rf -- "$clone/BUILD"
   check "build again" exit_is 0 wp build
-  local floors_named
-  floors_named=$(jq -r '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "floor") | "floors/\(.[1])/1/MANIFEST"] | join(" ")' "$clone/PLAN/plan.json")
+  check "[C5] 5.162 (the addendum's P5): a build takes its generation's number from the counter, so that no number is taken twice" \
+    test "$(top_gen) $(< "$s/generation.next")" = "$counter $(( counter + 1 ))"
+  local floors_named g
+  g=$(top_gen)
+  floors_named=$(jq -r --arg g "$g" '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "floor") | "floors/\(.[1])/\($g)/MANIFEST"] | join(" ")' "$clone/PLAN/plan.json")
   check "[C5] 5.160 point 2: the top names the frame, one shared generation and one generation for each floor, in the order of the floor terms, and nothing else" \
-    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq shared/1/MANIFEST $floors_named "
+    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq shared/$g/MANIFEST $floors_named "
   check "[C2] 5.160 point 2: the plan's copies stand in the shared generation, PLAN's plan byte for byte, and no plan, view, mail, keys, homes or records stands beside the top" \
-    bash -c 'cmp -s "$1/PLAN/plan.json" "$1/BUILD/shared/1/plan.json" && [[ -f $1/BUILD/shared/1/plan-view.json && -f $1/BUILD/shared/1/plan-manifest.json ]] \
-      && ! ls -- "$1/BUILD" | grep -qxE "(plan|plan-view|plan-manifest|plan-facts|mail|keys|homes|records)[.]json"' _ "$clone"
+    bash -c 'cmp -s "$1/PLAN/plan.json" "$1/BUILD/shared/$2/plan.json" && [[ -f $1/BUILD/shared/$2/plan-view.json && -f $1/BUILD/shared/$2/plan-manifest.json ]] \
+      && ! ls -- "$1/BUILD" | grep -qxE "(plan|plan-view|plan-manifest|plan-facts|mail|keys|homes|records)[.]json"' _ "$clone" "$g"
   check "[C2] 5.160 point 2: no code of the frame reads the build's plan, view or mail but through the top" \
     bash -c '! grep -nE "[$]build_dir/(plan|plan-view|plan-manifest|plan-facts|mail)[.]json" "$1/bin/workplace"' _ "$tool"
   check "[C5] the build verifies: up goes past its verification to its refusal of floors" exit_is 2 wp up
   local kept=$scratch/kept-generation entry
   local -a breaks=(
-    'cp -- "$1/BUILD/shared/1/plan.json" "$1/BUILD/plan.json"|holds a file its MANIFEST does not list: plan.json'
-    ': > "$1/BUILD/floors/deck/1/stray"|holds a file its MANIFEST does not list: floors/deck/1/stray'
-    'chmod u+w -- "$1/BUILD/floors/lodge/1/MANIFEST" && printf x >> "$1/BUILD/floors/lodge/1/MANIFEST"|floors/lodge/1/MANIFEST does not match its MANIFEST'
+    "cp -- \"\$1/BUILD/shared/$g/plan.json\" \"\$1/BUILD/plan.json\"|holds a file its MANIFEST does not list: plan.json"
+    ": > \"\$1/BUILD/floors/deck/$g/stray\"|holds a file its MANIFEST does not list: floors/deck/$g/stray"
+    "chmod u+w -- \"\$1/BUILD/floors/lodge/$g/MANIFEST\" && printf x >> \"\$1/BUILD/floors/lodge/$g/MANIFEST\"|floors/lodge/$g/MANIFEST does not match its MANIFEST"
   )
   for entry in "${breaks[@]}"; do
     rm -rf -- "$kept" && cp -a -- "$clone/BUILD" "$kept"
@@ -2077,7 +2099,7 @@ t_reach_floors() {
   check "[C54] a room with no number is printed so" said "  grab: Lodge Ida (its own room, lodge/east with no number)"
   check "build" exit_is 0 wp build
   check "[C56] mail.json gives each seat its floor and its room's number, null where the room has none (5.132 point 9)" \
-    test "$(jq -c '[.seats[] | [.name, .floor, .number]]' "$clone/BUILD/shared/1/mail.json")" = \
+    test "$(jq -c '[.seats[] | [.name, .floor, .number]]' "$clone/BUILD/shared/$(top_gen)/mail.json")" = \
     "[[$hk,\"deck\",2],[$hp,\"deck\",2],[$hw,\"deck\",3],[$og,\"bridge\",null],[$op,\"bridge\",null],[$li,\"lodge\",null],[$lv,\"lodge\",null]]"
   rm -rf -- "$clone/BUILD"
 
@@ -2281,7 +2303,7 @@ t_pointer_floors() {
   check "naming it in its last line" bash -c 'tail -n 1 "$1" | grep -qF "workplace: cannot make $2/workplace-build-"' _ "$scratch/out" "$scratch/none"
   check "build" exit_is 0 wp build
   check "[C56] with floors mail.json gives each seat its kind's own wake for its floor's mode, null where none" \
-    test "$(jq -c '[.seats[] | [.name, .number, (if has("own") then .own else "absent" end)]]' "$clone/BUILD/shared/1/mail.json")" = '[["Harbor Keeper",0,"5.150"],["Harbor Pilot",0,null],["Harbor Watch",10,"5.150"],["Orchard Grower",9,null],["Orchard Picker",9,"5.151"],["Lodge Ida",0,"5.150"],["Lodge Ivo",9,"5.150"],["Orchard Reaper",null,"5.151"],["Lodge Ira",9,null],["Orchard Gleaner",null,null]]'
+    test "$(jq -c '[.seats[] | [.name, .number, (if has("own") then .own else "absent" end)]]' "$clone/BUILD/shared/$(top_gen)/mail.json")" = '[["Harbor Keeper",0,"5.150"],["Harbor Pilot",0,null],["Harbor Watch",10,"5.150"],["Orchard Grower",9,null],["Orchard Picker",9,"5.151"],["Lodge Ida",0,"5.150"],["Lodge Ivo",9,"5.150"],["Orchard Reaper",null,"5.151"],["Lodge Ira",9,null],["Orchard Gleaner",null,null]]'
 
   # A run made by hand, with no panes: the decision is taken at delivery and needs none (5.146 point 5).
   mkdir -p -- "$clone/BUILD/RUN/carrier"
@@ -2318,7 +2340,7 @@ t_pointer_floors() {
   local g r v d k g2 l w p store
   g=$(idof "Orchard Grower" g1.md) r=$(idof "Orchard Reaper" r1.md) v=$(idof "Lodge Ivo" v1.md) d=$(idof "Lodge Ida" d1.md)
   k=$(idof "Harbor Keeper" k1.md) g2=$(idof "Orchard Grower" g2.md) l=$(idof "Orchard Gleaner" l1.md) w=$(idof "Harbor Watch" w1.md) p=$(idof "Harbor Pilot" p1.md)
-  store=$(jq -r '.store' "$clone/BUILD/shared/1/mail.json")
+  store=$(jq -r '.store' "$clone/BUILD/shared/$(top_gen)/mail.json")
   check "[C94] 5.146: toward a room cleared more whose kind wakes by itself, withheld, 0 as the reader's number below 9; a kind with no pattern and the writer, none; each reader on its own, and a due reader has no line" \
     test "$(decided "$g")" = "Harbor Keeper:withheld,Harbor Pilot:none,Orchard Grower:none,"
   check "[C94] toward rooms of the same number and cleared less, due, in wake.json: a reader at 10 from a writer at 9 is cleared less (5.153)" test "$(due "$g")" = '["Harbor Watch","Lodge Ivo"]'
@@ -3675,6 +3697,8 @@ box_of() {
   esac
 }
 state_of() { printf '%s\n' "$HOME/.local/state/workplace/$label"; }
+# The number of the shared generation that the build's top names (5.160 point 2).
+top_gen() { sed -n 's|^[0-9a-f]\{64\}  shared/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST"; }
 request() {
   local seat=$1 name=$2
   shift 2

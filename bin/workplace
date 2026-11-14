@@ -746,7 +746,7 @@ end_key_agent() {
 key_step() {
   local home=$1 who=$2
   shift 2
-  if ! setsid -w "$@" < /dev/null > "$build_dir/key.out" 2>&1; then
+  if ! setsid -w "$@" < /dev/null > "$build_dir/key.out" 2>&1 7>&-; then
     end_key_agent "$home"
     die "build refuses: the key of $who cannot be made: $(tail -n 2 "$build_dir/key.out" | tr '\n' ' ')" 2
   fi
@@ -765,7 +765,7 @@ check_ssh_keys() {
     [[ -n $file ]] || die "cannot find the file of the ssh key $name in the plan's view" 2
     [[ -e $file || -L $file ]] || die "build refuses: the ssh key $name, $file, is missing"
     [[ -f $file ]] || die "build refuses: the ssh key $name, $file, is not a regular file"
-    if ! line=$(setsid -w ssh-keygen -y -P '' -f "$file" < /dev/null 2> "$build_dir/key.out"); then
+    if ! line=$(setsid -w ssh-keygen -y -P '' -f "$file" < /dev/null 2> "$build_dir/key.out" 7>&-); then
       out=$(tail -n 1 "$build_dir/key.out")
       rm -f -- "$build_dir/key.out"
       [[ $out == *"incorrect passphrase"* ]] && die "build refuses: the ssh key $name, $file, asks for a passphrase, and build loads only a key that asks for none"
@@ -801,14 +801,14 @@ load_ssh_keys() {
   for name in "$@"; do
     printf '%s\n' "${ssh_line[$name]}" > "$home/ssh/$name.pub" && chmod 0444 -- "$home/ssh/$name.pub" || die "cannot write $home/ssh/$name.pub" 2
   done
-  if ! setsid -w gpg-agent --homedir "$home" --daemon --batch < /dev/null > "$build_dir/key.out" 2>&1; then
+  if ! setsid -w gpg-agent --homedir "$home" --daemon --batch < /dev/null > "$build_dir/key.out" 2>&1 7>&-; then
     end_key_agent "$home"
     die "build refuses: the agent that loads the ssh keys of $who did not start: $(tail -n 1 "$build_dir/key.out")" 2
   fi
   socket=$(gpgconf --homedir "$home" --list-dirs agent-ssh-socket)
   for name in "$@"; do
     if ! env -u DISPLAY -u WAYLAND_DISPLAY -u SSH_ASKPASS SSH_ASKPASS_REQUIRE=never SSH_AUTH_SOCK="$socket" \
-      setsid -w ssh-add -q - < "${ssh_file[$name]}" > "$build_dir/key.out" 2>&1; then
+      setsid -w ssh-add -q - < "${ssh_file[$name]}" > "$build_dir/key.out" 2>&1 7>&-; then
       end_key_agent "$home"
       die "build refuses: the ssh key $name, ${ssh_file[$name]}, cannot be loaded for $who: $(tail -n 1 "$build_dir/key.out")"
     fi
@@ -1049,7 +1049,7 @@ make_homes() {
           environment=()
           for out in "${inherit[@]}"; do [[ -n ${!out+x} ]] && environment+=("$out=${!out}"); done
           mapfile -t -O "${#environment[@]}" environment < <(jq -r '.[] | "\(.[0])=\(.[1])"' <<< "$pairs")
-          ( cd -- "$path" && "$setpriv_program" --no-new-privs "$env_program" -i "${environment[@]}" "PWD=$path" "$seed" "${words[@]}" ) \
+          ( cd -- "$path" && "$setpriv_program" --no-new-privs "$env_program" -i "${environment[@]}" "PWD=$path" "$seed" "${words[@]}" 7>&- ) \
             < /dev/null > "$build_dir/seed.out" 2>&1
           status=$?
           if (( status != 0 )); then
@@ -1116,7 +1116,7 @@ make_mail() {
   store=$state_dir/mail comms=$state_dir/comms
   if [[ ! -e $store && ! -L $store ]]; then
     mkdir -m 0700 -- "$store" || die "cannot make $store" 2
-    store_env "$store" git init -q --template= -b mail -- "$store" > "$build_dir/git.out" 2>&1
+    store_env "$store" git init -q --template= -b mail -- "$store" > "$build_dir/git.out" 2>&1 7>&-
     status=$?
     if (( status != 0 )); then
       rm -rf -- "$store"
@@ -1228,6 +1228,42 @@ build_floor_seats() {
   make_homes "$holders" "$(jq -r '.name // "default"' <<< "$report")"
   [[ -n $folded ]] && make_records "$(jq -r '.name // "default"' <<< "$report")"
   return 0
+}
+
+# With floors a build first takes its state (5.160 point 2, 5.162; the addendum's P5 and Q8): S itself, mode 0700;
+# the build's lock, held for the whole build and closed in every process the build starts; its holder; the
+# generations' lock; and the counter of generations. Each is a file of this user's with mode 0600. A generation's
+# number is the counter's, or one above the highest that BUILD holds, named or not, so that a number a stopped
+# build left is never taken again; the counter outlives unbuild, since S stands.
+build_state_begin() {
+  local workplace=$1 base s name f next d n
+  command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
+  base=$(state_root) || die "build needs the workplaces' state directory for its locks, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
+  s=$base/$workplace
+  mkdir -p -- "${s%/*/*}" && { [[ -d ${s%/*} ]] || mkdir -m 0700 -- "${s%/*}"; } && { [[ -d $s ]] || mkdir -m 0700 -- "$s"; } \
+    || die "cannot make the state directory $s" 2
+  [[ -d $s && ! -L $s && $(stat -c %a -- "$s") == 700 ]] || die "the state directory $s has the mode $(stat -c %a -- "$s"), not 700" 2
+  for name in build.lock build.holder generations.lock generation.next; do
+    f=$s/$name
+    if [[ ! -e $f && ! -L $f ]]; then ( umask 077 && : >> "$f" ) || die "cannot make $f" 2; fi
+    [[ -f $f && ! -L $f && $(stat -c %a -- "$f") == 600 && $(stat -c %u -- "$f") == "$EUID" ]] \
+      || die "build refuses: $f is not a file of this user's with mode 600, where the frame keeps its locks and its count of generations"
+  done
+  exec 7>> "$s/build.lock" || die "cannot open $s/build.lock" 2
+  if ! flock -w 2 7; then
+    die "build refuses: another build of this workplace holds its lock, $s/build.lock: $(jq -r '"\(.command // "a build"), process \(.pid // "unnamed"), since \(.at // "an unnamed time")"' "$s/build.holder" 2> /dev/null || printf 'its holder names no process')"
+  fi
+  ( umask 077 && jq -n -c --arg c build --argjson p "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{command: $c, pid: $p, at: $at}' > "$s/build.holder.new" ) \
+    && mv -f -- "$s/build.holder.new" "$s/build.holder" || die "cannot write $s/build.holder" 2
+  next=$(< "$s/generation.next") || die "cannot read $s/generation.next" 2
+  [[ $next =~ ^[1-9][0-9]{0,8}$ ]] || next=1
+  for d in "$build_dir"/shared/* "$build_dir"/floors/*/*; do
+    n=${d##*/}
+    [[ $n =~ ^[1-9][0-9]{0,8}$ ]] && (( n + 1 > next )) && next=$(( n + 1 ))
+  done
+  ( umask 077 && printf '%s\n' "$(( next + 1 ))" > "$s/generation.next.new" ) && mv -f -- "$s/generation.next.new" "$s/generation.next" \
+    || die "cannot write $s/generation.next" 2
+  build_generation=$next
 }
 
 cmd_build() {
@@ -1351,7 +1387,10 @@ cmd_build() {
   (( ${#floor_keys[@]} )) || mapfile -t floor_keys < <(jq -r '.programs[].plan[]? | (if type == "object" then .term else . end)
     | select(type == "array" and .[0] == "floor") | .[1]' "$plan_dir/plan.json")
   local gen=1 shared=""
-  (( ${#floor_keys[@]} )) && shared=shared/$gen
+  if (( ${#floor_keys[@]} )); then
+    build_state_begin "$(jq -r '.name // "default"' <<< "$report")"
+    gen=$build_generation shared=shared/$build_generation
+  fi
   local copies=$build_dir${shared:+/$shared}
   local -a sources=("$plan_dir/plan.json" "$plan_dir/manifest.json" "$tool/host/binding.json"
     "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq")

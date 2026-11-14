@@ -178,6 +178,22 @@ def floors_problems($binding):
        | "the floor \($f) holds no office and no room")
     end;
 
+# The floor of each term of a plan with floors (5.124 point 1, 5.160 point 8). A floor or a house term names its own
+# floor. A coordinate term's first key is a floor of rooms' key, which is its own session, or an office, which a house
+# places on one floor. The workplace term is every floor's, and so it has none: null.
+def floor_index($binding):
+  ($binding.structure.floors) as $fs
+  | plan_terms as $all
+  | {housed: ([$all[] | select(.term[0] == $fs.house) | {key: .term[2], value: .term[1]}] | from_entries),
+     rooms: [$all[] | select(.term[0] == $fs.floor and .term[$fs.houses] == "rooms") | .term[$fs.key]]};
+
+def term_floor($binding; $ix):
+  ($binding.structure.floors) as $fs
+  | if .[0] == $fs.workplace then null
+    elif .[0] == $fs.floor or .[0] == $fs.house then .[1]
+    elif (.[1] | type) != "string" then null
+    else .[1] as $k | if ($ix.rooms | index($k)) != null then $k else $ix.housed[$k] end end;
+
 def count_problems($binding):
   # The binding's exactly-one terms in a plan without floors. With floors S1 speaks of the server instead, and
   # without floors a plan with no server is refused by S1 (floors_problems), so one fault gives one line (5.136).

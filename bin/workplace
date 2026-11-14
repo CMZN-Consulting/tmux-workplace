@@ -20,6 +20,8 @@ floor_sub=""
 # Where build writes a floor's keys, homes and records: BUILD itself without floors, and the floor's generation
 # BUILD/floors/F/N with them (5.160 point 2). floor_sub stays the floor's state path, filter and unit.
 build_out=""
+# With floors, the floor a command acts on, and where that floor's run and its build files stand (5.160 point 8).
+run_floor="" f_gen=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
 LOG_PROGRAMS=(dd date tail head)
@@ -105,6 +107,7 @@ locate() {
   build_dir=$clone/BUILD
   run_dir=$build_dir/RUN
   build_resolve
+  f_gen=$build_dir
 }
 
 jq_message() {
@@ -1212,7 +1215,17 @@ make_mail() {
   fi
   [[ -d $store && ! -L $store && -d $store/.git && ! -L $store/.git && $(stat -c %a -- "$store") == 700 && $(stat -c %u -- "$store") == "$EUID" ]] \
     || die "build refuses: $store is not the mail's repository, a directory of this user's with mode 700 that holds .git"
-  make_dirs "$state_dir" comms/taken || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
+  # With floors each floor's carrier keeps what it takes in its own state, S/floors/F/comms/taken (5.162 point 1).
+  local taken_floor
+  make_dirs "$state_dir" comms || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps its record"
+  if (( ${#floor_keys[@]} )); then
+    for taken_floor in "${floor_keys[@]}"; do
+      make_dirs "$state_dir" "floors/$taken_floor/comms/taken" \
+        || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
+    done
+  else
+    make_dirs "$state_dir" comms/taken || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
+  fi
   if [[ ! -e $comms/record && ! -L $comms/record ]]; then
     : > "$comms/record" && chmod 0600 -- "$comms/record" || die "cannot make $comms/record" 2
   fi
@@ -1563,8 +1576,13 @@ build_resolve() {
   local top=${1-} line name at
   b_shared="" b_layout=flat b_floors=()
   declare -gA b_floor=()
-  if [[ -z $top && -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]]; then
-    top=$(< "$build_dir/MANIFEST") || top=""
+  if [[ -z $top ]]; then
+    b_top="" b_top_sha=""
+    if [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]]; then
+      IFS= read -r -d '' b_top < "$build_dir/MANIFEST" || true
+      b_top_sha=$(printf '%s' "$b_top" | sha256sum) && b_top_sha=${b_top_sha%% *}
+    fi
+    top=$b_top
   fi
   while IFS= read -r line; do
     name=${line#*  }
@@ -1587,10 +1605,13 @@ verify_build() {
   [[ -d $build_dir ]] || { warn "no build at $build_dir"; return 1; }
   [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]] || { warn "$build_dir has no MANIFEST"; return 1; }
   local top line name file rel gen g shared_lines=0
-  top=$(< "$build_dir/MANIFEST") || { warn "cannot read $build_dir/MANIFEST"; return 1; }
+  # The top is read once, by locate (5.162; the addendum's P4): its bytes, its sha and the generations it names.
+  top=$b_top
+  [[ -n $top ]] || { warn "cannot read $build_dir/MANIFEST"; return 1; }
   build_resolve "$top"
   local -A want=() skip=()
   while IFS= read -r line; do
+    [[ -n $line ]] || continue
     name=${line#*  }
     [[ $line == *"  "* && -n $name ]] || { warn "MANIFEST holds a line that is not a hash and a name"; return 1; }
     want[$name]=${line%%  *}
@@ -1662,6 +1683,58 @@ verify_build() {
   return 0
 }
 
+# With floors, up, down and restart name their floor, and carry and status may (5.160 point 8). A name that is no
+# floor of the build is refused, with exit 2.
+floor_word() {
+  local command=$1 count=$2 floor=${3-}
+  [[ $b_layout == generations ]] || return 0
+  (( count >= 1 )) || die "with floors, $command names its floor: workplace $command F" 2
+  [[ -n ${b_floor[$floor]+x} ]] || die "the build has no floor $floor" 2
+}
+
+# Act on the floor F, or, with none, on the workplace without floors: its run directory RUN/F, and the generation
+# that holds its keys, homes and records.
+floor_scope() {
+  local floor=${1-}
+  if [[ -n $floor ]]; then
+    run_floor=$floor run_dir=$build_dir/RUN/$floor f_gen=$build_dir/${b_floor[$floor]-}
+  else
+    run_floor="" run_dir=$build_dir/RUN f_gen=$build_dir
+  fi
+}
+
+# The floor of the seat NAME, read in the build's plan; nothing where no pane is named so.
+seat_floor() {
+  jq -r -L "$build_dir/libexec" --arg n "$1" --slurpfile b "$build_dir/binding.json" '
+    include "table";
+    floor_index($b[0]) as $ix
+    | first(plan_terms[] | .term | select(.[0] == "pane" and .[4] == $n) | term_floor($b[0]; $ix)) // empty' "$b_plan" 2> /dev/null
+}
+
+# The floor's own lock, S_F/up.lock, and its holder (5.162; the addendum's Q8 and R7): an up or a restart of F holds
+# it, and a second, or a build of F, is refused with exit 1, naming the holder. Its descriptor, fd 6, is closed in
+# every process the command starts.
+floor_lock() {
+  local floor=$1 command=$2 base s file
+  command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
+  base=$(state_root) || die "$command needs the workplaces' state directory for the floor's lock, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
+  s=$base/$(jq -r '.name // "default"' <<< "$report")/floors/$floor
+  [[ -d $s && ! -L $s ]] || die "$command refuses: the floor $floor's state $s is missing; build again"
+  for file in up.lock up.holder; do
+    if [[ ! -e $s/$file && ! -L $s/$file ]]; then ( umask 077 && : >> "$s/$file" ) || die "cannot make $s/$file" 2; fi
+    [[ -f $s/$file && ! -L $s/$file && $(stat -c %a -- "$s/$file") == 600 && $(stat -c %u -- "$s/$file") == "$EUID" ]] \
+      || die "$command refuses: $s/$file is not a file of this user's with mode 600, where the frame keeps the floor's lock"
+  done
+  exec 6>> "$s/up.lock" || die "cannot open $s/up.lock" 2
+  if ! flock -n 6; then
+    die "$command refuses: $(jq -r --arg f "$floor" '"\(.command // "a command") holds the floor \($f), process \(.pid // "unnamed")"' "$s/up.holder" 2> /dev/null || printf 'another command holds the floor %s' "$floor"); run it again when that ends"
+  fi
+  ( umask 077 && jq -n -c --arg c "$command" --argjson p "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{command: $c, pid: $p, at: $at}' > "$s/up.holder.new" ) \
+    && mv -f -- "$s/up.holder.new" "$s/up.holder" || die "cannot write $s/up.holder" 2
+}
+
+floor_unlock() { exec 6>&-; }
+
 caller_locale() {
   if [[ -n ${caller_lc_all+set} ]]; then LC_ALL=$caller_lc_all; else unset LC_ALL; fi
 } 2> /dev/null
@@ -1669,7 +1742,7 @@ caller_locale() {
 run_call() {
   local -n _out=$1
   shift
-  _out=$(caller_locale; "$@" 2> "$run_dir/call.err")
+  _out=$(caller_locale; "$@" 2> "$run_dir/call.err" 6>&-)
 }
 
 log_call() {
@@ -1894,10 +1967,10 @@ start_agents() {
     [[ -d $runtime/gnupg ]] || mkdir -m 0700 -- "$runtime/gnupg" 2> /dev/null
   fi
   state=$(jq -c --arg r "$state_dir" '.slots[(["state-root"] | tojson)] = $r' <<< "$state")
-  [[ -f $build_dir/keys.json ]] || return 0
-  local keys=$build_dir/keys.json made_in
+  [[ -f $f_gen/keys.json ]] || return 0
+  local keys=$f_gen/keys.json made_in
   made_in=$(jq -r '.state' "$keys")
-  if [[ $made_in != "$state_dir/$(jq -r '.workplace' "$keys")" ]]; then
+  if [[ $made_in != "$state_dir/$(jq -r '.workplace' "$keys")${run_floor:+/floors/$run_floor}" ]]; then
     warn "the keys were made in $made_in, and this shell's state directory is ${state_dir:-unknown}; build again from this shell"
     return 1
   fi
@@ -1913,7 +1986,7 @@ start_agents() {
     warn "the machine's $machine_conf says batch, which every agent of GnuPG reads, and an agent that serves a seat with it takes any key added through its ssh socket; up refuses until that line is gone"
     return 1
   fi
-  local view=$made_in/gnupg holder home name pid answer extra ssh socket_dir who socket records=$build_dir/records.json log_dir offers grant_name grant_grip grant_fpr
+  local view=$made_in/gnupg holder home name pid answer extra ssh socket_dir who socket records=$f_gen/records.json log_dir offers grant_name grant_grip grant_fpr
   local -a seat ask log offer
   while IFS= read -r holder; do
     home=$made_in/$(jq -r '.home' <<< "$holder")
@@ -2036,7 +2109,7 @@ check_values() {
   state_dir=$(workplace_state "$workplace") || state_dir=""
   [[ -n $state_dir ]] && state=$(jq -c --arg f "$state_dir/values.json" '.slots[(["values-file"] | tojson)] = $f' <<< "$state")
   seats='[]'
-  [[ -f $b_view ]] && seats=$(jq -c '[.seats[] | select(has("expects")) | {seat, names: [.expects[].name]}]' "$b_view")
+  [[ -f $b_view ]] && seats=$(jq -c --arg f "$run_floor" '[.seats[] | select(has("expects") and ($f == "" or .floor == $f)) | {seat, names: [.expects[].name]}]' "$b_view")
   file=$state_dir/values.json
   if [[ -n $state_dir && ( -e $file || -L $file ) ]]; then
     mapfile -t problems < <(values_problems "$file")
@@ -2073,10 +2146,10 @@ seat_name() {
 }
 
 set_homes() {
-  local homes=$build_dir/homes.json made_in state_dir entry key path
+  local homes=$f_gen/homes.json made_in state_dir entry key path
   [[ -f $homes ]] || return 0
   made_in=$(jq -r '.state' "$homes")
-  state_dir=$(workplace_state "$(jq -r '.workplace' "$homes")") || state_dir=""
+  state_dir=$(workplace_state "$(jq -r '.workplace' "$homes")") && state_dir=$state_dir${run_floor:+/floors/$run_floor} || state_dir=""
   if [[ $made_in != "$state_dir" ]]; then
     warn "the homes were made in $made_in, and this shell's state directory is ${state_dir:-unknown}; build again from this shell"
     return 1
@@ -2117,7 +2190,7 @@ set_mail() {
     state=$(jq -c --argjson e "$entry" --arg p "$(jq -r '.path' "$mail")" '
       .slots[(["mail-path"] | tojson)] = $p
       | reduce ("out", "in", "sent", "answers") as $d (.; .slots[(["mail-" + $d] + $e.seat | tojson)] = $e[$d])' <<< "$state")
-  done < <(jq -c '.seats[]' "$mail")
+  done < <(jq -c --arg f "$run_floor" '.seats[] | select($f == "" or .floor == $f)' "$mail")
 }
 
 records_marked() {
@@ -2127,10 +2200,20 @@ records_marked() {
 }
 
 set_records() {
-  local records=$build_dir/records.json made_in state_dir path chain entry binds key slot place
+  local records=$f_gen/records.json made_in state_dir path chain entry binds key slot place
   [[ -f $records ]] || return 0
   made_in=$(jq -r '.state' "$records")
-  state_dir=$(workplace_state "$(jq -r '.workplace' "$records")") || state_dir=""
+  state_dir=$(workplace_state "$(jq -r '.workplace' "$records")") && state_dir=$state_dir${run_floor:+/floors/$run_floor} || state_dir=""
+  # With floors a seat may read the record of a seat on another floor; its directory is named from the shared,
+  # verified plan, S/floors/G/records/NAME (C102), and not read from that floor's files.
+  local where='{}' sroot=""
+  if [[ -n $run_floor ]]; then
+    sroot=$(workplace_state "$(jq -r '.workplace' "$records")") || sroot=""
+    where=$(jq -c -L "$build_dir/libexec" --slurpfile b "$build_dir/binding.json" '
+      include "table";
+      floor_index($b[0]) as $ix | [plan_terms[] | .term | select(.[0] == "pane") | {key: .[4], value: term_floor($b[0]; $ix)}] | from_entries' "$b_plan") \
+      || { warn "cannot read the floors of the seats in $b_plan"; return 1; }
+  fi
   if [[ $made_in != "$state_dir" ]]; then
     warn "the records were made in $made_in, and this shell's state directory is ${state_dir:-unknown}; build again from this shell"
     return 1
@@ -2145,7 +2228,11 @@ set_records() {
   fi
   while IFS= read -r entry; do
     [[ -d $(jq -r '.dir' <<< "$entry") ]] || { warn "the record of $(jq -r '.name' <<< "$entry") is missing; build again"; return 1; }
-    binds=$(jq -c --slurpfile r "$records" --arg p "$path" '[.reads[] as $n | $r[0].seats[] | select(.name == $n) | [.dir, "\($p)/\($n)"]]' <<< "$entry")
+    binds=$(jq -c --slurpfile r "$records" --arg p "$path" --argjson where "$where" --arg s "$sroot" '
+      [.reads[] as $n
+       | (first($r[0].seats[] | select(.name == $n) | .dir)
+          // (if $where[$n] != null then "\($s)/floors/\($where[$n])/records/\($n)" else empty end)) as $d
+       | [$d, "\($p)/\($n)"]]' <<< "$entry")
     [[ -n $path ]] || continue
     state=$(jq -c --argjson k "$(jq -c '.seat' <<< "$entry")" --arg b "$binds" '.slots[(["record-binds"] + $k | tojson)] = $b' <<< "$state")
   done < <(jq -c '.seats[]' "$records")
@@ -2175,7 +2262,7 @@ set_runtime() {
 }
 
 set_pipes() {
-  local records=$build_dir/records.json entry pane cmd out setpriv tmux socket
+  local records=$f_gen/records.json entry pane cmd out setpriv tmux socket
   [[ -f $records ]] || return 0
   setpriv=$(jq -r '.slots[(["program", "setpriv"] | tojson)]' <<< "$state")
   tmux=$(jq -r '.slots[(["program", "tmux"] | tojson)]' <<< "$state")
@@ -2195,14 +2282,14 @@ set_pipes() {
 }
 
 start_carrier() {
-  [[ -f $b_mail || -f $build_dir/records.json ]] || return 0
+  [[ -f $b_mail || -f $f_gen/records.json ]] || return 0
   local setpriv_program stat_program systemctl_program pid="" ident i fd now chain="" unit="" invocation
   setpriv_program=$(command -v setpriv) && stat_program=$(command -v stat) || { warn "up needs setpriv and stat for the carrier"; return 1; }
   mkdir -- "$run_dir/carrier" && ident=$(stat -c %d:%i -- "$run_dir/carrier") || { warn "cannot make $run_dir/carrier"; return 1; }
-  [[ -f $build_dir/records.json ]] && chain=$(jq -r '.chain // empty' "$build_dir/records.json")
+  [[ -f $f_gen/records.json ]] && chain=$(jq -r '.chain // empty' "$f_gen/records.json")
   exec {fd}<> <(:)
   if [[ $chain == journal ]]; then
-    unit=$(jq -r '.unit' "$build_dir/records.json")
+    unit=$(jq -r '.unit' "$f_gen/records.json")
     systemctl_program=$(command -v systemctl)
     if systemctl --user is-active --quiet "$unit" 2> /dev/null; then
       warn "the carrier's unit $unit is running already; another run of this workplace may be up"
@@ -2213,7 +2300,7 @@ start_carrier() {
     [[ -n ${HOME-} ]] && environment+=(--setenv=HOME="$HOME")
     [[ -n ${XDG_STATE_HOME-} ]] && environment+=(--setenv=XDG_STATE_HOME="$XDG_STATE_HOME")
     if ! systemd-run --user --quiet --collect --unit="$unit" -p WorkingDirectory=/ -p NoNewPrivileges=yes -p KillMode=mixed -p SyslogIdentifier=workplace-carrier "${environment[@]}" \
-      -- "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry > "$run_dir/carrier.log" 2>&1; then
+      -- "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry ${run_floor:+"$run_floor"} > "$run_dir/carrier.log" 2>&1; then
       warn "the user manager did not start the carrier's unit $unit: $(tail -n 1 "$run_dir/carrier.log")"
       return 1
     fi
@@ -2249,7 +2336,7 @@ start_carrier() {
     say "up: the carrier, unit $unit, invocation $invocation"
     return 0
   fi
-  ( cd / && exec "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry < /dev/null > "$run_dir/carrier.log" 2>&1 ) &
+  ( cd / && exec "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry ${run_floor:+"$run_floor"} < /dev/null > "$run_dir/carrier.log" 2>&1 ) &
   pid=$!
   for (( i = 0; i < 100; i++ )); do
     [[ -e $run_dir/carrier/ready ]] && break
@@ -2277,14 +2364,18 @@ start_carrier() {
 }
 
 cmd_up() {
-  (( $# == 0 )) || die "up takes no arguments" 2
   need_jq
   need_tmux
   locate
-  verify_build || die "up starts only a verified build, and never builds"
-  if jq -e 'any(.programs[].plan[]?; (if type == "object" then .term else . end) | .[0] == "floor")' "$b_plan" > /dev/null 2>&1; then
-    die "the build stands on floors; this frame plans and builds floors and does not yet stand them up, which comes with S2's stop 4" 2
+  # With floors, up stands one floor up, F, on its own server and run directory RUN/F (5.160 point 8).
+  if [[ $b_layout == generations ]]; then
+    (( $# <= 1 )) || die "up takes one floor" 2
+    floor_word up $# "${1-}"
+    floor_scope "$1"
+  else
+    (( $# == 0 )) || die "up takes no arguments" 2
   fi
+  verify_build ${run_floor:+"$run_floor"} || die "up starts only a verified build, and never builds"
   local view_file=/dev/null
   [[ -f $b_view ]] && view_file=$b_view
   plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
@@ -2292,13 +2383,33 @@ cmd_up() {
   if [[ -f $b_view ]] && jq -e 'any(.seats[]?; has("expects"))' "$b_view" > /dev/null 2>&1; then
     need_version env --version "$ENV_FLOOR"
   fi
+  if [[ -n $run_floor ]]; then
+    floor_lock "$run_floor" "up $run_floor"
+    # A floor on the default socket, Management's, comes with 4a2 (5.167): its socket's refusals, its server without
+    # the bar, its seats' mailboxes on the machine and the frame's set after its own file.
+    if [[ $(jq -r --arg f "$run_floor" '[.programs[].plan[]? | (if type == "object" then .term else . end)
+        | select(type == "array" and .[0] == "floor" and .[1] == $f) | .[5]][0] // ""' "$b_plan") == tmux-default ]]; then
+      floor_unlock
+      die "up refuses the floor $run_floor: it stands on the default socket, and a floor there, with its server without the bar, its seats' mailboxes on the machine and the frame's set after its own file, comes with S2's stop 4a2 (5.167)"
+    fi
+  fi
   local socket=$run_dir/$(jq -r '.name // "default"' <<< "$report") tmux_dir=${TMUX_TMPDIR:-/tmp}/tmux-$EUID tmux_default=/tmp/tmux-$EUID
   (( ${#socket} <= 107 )) \
     || die "the server's socket would be $socket, ${#socket} bytes, and a socket's path holds at most 107; give the clone a shorter path" 2
   [[ -d $tmux_dir ]] || tmux_dir=""
   [[ -d $tmux_default && $tmux_default != "$tmux_dir" ]] || tmux_default=""
   refuse_closed_names "$b_view" "$b_plan" || die "up refuses: a seat's view would hold a closed directory under another name"
-  mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
+  if [[ -n $run_floor ]]; then
+    # RUN is made without -p, so that an up that finds BUILD gone stops here.
+    [[ -d $build_dir/RUN ]] || mkdir -- "$build_dir/RUN" 2> /dev/null || [[ -d $build_dir/RUN ]] || die "cannot make $build_dir/RUN" 2
+    mkdir -- "$run_dir" 2> /dev/null || die "the floor $run_floor is up already ($run_dir exists); run workplace down $run_floor first"
+    floor_unlock
+    # In 4a a floor's server reads no file of the floor's own: it starts on this empty one, and the frame's set that
+    # must follow the floor's file comes with that file in 4a2 (5.167 point 5). status says so.
+    : > "$run_dir/tmux.conf" || die "cannot write $run_dir/tmux.conf" 2
+  else
+    mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
+  fi
   local run
   printf -v run 'workplace-%08x%08x' "$SRANDOM" "$SRANDOM"
   jq -c '.tables' <<< "$report" > "$run_dir/tables.json"
@@ -2321,19 +2432,42 @@ cmd_up() {
     die "up stopped before its first term; every agent and carrier it started is ended"
   fi
   local -a records
-  local ordered
-  ordered=$(jq -c -L "$build_dir/libexec" --arg root "$root" --slurpfile b "$build_dir/binding.json" '
+  local ordered expected=$plan_terms
+  # With floors, F's terms alone, after a server term derived from the floor (on the run's empty file, above) and, for a
+  # floor of rooms, its session, which the floor stands for (C101). A term of no floor but the workplace is refused.
+  ordered=$(jq -c -L "$build_dir/libexec" --arg root "$root" --arg f "$run_floor" --arg conf "$run_dir/tmux.conf" --slurpfile b "$build_dir/binding.json" '
     include "table";
     $b[0].order as $order
     | joined($b[0]; $root)
     | [.programs[] | .path as $p | .plan | to_entries[]
-       | {path: $p, n: (.key + 1), term: (.value | if type == "object" then .term else . end)}]
+       | {path: $p, n: (.key + 1), term: (.value | if type == "object" then .term else . end)}] as $all
+    | if $f == "" then $all
+      else
+        $b[0].structure.floors as $fs
+        | floor_index($b[0]) as $ix
+        | ([$all[] | select(.term[0] != $fs.workplace and (.term | term_floor($b[0]; $ix)) == null)] | length) as $loose
+        | if $loose > 0 then error("the plan holds \($loose) terms of no floor") else . end
+        | ([$all[] | select(.term[0] == $fs.workplace)][0]) as $w
+        | ([$all[] | select(.term[0] == $fs.floor and .term[$fs.key] == $f)][0]) as $fl
+        | [{path: $fl.path, n: $fl.n, term: [$fs.server, $w.term[1], $conf]}]
+          + (if $fl.term[$fs.houses] == "rooms" then [{path: $fl.path, n: $fl.n, term: [$fs.session, $f, $fl.term[$fs.name]]}] else [] end)
+          + [$w]
+          + [$all[] | select(.term[0] != $fs.workplace and (.term | term_floor($b[0]; $ix)) == $f)]
+      end
     | sort_by(.term[0] as $name | $order | index($name))[]' "$b_plan") \
     || { rm -rf -- "$run_dir"; die "cannot order the plan's terms"; }
   mapfile -t records <<< "$ordered"
-  if (( ${#records[@]} != plan_terms )); then
+  if [[ -n $run_floor ]]; then
+    expected=$(jq -r -L "$build_dir/libexec" --arg f "$run_floor" --slurpfile b "$build_dir/binding.json" '
+      include "table";
+      floor_index($b[0]) as $ix
+      | [plan_terms[] | .term | select(term_floor($b[0]; $ix) == $f)] as $own
+      | ($own | length) + 2 + ([$own[] | select(.[0] == "floor" and .[3] == "rooms")] | length)' "$b_plan") \
+      || { rm -rf -- "$run_dir"; die "cannot count the floor's terms"; }
+  fi
+  if (( ${#records[@]} != expected )); then
     rm -rf -- "$run_dir"
-    die "the plan holds $plan_terms terms, and ${#records[@]} were ordered"
+    die "the plan holds $expected terms for this run, and ${#records[@]} were ordered"
   fi
   local record applied=0 piped=0
   for record in "${records[@]}"; do
@@ -2364,10 +2498,13 @@ cmd_up() {
   read_server "$(jq -r '.slots[(["program", "setpriv"] | tojson)]' <<< "$state")" "$(jq -r '.slots[(["program", "tmux"] | tojson)]' <<< "$state")" \
     "$(jq -r '.slots[(["socket-path"] | tojson)]' <<< "$state")"
   (( server_up )) && state=$(jq -c --arg p "$server_pid" '.slots[(["server-pid"] | tojson)] = $p' <<< "$state")
+  # With floors, the run names its floor and the build it read: the top's sha and the generations, from the one read.
+  [[ -n $run_floor ]] && state=$(jq -c --arg f "$run_floor" --arg top "$b_top_sha" --arg shared "$b_shared" --arg gen "${b_floor[$run_floor]}" \
+    '. + {floor: $f, top: $top, generations: {shared: $shared, floor: $gen}}' <<< "$state")
   printf '%s\n' "$state" > "$run_dir/state.json"
   jq -n --argjson st "$state" \
     '[$st.slots | to_entries[] | {slot: (.key | fromjson), value: .value}]' > "$run_dir/slots.json"
-  say "up: $applied terms applied; run $run"
+  say "up: ${run_floor:+the floor $run_floor, }$applied terms applied; run $run"
 }
 
 cmd_exec() {
@@ -2375,11 +2512,21 @@ cmd_exec() {
   if [[ ${1-} == --print ]]; then print=1; shift; fi
   [[ ${1-} == -- ]] && shift
   (( $# == 1 )) || die "exec takes a seat's name, with --print and -- before it" 2
-  local seat=$1
+  local seat=$1 floor
   need_jq
   locate
-  [[ -d $run_dir/seats ]] || die "nothing is up under $clone; exec starts a seat of a running workplace" 2
-  verify_build || die "exec starts a seat only from a verified build" 2
+  # With floors a seat's floor is read in the build's plan, and exec acts on that floor's run (5.160 point 8).
+  if [[ $b_layout == generations ]]; then
+    floor=$(seat_floor "$seat")
+    [[ -n $floor && -n ${b_floor[$floor]+x} ]] || die "no seat is named $seat in this workplace" 2
+    floor_scope "$floor"
+    [[ -d $run_dir/seats ]] || die "nothing is up on the floor $floor under $clone; exec starts a seat of a running workplace" 2
+    verify_build "$floor" || die "exec starts a seat only from a verified build" 2
+    [[ $(seat_floor "$seat") == "$floor" ]] || die "the build changed as exec began; run it again" 2
+  else
+    [[ -d $run_dir/seats ]] || die "nothing is up under $clone; exec starts a seat of a running workplace" 2
+    verify_build || die "exec starts a seat only from a verified build" 2
+  fi
   local record file
   file=$(seat_file "$seat") || die "cannot name the seat's record"
   [[ -f $file ]] || die "no seat is named $seat in this workplace" 2
@@ -2494,7 +2641,7 @@ carrier_git() {
     git -C "$store" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false -c gc.auto=0 -c maintenance.auto=false "$@" 9>&-
 }
 
-carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 9>&-; }
+carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 8>&- 9>&-; }
 
 carrier_look() {
   local mark
@@ -2551,6 +2698,67 @@ carrier_next_id() {
   printf -v carrier_id '%s-%06d' "$(date -u +%Y%m%dT%H%M%SZ)" "$n"
 }
 
+# The store's lock (5.162 point 1; the addendum's P1): a lock on the store's directory itself, opened read-only on
+# fd 8, so that it makes no file. One hold serves one delivery. A pass waits for it a second in all, and after a try
+# that fails it tries no more. The descriptor stays open in git's children, so that a git the holder started holds the
+# lock while it lives, and is closed in tmux's. With floors the holder is named in S/store.holder.
+carrier_pass_begin() { hold_left=1000000 hold_over=0; }
+
+carrier_hold() {
+  local final=${1-} t0 t1 wait rc
+  (( carrier_held )) && return 0
+  [[ -n $store ]] || return 1
+  if [[ -n $final ]]; then
+    hold_left=1000000 hold_over=0
+  else
+    (( ! hold_over && ! carrier_stop )) || return 1
+  fi
+  exec 8< "$store" || { warn "cannot open the store $store for its lock"; hold_over=1; return 1; }
+  t0=${EPOCHREALTIME/[^0-9]/}
+  if (( hold_left > 0 )); then
+    printf -v wait '%d.%06d' $(( hold_left / 1000000 )) $(( hold_left % 1000000 ))
+    flock -w "$wait" 8
+    rc=$?
+  else
+    flock -n 8
+    rc=$?
+  fi
+  if (( rc )); then
+    exec 8<&-
+    hold_over=1 hold_left=0
+    return 1
+  fi
+  t1=${EPOCHREALTIME/[^0-9]/}
+  hold_left=$(( hold_left - (t1 - t0) ))
+  (( hold_left > 0 )) || hold_left=0
+  carrier_held=1
+  carrier_holder ""
+  return 0
+}
+
+carrier_holder() {
+  [[ -n $run_floor ]] || return 0
+  jq -n -c --arg f "$run_floor" --argjson p "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg id "$1" \
+    '{floor: $f, pid: $p, at: $at, id: (if $id == "" then null else $id end)}' > "$store_holder.new" \
+    && mv -f -- "$store_holder.new" "$store_holder"
+}
+
+carrier_release() {
+  (( carrier_held )) || return 0
+  [[ -n $run_floor ]] && rm -f -- "$store_holder"
+  exec 8<&-
+  carrier_held=0
+}
+
+# One line of the record. Under the store's lock a torn last line is ended first (5.153); outside it, a line is one
+# write of its own.
+carrier_append() {
+  local line
+  IFS= read -r line || [[ -n $line ]] || return 1
+  (( carrier_held )) && carrier_record_mend
+  printf '%s\n' "$line" >> "$comms/record"
+}
+
 carrier_answer() {
   local answers=$1 name=$2 file=$taken/$carrier_id.answer
   shift 2
@@ -2563,7 +2771,7 @@ carrier_record() {
     --arg action "$action" --argjson target "$targets" --arg outcome "$outcome" --arg reason "$reason" --arg written "$written" '
     {at: $at, id: $id, seat: $seat, request: $request, action: $action, target: $target, outcome: $outcome}
     + (if $reason == "" then {} else {reason: $reason} end)
-    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)' >> "$comms/record"
+    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)' | carrier_append
 }
 
 carrier_refuse() {
@@ -2654,29 +2862,46 @@ carrier_seat_of() {
 }
 
 carrier_journal() {
-  jq -n -c --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" \
-    '{id: $id, box: $box, request: $request, action: $action, seat: $seat}' > "$comms/serving.new" && mv -f -- "$comms/serving.new" "$comms/serving"
+  jq -n -c --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" --arg base "${5-}" \
+    '{id: $id, box: $box, request: $request, action: $action, seat: $seat} + (if $base == "" then {} else {base: $base} end)' \
+    > "$fcomms/serving.new" && mv -f -- "$fcomms/serving.new" "$fcomms/serving"
+}
+
+# Whether seat i has a request to serve: its first entry by name whose change time is at least a second old (C57).
+carrier_eligible() {
+  local i=$1 changed now
+  local -a entries
+  entries=("${seat_out[i]}"/[!.]*)
+  (( ${#entries[@]} )) || return 1
+  eligible_entry=${entries[0]}
+  changed=$(stat -c %.6Z -- "$eligible_entry" 2> /dev/null) || return 1
+  now=$EPOCHREALTIME
+  [[ $changed =~ ^([0-9]+)[^0-9]([0-9]{6})$ ]] || return 1
+  changed=$(( 10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} ))
+  [[ $now =~ ^([0-9]+)[^0-9]([0-9]{6})$ ]] || return 1
+  now=$(( 10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} ))
+  (( now - changed >= 1000000 ))
 }
 
 carrier_serve() {
-  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied changed now typed why
-  local -a entries readers keep paths
-  entries=("${seat_out[i]}"/[!.]*)
-  (( ${#entries[@]} )) || return 0
-  entry=${entries[0]}
+  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied typed why base
+  local -a readers keep paths
+  carrier_eligible "$i" || return 0
+  # One hold of the store's lock for one request; its eligibility is read again under the hold (5.162 point 1).
+  carrier_hold || return 0
+  if ! carrier_eligible "$i"; then carrier_release; return 0; fi
+  entry=$eligible_entry
   name=${entry##*/}
-  changed=$(stat -c %.6Z -- "$entry" 2> /dev/null) || return 0
-  now=$EPOCHREALTIME
-  [[ $changed =~ ^([0-9]+)[^0-9]([0-9]{6})$ ]] || return 0
-  changed=$(( 10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} ))
-  [[ $now =~ ^([0-9]+)[^0-9]([0-9]{6})$ ]] || return 0
-  now=$(( 10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} ))
-  (( now - changed >= 1000000 )) || return 0
-  carrier_next_id || { warn "cannot count the carrier's requests in $comms/next"; return 1; }
-  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || return 0
+  # A dead carrier's add that no commit took is unstaged, so that it rides into no other delivery's commit.
+  [[ $name == *.md ]] && { carrier_git diff --cached --quiet > /dev/null 2>&1 || carrier_git reset -q > /dev/null 2>&1; }
+  carrier_next_id || { carrier_release; warn "cannot count the carrier's requests in $comms/next"; return 1; }
+  carrier_holder "$carrier_id"
+  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || { carrier_release; return 0; }
   action=unknown
   [[ $name =~ ^[A-Za-z0-9._-]+\.(md|grab|write)$ ]] && action=${BASH_REMATCH[1]/md/mail}
-  carrier_journal "${seat_boxes[i]}" "$name" "$action" "${seat_names[i]}" || { warn "cannot write $comms/serving"; return 1; }
+  base=""
+  [[ $action == mail ]] && { base=$(carrier_git rev-parse -q --verify HEAD 2> /dev/null) || base=""; }
+  carrier_journal "${seat_boxes[i]}" "$name" "$action" "${seat_names[i]}" "$base" || { carrier_release; warn "cannot write $fcomms/serving"; return 1; }
   carrier_at=""
   kind=$(stat -c %F -- "$taken/$carrier_id" 2> /dev/null) || kind=unknown
   if [[ $kind != "regular file" && $kind != "regular empty file" ]]; then
@@ -2731,9 +2956,11 @@ carrier_serve() {
         else
           j=$(carrier_seat_of "$(jq -r '.target' <<< "$verdict")")
           pane=${seat_pane[j]-}
-          if [[ -z $pane ]]; then
+          if [[ -n $run_floor && ${seat_fl[j]} != "$run_floor" ]]; then
+            carrier_refuse "$i" "$name" "$action" "$targets" "a grab or a write across floors comes with S2's stop 4b"
+          elif [[ -z $pane ]]; then
             carrier_refuse "$i" "$name" "$action" "$targets" "the pane of ${seat_names[j]} is not one that this run made"
-          elif [[ $action == grab ]]; then
+          elif [[ $action == grab ]] && carrier_release; then
             if ! out=$(carrier_tmux display-message -p -t "$pane" '#{@workplace}' \; capture-pane -p -t "$pane" -S "-$(jq -r '.lines' <<< "$verdict")" 2> /dev/null); then
               carrier_refuse "$i" "$name" grab "$targets" "the pane of ${seat_names[j]} does not answer"
             elif mark=${out%%$'\n'*} && [[ $mark != "$carrier_run" ]]; then
@@ -2744,6 +2971,8 @@ carrier_serve() {
               carrier_record "${seat_names[i]}" "$name" grab "$targets" ok ""
             fi
           else
+            # A grab or a write holds the store's lock for its counter and journal only, and acts without it.
+            carrier_release
             text=$(jq -r '.text' <<< "$verdict")
             key=$(jq -r '.key' <<< "$verdict")
             sum=$(printf '%s' "$text" | sha256sum)
@@ -2774,41 +3003,27 @@ carrier_serve() {
       rm -f -- "$copy"
     fi
   fi
-  rm -f -- "$comms/serving"
+  rm -f -- "$fcomms/serving"
+  carrier_release
 }
 
-carrier_wake_save() {
-  local i
-  for i in "${!seat_names[@]}"; do
-    [[ -n ${seat_wake[i]} ]] || continue
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${seat_boxes[i]}" "${seat_names[i]}" "${wake_n[i]}" "${wake_ids[i]}" "${wake_since[i]}" "${wake_last[i]}"
-  done | jq -R -s '{seats: (split("\n")[:-1] | map(split("\t")
-      | {key: .[0], value: {name: .[1], count: (.[2] | tonumber), ids: (.[3] | split(" ") | map(select(. != ""))),
-                           since: (if .[4] == "" then null else .[4] end), last: (.[5] | tonumber)}}) | from_entries)}' > "$comms/wake.json.new" \
-    && mv -f -- "$comms/wake.json.new" "$comms/wake.json"
-}
-
-carrier_wake_load() {
-  local i
-  local -a fields
-  wake_any=0
-  for i in "${!seat_names[@]}"; do
-    wake_n[i]=0 wake_ids[i]="" wake_since[i]="" wake_last[i]=0
-    [[ -n ${seat_wake[i]} ]] && wake_any=1
-  done
-  (( wake_any )) && [[ -f $comms/wake.json ]] || return 0
-  for i in "${!seat_boxes[@]}"; do
-    [[ -n ${seat_wake[i]} ]] || continue
-    mapfile -d '' -t fields < <(jq --raw-output0 --arg b "${seat_boxes[i]}" \
-      '.seats[$b] // empty | (.count | tostring), (.ids | join(" ")), (.since // ""), (.last | tostring)' "$comms/wake.json" 2> /dev/null)
-    (( ${#fields[@]} == 4 )) && [[ ${fields[0]} =~ ^[0-9]+$ && ${fields[3]} =~ ^[0-9]+$ ]] || continue
-    wake_n[i]=${fields[0]} wake_ids[i]=${fields[1]} wake_since[i]=${fields[2]} wake_last[i]=${fields[3]}
-  done
+# wake.json is written one entry at a time, under the store's lock, from what it holds when the lock is taken, so that
+# two floors' carriers lose none of each other's ids; its seats stand in the order of mail.json (5.162 point 1). Each id
+# keeps its time, so that a seat's first time stays that of the oldest id left.
+carrier_wake_put() {
+  local at=$1 id=$2 program=$3 current='{"seats":{}}'
+  shift 3
+  [[ -f $comms/wake.json ]] && current=$(< "$comms/wake.json")
+  jq -c --arg at "$at" --arg id "$id" --argjson order "$box_order" "$program"'
+    | .seats as $s
+    | .seats = (([$order[] | select($s[.] != null) | {key: ., value: $s[.]}]
+                + [$s | to_entries[] | select(.key as $k | ($order | index($k)) == null)]) | from_entries)' --args "$@" <<< "$current" \
+    > "$comms/wake.json.new" && mv -f -- "$comms/wake.json.new" "$comms/wake.json"
 }
 
 carrier_wake_decision() {
   jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg target "$1" --arg id "$carrier_id" --arg outcome "$2" --arg reason "$3" '
-    {at: $at, seat: "the frame", action: "wake", target: [$target], covers: [$id], outcome: $outcome, reason: $reason}' >> "$comms/record"
+    {at: $at, seat: "the frame", action: "wake", target: [$target], covers: [$id], outcome: $outcome, reason: $reason}' | carrier_append
 }
 
 carrier_cleared_more() {
@@ -2821,7 +3036,8 @@ carrier_wake_note() {
   # At delivery, each reader gets one decision, with its trace (5.146): due, kept in wake.json until a pointer is
   # typed; withheld, where its room is cleared more than the writer's and its kind wakes by itself on its floor; or
   # none, for the writer's own mail and for a kind with no pattern. The writer is not told which.
-  local at=$1 writer=$2 p j w noted=0
+  local at=$1 writer=$2 p j w
+  local -a due=()
   shift 2
   w=$(carrier_seat_of "$writer") || w=""
   for p in "$@"; do
@@ -2831,15 +3047,16 @@ carrier_wake_note() {
     elif [[ -n ${seat_own[j]} && -n $w ]] && carrier_cleared_more "$j" "$w"; then
       carrier_wake_decision "$p" withheld "the room of $p, at ${seat_number[j]}, is cleared more than the writer's, $( [[ ${seat_number[w]} == null ]] && printf 'with no number' || printf 'at %s' "${seat_number[w]}" ), and its kind wakes by itself on its floor, as ${seat_own[j]} rules (5.124 point 8, 5.125 point 17)"
     elif [[ -n ${seat_wake[j]} ]]; then
-      (( wake_n[j] )) || wake_since[j]=$at
-      wake_n[j]=$(( wake_n[j] + 1 ))
-      wake_ids[j]+="${wake_ids[j]:+ }$carrier_id"
-      noted=1
+      due+=("${seat_boxes[j]}")
     else
       carrier_wake_decision "$p" none "its kind has no wake pattern, so no pointer is typed for it (C94)"
     fi
   done
-  (( noted )) && carrier_wake_save
+  (( ${#due[@]} )) && carrier_wake_put "$at" "$carrier_id" '
+    reduce $ARGS.positional[] as $b (.;
+      .seats[$b] = ((.seats[$b] // {name: $b, count: 0, ids: [], since: null, last: 0})
+        | (if (.ids | length) == 0 then .since = $at else . end)
+        | .ids += [$id] | .times = ((.times // {}) + {($id): $at}) | .count = (.ids | length)))' "${due[@]}"
   return 0
 }
 
@@ -2847,30 +3064,34 @@ carrier_wake_record() {
   jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg target "$1" --arg ids "$2" --arg outcome "$3" --arg reason "$4" --arg written "$5" '
     {at: $at, seat: "the frame", action: "wake", target: [$target], covers: ($ids | split(" ")), outcome: $outcome}
     + (if $reason == "" then {} else {reason: $reason} end)
-    + ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]})' >> "$comms/record"
+    + ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]})'
 }
 
 carrier_wake() {
-  local i n count ready out mark text sum outcome reason typed
+  local i n seen ready out mark text sum outcome reason typed entry count ids last
   local -a shown
   (( wake_any )) || return 0
-  for i in "${!seat_names[@]}"; do
+  [[ -f $comms/wake.json ]] || return 0
+  for i in "${own[@]}"; do
     (( carrier_stop )) && break
-    [[ -n ${seat_wake[i]} ]] && (( wake_n[i] > 0 && EPOCHSECONDS - wake_last[i] >= WAKE_PERIOD )) || continue
-    [[ -n ${seat_pane[i]-} ]] || continue
+    [[ -n ${seat_wake[i]} && -n ${seat_pane[i]-} ]] || continue
+    entry=$(jq -c --arg b "${seat_boxes[i]}" '.seats[$b] // empty' "$comms/wake.json" 2> /dev/null) || continue
+    [[ -n $entry ]] || continue
+    count=$(jq -r '.count // 0' <<< "$entry") last=$(jq -r '.last // 0' <<< "$entry") ids=$(jq -r '(.ids // []) | join(" ")' <<< "$entry")
+    [[ $count =~ ^[0-9]+$ && $last =~ ^[0-9]+$ && -n $ids ]] && (( count > 0 && EPOCHSECONDS - last >= WAKE_PERIOD )) || continue
     out=$(carrier_tmux display-message -p -t "${seat_pane[i]}" '#{pane_in_mode}#{pane_dead}:#{@workplace}' \; capture-pane -p -t "${seat_pane[i]}" 2> /dev/null) || continue
     mark=${out%%$'\n'*}
     [[ ${mark#*:} == "$carrier_run" && ${mark%%:*} == 00 ]] || continue
     [[ $out == *$'\n'* ]] && out=${out#*$'\n'} || out=""
     mapfile -t shown <<< "$out"
-    ready=0 count=0
-    for (( n = ${#shown[@]} - 1; n >= 0 && count < 5; n-- )); do
+    ready=0 seen=0
+    for (( n = ${#shown[@]} - 1; n >= 0 && seen < 5; n-- )); do
       [[ -n ${shown[n]} ]] || continue
-      count=$(( count + 1 ))
+      seen=$(( seen + 1 ))
       if [[ ${shown[n]} =~ ${seat_wake[i]} ]]; then ready=1; break; fi
     done
     (( ready )) || continue
-    text="mail: ${wake_n[i]} new, newest ${wake_ids[i]##* }.md, in $mail_path/in, and the page $mail_path/README.md says what this line is"
+    text="mail: $count new, newest ${ids##* }.md, in $mail_path/in, and the page $mail_path/README.md says what this line is"
     sum=$(printf '%s' "$text" | sha256sum)
     carrier_type "${seat_pane[i]}" "$text" Enter
     typed=$?
@@ -2882,11 +3103,32 @@ carrier_wake() {
       5 | 6 | 7 | 8) outcome=refused reason=$(carrier_apart "$typed" "${seat_names[i]}") ;;
       *) outcome=refused reason="tmux did not take the line" ;;
     esac
-    wake_last[i]=$EPOCHSECONDS
-    carrier_wake_record "${seat_names[i]}" "${wake_ids[i]}" "$outcome" "$reason" "${#text} ${sum%% *}"
-    [[ $outcome == ok ]] && wake_n[i]=0 wake_ids[i]="" wake_since[i]=""
-    carrier_wake_save
+    pend_box=${seat_boxes[i]} pend_ids=$ids pend_outcome=$outcome pend_last=$EPOCHSECONDS
+    carrier_wake_record "${seat_names[i]}" "$ids" "$outcome" "$reason" "${#text} ${sum%% *}" | carrier_append
+    carrier_settle || return 0
   done
+}
+
+# A pointer's line is written once it is typed, in one write; its entry is then settled under the store's lock: its time
+# in last, and on ok exactly the ids it named taken out, so that ids delivered meanwhile by another floor stay due. Until
+# it is settled, no other pointer is typed and no request is taken; at the carrier's end it is settled with a hold of
+# its own.
+carrier_settle() {
+  [[ -n $pend_box ]] || return 0
+  carrier_hold ${1-} || return 1
+  carrier_wake_put "" "" '
+    $ARGS.positional as [$b, $last, $outcome, $typed]
+    | if .seats[$b] == null then .
+      else .seats[$b] |= (.last = ($last | tonumber)
+        | if $outcome == "ok" then
+            ($typed | split(" ")) as $t
+            | .ids -= $t | .times = ((.times // {}) | with_entries(select(.key as $k | $t | index($k) | not)))
+            | .count = (.ids | length)
+            | .since = (if .count == 0 then null else (([.times[]?] | min) // .since) end)
+          else . end)
+      end' "$pend_box" "$pend_last" "$pend_outcome" "$pend_ids"
+  pend_box=""
+  carrier_release
 }
 
 carrier_record_mend() {
@@ -2900,22 +3142,34 @@ carrier_record_mend() {
 }
 
 carrier_recover() {
-  local journal box request action seat answers subject reason
+  # Run under a hold of the store's lock of its own, in the loop (5.162 point 1).
+  local journal box request action seat answers reason base commit="" line
   rm -rf -- "$taken"/* 2> /dev/null
-  [[ -f $comms/serving ]] || return 0
-  journal=$(jq -c '.' "$comms/serving" 2> /dev/null) || { rm -f -- "$comms/serving"; return 0; }
+  [[ -f $fcomms/serving ]] || return 0
+  journal=$(jq -c '.' "$fcomms/serving" 2> /dev/null) || { rm -f -- "$fcomms/serving"; return 0; }
   carrier_id=$(jq -r '.id' <<< "$journal") box=$(jq -r '.box' <<< "$journal") request=$(jq -r '.request' <<< "$journal")
-  action=$(jq -r '.action' <<< "$journal") seat=$(jq -r '.seat' <<< "$journal")
+  action=$(jq -r '.action' <<< "$journal") seat=$(jq -r '.seat' <<< "$journal") base=$(jq -r '.base // ""' <<< "$journal")
   answers=$comms/$box/answers
-  if [[ $action == mail ]] && subject=$(carrier_git log -1 --format=%s 2> /dev/null) && [[ $subject == "deliver $carrier_id" ]]; then
+  # The delivery's commit, by its subject: among the commits since the head the journal noted, since another floor's
+  # carrier may have committed after it, or the head alone for a journal that noted none.
+  if [[ $action == mail ]]; then
+    if [[ $base =~ ^[0-9a-f]{40,64}$ ]]; then
+      while IFS=$'\t' read -r line reason; do
+        [[ $reason == "deliver $carrier_id" ]] && { commit=$line; break; }
+      done < <(carrier_git log --format='%H%x09%s' "$base..HEAD" 2> /dev/null)
+    else
+      line=$(carrier_git log -1 --format='%H%x09%s' 2> /dev/null) && [[ ${line#*$'\t'} == "deliver $carrier_id" ]] && commit=${line%%$'\t'*}
+    fi
+  fi
+  if [[ -n $commit ]]; then
     # The readers are those the delivery's commit gave the mail to, read before the answer. For each that the stopped
     # carrier did not decide for, by a line in the record or an entry in wake.json, the carrier decides now, by the build
     # that is up, in the store's order, so the record holds a decision for every reader (5.146 point 3). A due entry is
     # dated by the delivery's commit; a line of the record carries the time it is written (5.153).
     local path box_in reader j k delivered_at listed=1 targets
     local -a names=()
-    carrier_git show -z --name-only --format= HEAD > "$taken/recovered.paths" 2> /dev/null || listed=0
-    delivered_at=$(carrier_git log -1 --format=%ct 2> /dev/null) || delivered_at=""
+    carrier_git show -z --name-only --format= "$commit" > "$taken/recovered.paths" 2> /dev/null || listed=0
+    delivered_at=$(carrier_git log -1 --format=%ct "$commit" 2> /dev/null) || delivered_at=""
     if [[ $delivered_at =~ ^[0-9]+$ ]]; then delivered_at=$(date -u -d "@$delivered_at" +%Y-%m-%dT%H:%M:%SZ); else delivered_at=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
     if (( listed )); then
       while IFS= read -r -d '' path; do
@@ -2927,7 +3181,7 @@ carrier_recover() {
         carrier_decided "$reader" && continue
         if [[ -z $j ]]; then
           carrier_wake_decision "$reader" none "the build no longer makes this seat, so no pointer is typed for it"
-        elif [[ " ${wake_ids[j]-} " != *" $carrier_id "* ]]; then
+        elif ! jq -e --arg b "${seat_boxes[j]}" --arg id "$carrier_id" '(.seats[$b].ids // []) | index($id) != null' "$comms/wake.json" > /dev/null 2>&1; then
           carrier_wake_note "$delivered_at" "$seat" "$reader"
         fi
       done < "$taken/recovered.paths"
@@ -2940,8 +3194,15 @@ carrier_recover() {
     carrier_record "$seat" "$request" mail "$targets" ok "$reason"
   else
     if [[ $action == mail ]]; then
+      # The copies that no commit took are removed by their exact paths, the journal's id's: another floor's untracked
+      # copies, and any other file, stay (5.162 point 1).
       carrier_git reset -q > /dev/null 2>&1
-      carrier_git clean -f -q > /dev/null 2>&1
+      if [[ $carrier_id =~ ^[A-Za-z0-9._-]+$ ]]; then
+        for line in "$store"/*/in/"$carrier_id".md "$store"/*/sent/"$carrier_id".md; do
+          [[ -f $line && ! -L $line ]] || continue
+          carrier_git ls-files --error-unmatch -- "${line#"$store"/}" > /dev/null 2>&1 || rm -f -- "$line"
+        done
+      fi
       reason="the carrier stopped while it served this, and it went to none; leave it in out again"
     else
       reason="the carrier stopped while it served this, and whether it acted is not known"
@@ -2949,7 +3210,7 @@ carrier_recover() {
     [[ -d $answers ]] && carrier_answer "$answers" "$request" "refused $reason"
     carrier_record "$seat" "$request" "$action" '[]' refused "$reason"
   fi
-  rm -f -- "$comms/serving"
+  rm -f -- "$fcomms/serving"
 }
 
 chain_load() {
@@ -3033,24 +3294,39 @@ carrier_watch() {
 }
 
 cmd_carry() {
-  (( $# == 0 )) || die "carry takes no arguments; up starts it" 2
   need_jq
   locate
+  # With floors each floor has its carrier, carry F, which serves its own floor's writers (5.160 point 8, 5.162).
+  if [[ $b_layout == generations ]]; then
+    (( $# <= 1 )) || die "carry takes one floor; up starts it" 2
+    (( $# == 1 )) || die "with floors, carry names its floor: workplace carry F; up starts it" 2
+    [[ -n ${b_floor[$1]+x} ]] || die "the build has no floor $1" 2
+    floor_scope "$1"
+  else
+    (( $# == 0 )) || die "carry takes no arguments; up starts it" 2
+  fi
   umask 077
-  verify_build || die "the carrier serves only a verified build" 2
-  local mail=$b_mail records=$build_dir/records.json entry i dev state_dir
+  verify_build ${run_floor:+"$run_floor"} || die "the carrier serves only a verified build" 2
+  local mail=$b_mail records=$f_gen/records.json entry i dev state_dir floor_state
   [[ -f $mail || -f $records ]] || die "the build holds no mail and keeps no record, and the carrier has nothing to do" 2
   [[ -d $run_dir/carrier ]] || die "the carrier is started by up, which makes $run_dir/carrier" 2
   cd -- "$run_dir/carrier" || die "cannot enter $run_dir/carrier" 2
-  if [[ -f $mail ]]; then state_dir=$(jq -r '.state' "$mail"); else state_dir=$(jq -r '.state' "$records"); fi
-  exec 9>> "$state_dir/carrier.lock" || die "cannot open $state_dir/carrier.lock" 2
-  flock -n 9 || die "another carrier serves the workplace whose state is $state_dir; this one ends" 2
-  carrier_stop=0
+  if [[ -f $mail ]]; then state_dir=$(jq -r '.state' "$mail"); else state_dir=$(jq -r '.state' "$records"); state_dir=${state_dir%/floors/"$run_floor"}; fi
+  floor_state=$state_dir${run_floor:+/floors/$run_floor}
+  if [[ -n $run_floor ]]; then
+    [[ -d $floor_state && ! -L $floor_state ]] || die "the floor $run_floor's state $floor_state is missing; build again" 2
+    exec 9>> "$floor_state/carrier.lock" || die "cannot open $floor_state/carrier.lock" 2
+    flock -n 9 || die "another carrier serves the floor $run_floor of the workplace whose state is $state_dir; this one ends" 2
+  else
+    exec 9>> "$state_dir/carrier.lock" || die "cannot open $state_dir/carrier.lock" 2
+    flock -n 9 || die "another carrier serves the workplace whose state is $state_dir; this one ends" 2
+  fi
+  carrier_stop=0 carrier_held=0 hold_left=1000000 hold_over=0 pend_box="" store="" store_holder=$state_dir/store.holder
   trap 'carrier_stop=1' TERM INT
   trap '' HUP
   exec {pause_fd}<> <(:)
-  seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=() seat_number=() seat_own=()
-  wake_n=() wake_ids=() wake_since=() wake_last=() wake_any=0
+  seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=() seat_number=() seat_own=() seat_fl=()
+  own=() wake_any=0 box_order='[]' fcomms="" taken="" comms=""
   comms_record=""
   if [[ -f $mail ]]; then
     while IFS= read -r entry; do
@@ -3064,19 +3340,27 @@ cmd_carry() {
       # With floors: the room's number (null where it has none) and the item that rules its kind's own wake there.
       seat_number+=("$(jq -r 'if has("number") then (.number // "null" | tostring) else "" end' <<< "$entry")")
       seat_own+=("$(jq -r '.own // ""' <<< "$entry")")
+      seat_fl+=("$(jq -r '.floor // ""' <<< "$entry")")
     done < <(jq -c '.seats[]' "$mail")
     carrier_names=$(jq -c '[.seats[].name]' "$mail")
+    box_order=$(jq -c '[.seats[].box]' "$mail")
     comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail") mail_path=$(jq -r '.path' "$mail")
-    taken=$comms/taken
+    # With floors what the carrier takes and its journal stand in its floor's state (5.162 point 1).
+    fcomms=$comms
+    [[ -n $run_floor ]] && fcomms=$floor_state/comms
+    taken=$fcomms/taken
+    [[ -d $taken && ! -L $taken && $(stat -c %a -- "$taken") == 700 ]] || die "$taken is not the carrier's directory of what it takes, mode 700; build again" 2
     comms_record=$comms/record
+    for i in "${!seat_names[@]}"; do
+      [[ -z $run_floor || ${seat_fl[i]} == "$run_floor" ]] || continue
+      own+=("$i")
+      [[ -n ${seat_wake[i]} ]] && wake_any=1
+    done
     dev=$(stat -c %d -- "$taken") || die "cannot read $taken" 2
-    for i in "${!seat_out[@]}"; do
+    for i in "${own[@]}"; do
       [[ -d ${seat_out[i]} && ! -L ${seat_out[i]} && $(stat -c %d -- "${seat_out[i]}") == "$dev" ]] \
         || die "the out of ${seat_names[i]} is not a directory on the file system of $taken, and the carrier moves by renaming alone" 2
     done
-    carrier_wake_load
-    carrier_record_mend
-    carrier_recover
   fi
   record_names=() record_boxes=() record_dirs=() record_keys=() record_kept=() record_pane=()
   chain_sink="" chain_last=0 chain_failed="" chain_refusing=0
@@ -3108,15 +3392,27 @@ cmd_carry() {
   for i in "${!record_keys[@]}"; do
     record_pane[i]=$(jq -r --argjson k "${record_keys[i]}" '.slots[(["pane"] + $k | tojson)] // ""' "$run_dir/state.json")
   done
+  # A pass: a pointer that waits to be settled first; then, while a journal stands, recovery in a hold of its own; then
+  # one request of each of the floor's writers, a hold each; then the pointers. After a try of the store's lock that
+  # fails, the pass tries no more, and its pipes and chain go on (5.162 point 1).
   while (( ! carrier_stop )) && [[ -d $run_dir/carrier ]]; do
-    for i in "${!seat_names[@]}"; do
-      (( carrier_stop )) && break
-      carrier_serve "$i"
-    done
-    (( carrier_stop )) || carrier_wake
+    carrier_pass_begin
+    [[ -n $pend_box ]] && carrier_settle
+    if [[ -n $store && -z $pend_box && -f $fcomms/serving ]] && carrier_hold; then
+      carrier_recover
+      carrier_release
+    fi
+    if [[ -n $store && -z $pend_box && ! -f $fcomms/serving ]]; then
+      for i in "${own[@]}"; do
+        (( carrier_stop || hold_over )) && break
+        carrier_serve "$i"
+      done
+    fi
+    (( carrier_stop || hold_over )) || [[ -n $pend_box ]] || carrier_wake
     (( ${#record_names[@]} )) && { carrier_watch; carrier_chain; }
     (( carrier_stop )) || carrier_pause 1
   done
+  [[ -n $pend_box ]] && carrier_settle final
   if (( ${#record_names[@]} )); then
     carrier_chain 1
     carrier_pause 0.5
@@ -3148,7 +3444,7 @@ cmd_record() {
   local name=$2 day=${3-} records seat file rel since="" until="" size expected=0 prev=0000000000000000000000000000000000000000000000000000000000000000 entry at offset length hash previous got
   need_jq
   locate
-  records=$build_dir/records.json
+  records=$f_gen/records.json
   [[ -f $records ]] || die "this workplace keeps no record" 2
   verify_build || die "record verify reads only a verified build" 2
   [[ -n $(jq -r '.chain // empty' "$records") ]] || die "this workplace keeps no chain, so its records cannot be verified" 2
@@ -3238,7 +3534,7 @@ cmd_why() {
   local state_dir runtime="" key_view=""
   state_dir=$(state_root) || state_dir=""
   [[ -d /run/user/$EUID ]] && runtime=/run/user/$EUID
-  [[ -f $build_dir/keys.json ]] && key_view=$(jq -r '.state + "/gnupg"' "$build_dir/keys.json")
+  [[ -f $f_gen/keys.json ]] && key_view=$(jq -r '.state + "/gnupg"' "$f_gen/keys.json")
   local workplace seat_key names="[]" supplied='{}' values_note="" file="" i
   local -a problems fields
   workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$plan")
@@ -3542,10 +3838,24 @@ cmd_doctor() {
 }
 
 cmd_down() {
-  (( $# == 0 )) || die "down takes no arguments" 2
   need_jq
   need_tmux
   locate
+  # With floors, down takes one floor down, F, and leaves the others up (5.160 point 8). A floor whose RUN/F stands
+  # is taken down even where the build no longer names it, so that no run is stranded.
+  if [[ $b_layout == generations || ( $# == 1 && -d $build_dir/RUN/${1-}/carrier ) ]]; then
+    (( $# <= 1 )) || die "down takes one floor" 2
+    (( $# == 1 )) || die "with floors, down names its floor: workplace down F" 2
+    [[ -n $1 && $1 != */* && $1 != . && $1 != .. ]] || die "the build has no floor $1" 2
+    [[ -n ${b_floor[$1]+x} || -d $build_dir/RUN/$1 ]] || die "the build has no floor $1" 2
+    floor_scope "$1"
+    if [[ ! -d $run_dir ]]; then
+      say "down: the floor $run_floor is not up under $clone"
+      return 0
+    fi
+  else
+    (( $# == 0 )) || die "down takes no arguments" 2
+  fi
   if [[ ! -d $run_dir ]]; then
     say "down: nothing is up under $clone"
     return 0
@@ -3567,7 +3877,7 @@ cmd_down() {
     return 0
   fi
   rm -rf -- "$run_dir"
-  say "down: done"
+  say "down: ${run_floor:+the floor $run_floor, }done"
 }
 
 seats_report() {
@@ -3591,7 +3901,7 @@ seats_report() {
     fi
     file=""
   fi
-  if [[ -f $build_dir/homes.json ]]; then
+  if [[ -f $f_gen/homes.json ]]; then
     while IFS= read -r entry; do
       path=$(jq -r '.path' <<< "$entry")
       if [[ $(jq -r '.state' <<< "$entry") == scratch ]]; then
@@ -3602,7 +3912,7 @@ seats_report() {
         say "missing home $path of $(jq -r '"\(.name) (\(.seat | join("/")))"' <<< "$entry"); build again"
         bad=1
       fi
-    done < <(jq -c '.seats[]' "$build_dir/homes.json")
+    done < <(jq -c '.seats[]' "$f_gen/homes.json")
   fi
   [[ -f $b_view ]] || return "$bad"
   workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$b_plan")
@@ -3638,7 +3948,7 @@ seats_report() {
 }
 
 records_status() {
-  local up=$1 records=$build_dir/records.json entry day size chained state_file name failed out line pane
+  local up=$1 records=$f_gen/records.json entry day size chained state_file name failed out line pane
   local -A piped=()
   [[ -f $records ]] || return 0
   day=$(date -u +%F)
@@ -3681,14 +3991,22 @@ records_status() {
 }
 
 cmd_status() {
-  (( $# == 0 )) || die "status takes no arguments" 2
   need_jq
   locate
-  local bad=0 sum
+  # With floors, status reports every floor, or the floor it names (5.160 point 8).
+  local -a floors=()
+  if [[ $b_layout == generations ]]; then
+    (( $# <= 1 )) || die "status takes at most one floor" 2
+    if (( $# == 1 )); then floor_word status 1 "$1"; floors=("$1"); else floors=("${b_floors[@]}"); fi
+  else
+    (( $# == 0 )) || die "status takes no arguments" 2
+  fi
+  local bad=0 sum floor verify_floor=""
+  (( $# == 1 && ${#floors[@]} == 1 )) && verify_floor=${floors[0]}
   if [[ ! -d $build_dir ]]; then
     say "build: none"
-  elif verify_build; then
-    sum=$(sha_of "$build_dir/MANIFEST")
+  elif verify_build ${verify_floor:+"$verify_floor"}; then
+    sum=$b_top_sha
     say "build: verified, manifest $sum"
     seats_report || bad=1
   else
@@ -3696,15 +4014,37 @@ cmd_status() {
     bad=1
   fi
   records_bad=0
+  if (( ${#floors[@]} == 0 )); then
+    status_run || bad=1
+  else
+    for floor in "${floors[@]}"; do
+      floor_scope "$floor"
+      status_run || bad=1
+    done
+  fi
+  return "$(( bad || records_bad ))"
+}
+
+# The run's part of status, for the workplace without floors or for the floor in scope.
+status_run() {
+  local bad=0 run
+  if [[ -n $run_floor ]]; then
+    say "floor   $run_floor"
+    say "conf    the floor's own file is not read in 4a: its server reads an empty file and stands on tmux's defaults, and the floor's file comes with the frame's set after it in 4a2 (5.167)"
+    if [[ $(jq -r --arg f "$run_floor" '[.programs[].plan[]? | (if type == "object" then .term else . end)
+        | select(type == "array" and .[0] == "floor" and .[1] == $f) | .[4]][0] // ""' "$b_plan" 2> /dev/null) == unenforced ]]; then
+      say "lacks   the floor $run_floor is unenforced, and in 4a its server runs under the bar on no new privileges, which 4a2 lifts (5.124 point 3, 5.167)"
+      say "lacks   its seats have no view, and their mailboxes stand on the machine at the mail path only in 4a2, so until then a seat of $run_floor reads no mail there (5.167)"
+    fi
+  fi
   if [[ ! -d $run_dir ]]; then
-    say "run: down"
+    say "run: ${run_floor:+floor $run_floor is }down"
     [[ -d $build_dir ]] && records_status 0
     return "$(( bad || records_bad ))"
   fi
   need_tmux
-  local run
   run=$(jq -r '.slots[(["run"] | tojson)] // "unknown"' "$run_dir/state.json" 2> /dev/null) || run=unknown
-  say "run: up, $run"
+  say "run: ${run_floor:+floor $run_floor is }up, $run"
   say "attach  tmux -S $(sh_quote "$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$run_dir/state.json")") attach"
   run_server || bad=1
   say "$server_verdict"
@@ -3730,7 +4070,12 @@ cmd_status() {
 
 restart_state_dir() {
   local name dir
-  for name in "$build_dir/keys.json" "$build_dir/homes.json" "$b_mail" "$build_dir/records.json"; do
+  # With floors a floor's restarts stand in its own state, S/floors/F.
+  if [[ -n $run_floor ]]; then
+    dir=$(workplace_state "$(jq -r '.name // "default"' <<< "$report")") && { printf '%s\n' "$dir/floors/$run_floor"; return 0; }
+    return 1
+  fi
+  for name in "$f_gen/keys.json" "$f_gen/homes.json" "$b_mail" "$f_gen/records.json"; do
     [[ -f $name && ! -L $name ]] || continue
     dir=$(jq -r '.state // empty' "$name" 2> /dev/null)
     [[ -n $dir ]] && { printf '%s\n' "$dir"; return 0; }
@@ -3742,13 +4087,20 @@ cmd_restart() {
   need_jq
   need_tmux
   locate
-  [[ -d $run_dir ]] || die "nothing is up under $clone; restart starts again a seat of a running workplace" 2
+  # With floors, restart F [SEAT ...] starts again seats of the floor F, holding the floor's lock (5.160 point 8).
+  if [[ $b_layout == generations ]]; then
+    floor_word restart $# "${1-}"
+    floor_scope "$1"
+    shift
+  fi
+  [[ -d $run_dir ]] || die "nothing is up ${run_floor:+on the floor $run_floor }under $clone; restart starts again a seat of a running workplace" 2
   [[ -f $run_dir/state.json ]] || die "the run under $run_dir did not finish up; restart refuses it" 2
-  verify_build || die "restart starts a seat only from a verified build, as up does"
+  verify_build ${run_floor:+"$run_floor"} || die "restart starts a seat only from a verified build, as up does"
   local view_file=/dev/null
   [[ -f $b_view ]] && view_file=$b_view
   plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
+  [[ -n $run_floor ]] && floor_lock "$run_floor" "restart $run_floor"
   refuse_closed_names "$b_view" "$b_plan" || die "restart refuses: a seat's view would hold a closed directory under another name"
   state=$(< "$run_dir/state.json")
   local verdict=0
@@ -3774,7 +4126,7 @@ cmd_restart() {
     fi
   fi
   for name in "${names[@]}"; do
-    file=$(seat_file "$name") && [[ -f $file ]] || die "no seat is named $name in this workplace" 2
+    file=$(seat_file "$name") && [[ -f $file ]] || die "no seat is named $name ${run_floor:+on the floor $run_floor }in this workplace" 2
     pane=$(jq -r --argjson k "$(jq -c '.key' "$file")" '.slots[(["pane"] + $k | tojson)] // ""' <<< "$state")
     run_call out "$setpriv" --no-new-privs "$tmux" -S "$socket" -u display-message -p -t "$pane" '#{pane_dead} #{@workplace}' \
       || die "restart refuses: the pane of $name is gone, and only down and up make it again" 2
@@ -3804,12 +4156,12 @@ cmd_restart() {
   for i in "${!names[@]}"; do
     name=${names[i]} pane=${panes[i]}
     dir=""
-    if [[ -f $build_dir/records.json ]]; then
-      dir=$(jq -r --arg n "$name" '.seats[] | select(.name == $n and .pane == "kept") | .dir' "$build_dir/records.json")
+    if [[ -f $f_gen/records.json ]]; then
+      dir=$(jq -r --arg n "$name" '.seats[] | select(.name == $n and .pane == "kept") | .dir' "$f_gen/records.json")
     fi
     # The pane is made and its pipe set in one call, so no listing of the carrier's finds it alive with no pipe.
     call=("$setpriv" --no-new-privs "$tmux" -S "$socket" -u respawn-pane -k -t "$pane" -- "$tmux" -S "$socket" wait-for "workplace-restart-$$-$i")
-    [[ -n $dir ]] && call+=(\; pipe-pane -O -t "$pane" "$(pipe_command "$dir" "$(jq -r '.limit' "$build_dir/records.json")")" \; display-message -p -t "$pane" '#{pane_pipe}')
+    [[ -n $dir ]] && call+=(\; pipe-pane -O -t "$pane" "$(pipe_command "$dir" "$(jq -r '.limit' "$f_gen/records.json")")" \; display-message -p -t "$pane" '#{pane_pipe}')
     log_call "${call[@]}"
     run_call out "${call[@]}" || die "restart: the pane of $name could not be made ready: $(jq_message "$run_dir/call.err")" 2
     if [[ -n $dir && $out != 1 ]]; then
@@ -3832,7 +4184,7 @@ cmd_restart() {
 
 unbuild_state() {
   local name state plan derived default term arg
-  for name in "$build_dir/keys.json" "$build_dir/homes.json" "$b_mail" "$build_dir/records.json"; do
+  for name in "$f_gen/keys.json" "$f_gen/homes.json" "$b_mail" "$f_gen/records.json"; do
     [[ -f $name && ! -L $name ]] || continue
     state=$(jq -r '.state // empty' "$name" 2> /dev/null) || state=""
     [[ -n $state ]] && { printf '%s\n' "$state"; return 0; }
@@ -3864,11 +4216,28 @@ cmd_unbuild() {
     say "unbuild: there is no build under $clone"
   else
     [[ -d $build_dir && ! -L $build_dir ]] || die "unbuild refuses: $build_dir is not a directory" 2
+    if [[ $b_layout == generations && -d $run_dir && ! -L $run_dir ]]; then
+      # With floors RUN holds a directory for each floor that is up; an empty RUN goes (5.160 point 8).
+      local -a up_floors=("$run_dir"/*)
+      (( ${#up_floors[@]} == 0 )) || die "unbuild refuses: the floor ${up_floors[0]##*/} is up, since ${up_floors[0]} stands; run workplace down ${up_floors[0]##*/} first"
+      rmdir -- "$run_dir" 2> /dev/null || die "cannot remove the empty $run_dir" 2
+    fi
     [[ ! -e $run_dir && ! -L $run_dir ]] || die "unbuild refuses: the workplace is up, since $run_dir stands; run workplace down first"
   fi
   state_dir=$(unbuild_state) || state_dir=""
+  # With floors unbuild takes the build's lock and every floor's lock, each without waiting, so that it removes no
+  # build that a build or an up is reading (the addendum's R6 and R34). It makes no lock file: it opens one only where
+  # it stands.
+  if [[ $b_layout == generations && -n $state_dir ]]; then
+    local lock
+    for lock in "$state_dir/build.lock" "$state_dir"/floors/*/up.lock; do
+      [[ -f $lock && ! -L $lock ]] || continue
+      exec {lock_fd}< "$lock" || die "cannot open $lock" 2
+      flock -n "$lock_fd" || die "unbuild refuses: a build or an up holds $lock; run it again when that ends"
+    done
+  fi
   if [[ -d $build_dir && ! -L $build_dir ]]; then
-    [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]] && sum=$(sha_of "$build_dir/MANIFEST")
+    [[ -n $b_top_sha ]] && sum=$b_top_sha
     mapfile -t files < <(cd -- "$build_dir" && find . -mindepth 1 ! -type d -printf '%P\n' | LC_ALL=C sort)
     rm -rf -- "$build_dir"
     [[ ! -e $build_dir && ! -L $build_dir ]] || die "cannot remove $build_dir" 2
@@ -3911,6 +4280,7 @@ cmd_unbuild() {
 
 usage() {
   say "usage: workplace plan | build | unbuild | up | restart [SEAT ...] | exec [--print] SEAT | down | status | why SEAT PATH | record verify SEAT [DAY | unstored | gaps | signed] | record verify --requests | doctor"
+  say "with floors: workplace up F | restart F [SEAT ...] | down F | status [F]"
   say "reads WORKPLACE_ROOT and WORKPLACE_CONFIG"
 }
 

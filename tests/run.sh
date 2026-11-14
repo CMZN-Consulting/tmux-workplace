@@ -35,7 +35,9 @@ check() {
   if "$@"; then note "  ok: $message"; else fail "$message"; fi
 }
 
-T() { setpriv --no-new-privs tmux -S "$run/$label" -u "$@"; }
+T() { setpriv --no-new-privs tmux -S "${tsock:-$run/$label}" -u "$@"; }
+# On the floor F the helpers built on T reach that floor's own server, RUN/F/NAME, and no other (5.160 point 8).
+on() { local tsock=$run/$1/$label; shift; "$@"; }
 B() { setpriv --no-new-privs tmux -L bystander -u "$@"; }
 wp() { "$BASH" "$loop" "$@"; }
 
@@ -164,7 +166,8 @@ agent_of() {
 no_agent_of() { ! agent_of "$1"; }
 key_homes() {
   local home
-  for home in "$scratch"/home/.local/state/workplace/*/keys/* "$scratch"/state-*/workplace/*/keys/* "$scratch"/verify; do
+  for home in "$scratch"/home/.local/state/workplace/*/keys/* "$scratch"/home/.local/state/workplace/*/floors/*/keys/* \
+    "$scratch"/state-*/workplace/*/keys/* "$scratch"/verify; do
     [[ -d $home ]] && printf '%s\n' "$home"
   done
 }
@@ -213,8 +216,13 @@ cleanup() {
     done < <(key_homes)
   fi
   [[ -n ${label-} && -S ${run-}/$label ]] && tmux -S "$run/$label" kill-server 2> /dev/null
+  if [[ -n ${label-} && -d ${run-} ]]; then
+    for home in "$run"/*/"$label"; do
+      [[ -S $home ]] && tmux -S "$home" kill-server 2> /dev/null
+    done
+  fi
   if [[ -n ${label-} ]] && command -v systemctl > /dev/null; then
-    timeout 30 systemctl --user stop -- "workplace-carrier-$label.service" > /dev/null 2>&1
+    timeout 30 systemctl --user stop -- "workplace-carrier-$label.service" "workplace-carrier-$label-*.service" > /dev/null 2>&1
   fi
   [[ -n ${label2-} && -S ${root-}/config2/BUILD/RUN/$label2 ]] && tmux -S "$root/config2/BUILD/RUN/$label2" kill-server 2> /dev/null
   if [[ ${TMUX_TMPDIR-} == "$scratch"/* ]]; then
@@ -1948,22 +1956,28 @@ t_floors() {
       && ! ls -- "$1/BUILD" | grep -qxE "(plan|plan-view|plan-manifest|plan-facts|mail|keys|homes|records)[.]json"' _ "$clone" "$g"
   check "[C2] 5.160 point 2: no code of the frame reads the build's plan, view or mail but through the top" \
     bash -c '! grep -nE "[$]build_dir/(plan|plan-view|plan-manifest|plan-facts|mail)[.]json" "$1/bin/workplace"' _ "$tool"
-  check "[C5] the build verifies: up goes past its verification to its refusal of floors" exit_is 2 wp up
-  local kept=$scratch/kept-generation entry
+  check "[C5] the build verifies: status reports it so" exit_is 0 wp status
+  check "[C5] saying so" said "build: verified, manifest"
+  local kept=$scratch/kept-generation entry rest
   local -a breaks=(
-    "cp -- \"\$1/BUILD/shared/$g/plan.json\" \"\$1/BUILD/plan.json\"|holds a file its MANIFEST does not list: plan.json"
-    ": > \"\$1/BUILD/floors/deck/$g/stray\"|holds a file its MANIFEST does not list: floors/deck/$g/stray"
-    "chmod u+w -- \"\$1/BUILD/floors/lodge/$g/MANIFEST\" && printf x >> \"\$1/BUILD/floors/lodge/$g/MANIFEST\"|floors/lodge/$g/MANIFEST does not match its MANIFEST"
+    "cp -- \"\$1/BUILD/shared/$g/plan.json\" \"\$1/BUILD/plan.json\"|holds a file its MANIFEST does not list: plan.json|"
+    ": > \"\$1/BUILD/floors/deck/$g/stray\"|holds a file its MANIFEST does not list: floors/deck/$g/stray|lodge"
+    "chmod u+w -- \"\$1/BUILD/floors/lodge/$g/MANIFEST\" && printf x >> \"\$1/BUILD/floors/lodge/$g/MANIFEST\"|floors/lodge/$g/MANIFEST does not match its MANIFEST|deck"
   )
   for entry in "${breaks[@]}"; do
     rm -rf -- "$kept" && cp -a -- "$clone/BUILD" "$kept"
     bash -c "${entry%%|*}" _ "$clone"
-    check "[C5] 5.160: up refuses a build whose generations do not verify, with exit 1: ${entry#*|}" exit_is 1 wp up
-    check "[C5] naming it" said "${entry#*|}"
+    rest=${entry#*|}
+    check "[C5] 5.160: status refuses a build whose generations do not verify, with exit 1: ${rest%|*}" exit_is 1 wp status
+    check "[C5] naming it" said "${rest%|*}"
+    if [[ -n ${rest##*|} ]]; then
+      check "[C5] 5.160 point 3: and a floor's own verify reads the top, the frame, the shared generation and its own tree alone, so the floor ${rest##*|} verifies" \
+        exit_is 0 wp status "${rest##*|}"
+    fi
     rm -rf -- "$clone/BUILD" && mv -- "$kept" "$clone/BUILD"
   done
-  check "[C101] up refuses a build that stands on floors, which S2's stop 4 brings" exit_is 2 wp up
-  check "[C101] saying so" said "the build stands on floors; this frame plans and builds floors and does not yet stand them up, which comes with S2's stop 4"
+  check "[C101] 5.160 point 8: with floors, up names its floor, or refuses with exit 2" exit_is 2 wp up
+  check "[C101] saying so" said "with floors, up names its floor: workplace up F"
   check "[C102] unbuild" exit_is 0 wp unbuild
   check "[C102] removes the key homes in every floor's state" \
     bash -c '[[ ! -e $1/floors/deck/keys ]] && grep -qF "unbuild: removed the key homes in $1/floors/deck/keys, 1 homes" "$2"' _ "$s" "$scratch/out"
@@ -2361,9 +2375,14 @@ t_pointer_floors() {
   check "[C56] with floors mail.json gives each seat its kind's own wake for its floor's mode, null where none" \
     test "$(jq -c '[.seats[] | [.name, .number, (if has("own") then .own else "absent" end)]]' "$clone/BUILD/shared/$(top_gen)/mail.json")" = '[["Harbor Keeper",0,"5.150"],["Harbor Pilot",0,null],["Harbor Watch",10,"5.150"],["Orchard Grower",9,null],["Orchard Picker",9,"5.151"],["Lodge Ida",0,"5.150"],["Lodge Ivo",9,"5.150"],["Orchard Reaper",null,"5.151"],["Lodge Ira",9,null],["Orchard Gleaner",null,null]]'
 
-  # A run made by hand, with no panes: the decision is taken at delivery and needs none (5.146 point 5).
-  mkdir -p -- "$clone/BUILD/RUN/carrier"
-  printf '%s\n' '{"slots": {}}' > "$clone/BUILD/RUN/state.json"
+  # Runs made by hand, with no panes: the decision is taken at delivery and needs none (5.146 point 5). Each floor has
+  # its run and its carrier, which serves its own floor's writers, and the three deliver at one time on one store under
+  # its lock (5.160 point 8, 5.162 point 1).
+  local f
+  for f in bridge deck lodge; do
+    mkdir -p -- "$clone/BUILD/RUN/$f/carrier"
+    printf '%s\n' '{"slots": {}}' > "$clone/BUILD/RUN/$f/state.json"
+  done
   request grower g1.md "to: Harbor Keeper, Harbor Watch, Harbor Pilot, Lodge Ivo, Orchard Grower" "subject: from the barn" --- "one"
   request reaper r1.md "to: Harbor Keeper, Orchard Picker, Orchard Grower" "subject: from the field" --- "two"
   request ivo v1.md "to: Lodge Ida, Lodge Ira" "subject: from the west" --- "three"
@@ -2374,15 +2393,18 @@ t_pointer_floors() {
   request watch w1.md "to: Orchard Picker" "subject: from the tower" --- "eight"
   request pilot p1.md "to: Harbor Keeper" "subject: within the dock" --- "nine"
   local carrier s started
+  local -a carriers=()
   s=$(state_of)
   started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  "$BASH" "$clone/BUILD/bin/workplace" carry > "$scratch/carry" 2>&1 &
-  carrier=$!
-  check "[C59] a carrier on a run made by hand delivers the nine mails" \
+  for f in bridge deck lodge; do
+    "$BASH" "$clone/BUILD/bin/workplace" carry "$f" > "$scratch/carry-$f" 2>&1 &
+    carriers+=("$!")
+  done
+  check "[C59] 5.162: the three floors' carriers, on runs made by hand, deliver the nine mails, each its own floor's writers'" \
     bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of grower g1.md)" "$(answer_of reaper r1.md)" "$(answer_of ivo v1.md)" \
       "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)" "$(answer_of gleaner l1.md)" "$(answer_of watch w1.md)" "$(answer_of pilot p1.md)"
-  rm -rf -- "$clone/BUILD/RUN/carrier"
-  wait "$carrier"
+  for f in bridge deck lodge; do rm -rf -- "$clone/BUILD/RUN/$f/carrier"; done
+  wait "${carriers[@]}"
   # The record is read line by line, and a line that does not parse is passed over, as the carrier passes it over.
   idof() { jq -r -R --arg w "$1" --arg r "$2" 'fromjson? | objects | select(.seat == $w and .request == $r and .action == "mail" and .outcome == "ok") | .id' "$s/comms/record"; }
   decided() { jq -r -R --arg id "$1" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | "\(.target[0]):\(.outcome)"' "$s/comms/record" | tr '\n' ,; }
@@ -2451,13 +2473,13 @@ t_pointer_floors() {
   printf '%s\n' '{"at":"2026-01-01T00:00:00Z","seat":"the frame","action":"wake","target":["Lodge Ira"],"covers":["recovered-1"],"outcome":"none","reason":"its kind has no wake pattern, so no pointer is typed for it (C94)"}' >> "$s/comms/record"
   printf '%s' '{"at":"2026' >> "$s/comms/record"
   jq '.seats["Orchard Grower"] |= (.count += 1 | .ids += ["recovered-1"]) | del(.seats["Harbor Watch"])' "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
-  printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/comms/serving"
-  mkdir -p -- "$clone/BUILD/RUN/carrier"
+  printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/floors/lodge/comms/serving"
+  mkdir -p -- "$clone/BUILD/RUN/lodge/carrier"
   started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  "$BASH" "$clone/BUILD/bin/workplace" carry > "$scratch/carry" 2>&1 &
+  "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry" 2>&1 &
   carrier=$!
-  check "[C57] a carrier that finds a delivery's commit of a stopped carrier answers it ok" test "$(answer_of ivo v9.md)" = "ok recovered-1"
-  rm -rf -- "$clone/BUILD/RUN/carrier"
+  check "[C57] a carrier that finds a delivery's commit of a stopped carrier of its floor answers it ok" test "$(answer_of ivo v9.md)" = "ok recovered-1"
+  rm -rf -- "$clone/BUILD/RUN/lodge/carrier"
   wait "$carrier"
   check "[C96] 5.146: and decides for each reader the stopped carrier had not decided, by a line or in wake.json, and for no other, in the store's order" \
     test "$(decided recovered-1)$(jq -c '.seats["Orchard Grower"].ids | map(select(. == "recovered-1")) | length' "$s/comms/wake.json")" = "Lodge Ira:none,Gone Seat:none,Lodge Ida:withheld,1"
@@ -2480,6 +2502,191 @@ t_pointer_floors() {
     bash -c 'for line in "Harbor Keeper (harbor/dock/keeper): 1" "Harbor Watch (harbor/tower/watch): 1" "Lodge Ivo (lodge/west/ivo): 2" "Orchard Grower (orchard/barn/grower): 2" "Orchard Picker (orchard/barn/picker): 1" "Orchard Reaper (orchard/field/reaper): 2"; do
       grep -qF "wake    $line delivered and not yet pointed out" "$1" || exit 1; done' _ "$scratch/out"
   check "[C95] and no reader that is due nothing: withheld, or of a kind with no pattern" bash -c '! grep -qE "^wake    (Lodge Ida|Harbor Pilot|Lodge Ira|Orchard Gleaner) " "$1"' _ "$scratch/out"
+}
+
+# Floors up (5.160 point 8, 5.162, 5.167): each enforced floor on a run socket stands on its own server in RUN/F, with
+# its own carrier, and goes down alone; the floor on the default socket is refused in 4a.
+t_floors_up() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+      m(["reach", "harbor", "-", "-", "office", "mail", "lodge", "-", "-", "floor", "allowed"]; 2),
+      m(["reach", "lodge", "-", "-", "floor", "mail", "harbor", "-", "-", "office", "allowed"]; 3),
+      m(["reach", "harbor", "-", "-", "office", "grab", "lodge", "-", "-", "floor", "allowed"]; 4),
+      m(["reach", "harbor", "dock", "-", "room", "grab", "harbor", "dock", "-", "room", "allowed"]; 5),
+      m(["reach", "harbor", "dock", "-", "room", "mail", "harbor", "dock", "-", "room", "allowed"]; 6)]'
+  check "plan of three floors with mail between the harbor and the lodge" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  local s=$HOME/.local/state/workplace/$label
+  check "[C101] 5.160 point 8: with floors, up names its floor, or refuses with exit 2" exit_is 2 wp up
+  check "[C101] saying so" said "with floors, up names its floor: workplace up F"
+  check "[C101] up of a floor the build does not make refuses, with exit 2" exit_is 2 wp up ghost
+  check "[C101] naming it" said "the build has no floor ghost"
+  check "[C101] 5.167: up of the floor on the default socket refuses, with exit 1" exit_is 1 wp up bridge
+  check "[C101] saying what is not built" said "up refuses the floor bridge: it stands on the default socket"
+  check "[C101] and leaving no run for it" test ! -e "$run/bridge"
+  check "up deck" exit_is 0 wp up deck
+  check "[C21] saying its floor" said "up: the floor deck,"
+  check "up lodge" exit_is 0 wp up lodge
+  check "[C68] each floor stands on its own server, at its own socket in RUN/F" bash -c '[[ -S $1/deck/$2 && -S $1/lodge/$2 && ! -e $1/$2 ]]' _ "$run" "$label"
+  check "[C68] two servers, two processes" bash -c '[[ -n $1 && -n $2 && $1 != "$2" ]]' _ "$(on deck T display-message -p '#{pid}')" "$(on lodge T display-message -p '#{pid}')"
+  check "[C8] the deck's server holds the harbor's session alone" on deck sessions_are "Harbor "
+  check "[C8] the lodge's server holds the lodge's own session alone" on lodge sessions_are "Lodge "
+  check "[C21] each floor's run holds its own state and seats" \
+    bash -c 'for f in deck lodge; do for x in state.json ledger checks calls.jsonl tables.json seats carrier tmux.conf; do [[ -e $1/$f/$x ]] || exit 1; done; done' _ "$run"
+  check "[C21] RUN/deck holds the deck's three seats, RUN/lodge the lodge's one" \
+    bash -c '[[ $(ls "$1/deck/seats" | wc -l) == 3 && $(ls "$1/lodge/seats" | wc -l) == 1 ]]' _ "$run"
+  check "[C21] state.json names the floor, the top and the generations it read" \
+    test "$(jq -c '[.floor, (.top | length), (.generations | keys)]' "$run/deck/state.json")" = '["deck",64,["floor","shared"]]'
+  check "[C57] each floor has a carrier of its own" bash -c '[[ -n $1 && -n $2 && $1 != "$2" ]]' _ "$(carrier_pid deck)" "$(carrier_pid lodge)"
+  check "[C102] the floor's lock and its holder stand in its state, mode 600" \
+    bash -c '[[ $(stat -c %a "$1/floors/deck/up.lock") == 600 && $(stat -c %a "$1/floors/deck/up.holder") == 600 ]]' _ "$s"
+  check "[C20] up of a floor that is up refuses, with exit 1" exit_is 1 wp up deck
+  check "[C20] saying so" said "the floor deck is up already"
+  check "[C53] each floor's server carries the clone's mark" \
+    bash -c '[[ -n $1 && $1 == "$2" && $1 == "$3" ]]' _ "$(cd -- "$clone" && pwd -P)" "$(on deck T show-options -gqv @workplace-clone)" "$(on lodge T show-options -gqv @workplace-clone)"
+  check "[C17] 5.160 point 8: exec finds a seat's floor and prints its call from that floor's run" exit_is 0 wp exec --print -- "Lodge Ida"
+  check "[C98] 5.160 point 8: with floors, restart names its floor, or refuses with exit 2" exit_is 2 wp restart
+  check "[C98] saying so" said "with floors, restart names its floor: workplace restart F"
+  check "[C98] restart of a seat of another floor than the one named refuses, with exit 2" exit_is 2 wp restart deck "Lodge Ida"
+  check "[C98] restart of a floor with no seat whose program ended starts nothing, with exit 0" exit_is 0 wp restart lodge
+  printf '%s\n' '{"command": "restart lodge", "pid": 4242, "at": "2026-11-14T00:00:00Z"}' > "$s/floors/lodge/up.holder"
+  flock -o "$s/floors/lodge/up.lock" sleep 6 &
+  local lock_holder=$!
+  check "the test holds the lodge's floor lock" eventually bash -c '! flock -n "$1" true' _ "$s/floors/lodge/up.lock"
+  check "[C20] 5.160 point 8: restart of a floor whose lock another command holds refuses, with exit 1" exit_is 1 wp restart lodge
+  check "[C20] naming the command and its process" said "restart lodge holds the floor lodge, process 4242; run it again when that ends"
+  check "[C20] and up of that floor refuses so too, before it looks for its run" exit_is 1 wp up lodge
+  check "[C20] naming them" said "restart lodge holds the floor lodge, process 4242"
+  wait "$lock_holder"
+  request keeper k1.md "to: Lodge Ida" "subject: across" --- "body"
+  check "[C59] a mail from the deck to the lodge is delivered" answered_ok keeper k1.md
+  request ida i1.md "to: Harbor Keeper" "subject: back" --- "body"
+  check "[C59] and one from the lodge to the deck" answered_ok ida i1.md
+  check "[C61] each carrier keeps what it takes in its own floor's state" \
+    bash -c '[[ -d $1/floors/deck/comms/taken && -d $1/floors/lodge/comms/taken && ! -e $1/comms/taken ]]' _ "$s"
+  request keeper g1.grab "seat: Lodge Ida"
+  check "[C60] 5.162 point 1: a grab across floors is refused until 4b" answered keeper g1.grab "refused a grab or a write across floors comes with S2's stop 4b"
+  wp status > "$scratch/out" 2>&1
+  check "[C22] bare status reports every floor" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor lodge is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor bridge is down" "$1"' _ "$scratch/out"
+  check "[C22] 5.167: and says that a floor's own file is not read in 4a" said "conf    the floor's own file is not read in 4a"
+  check "[C22] 5.167: and what the unenforced floor lacks in 4a" said "lacks   the floor bridge is unenforced, and in 4a its server runs under the bar"
+  check "[C22] status of one floor" exit_is 0 wp status deck
+  check "[C22] reports that floor alone" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && ! grep -q "floor lodge" "$1"' _ "$scratch/out"
+  local lodge_pid lodge_carrier
+  lodge_pid=$(on lodge T display-message -p '#{pid}')
+  lodge_carrier=$(carrier_pid lodge)
+  check "[C18] down deck" exit_is 0 wp down deck
+  check "[C18] takes the deck's server and run away" bash -c '! on deck T list-sessions > /dev/null 2>&1 && [[ ! -e $1/deck ]]' _ "$run"
+  check "[C18] and leaves the lodge up: its run, its server and its carrier" \
+    bash -c '[[ -d $1/lodge && $2 == "$3" && -n $4 ]] && kill -0 "$4"' _ "$run" "$lodge_pid" "$(on lodge T display-message -p '#{pid}')" "$lodge_carrier"
+  check "[C17] exec of a seat whose floor is not up refuses, with exit 2" exit_is 2 wp exec --print -- "Harbor Keeper"
+  check "[C17] saying so" said "nothing is up on the floor deck"
+  check "[C18] down of a floor that is down says so, with exit 0" exit_is 0 wp down deck
+  check "[C18] saying it" said "down: the floor deck is not up"
+  check "[C99] unbuild refuses while a floor is up, with exit 1" exit_is 1 wp unbuild
+  check "[C99] naming the floor" said "unbuild refuses: the floor lodge is up"
+  check "down lodge" exit_is 0 wp down lodge
+  check "[C99] unbuild, with every floor down" exit_is 0 wp unbuild
+  check "[C99] removes the empty RUN with the build" test ! -e "$clone/BUILD"
+}
+
+# The store's lock (5.162 point 1, the DA's specimen): two floors' carriers deliver at one time on one store, one hold
+# for one delivery, and lose nothing of each other's. Runs made by hand, with no panes.
+t_store_lock() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  local kinds='| kinds([["harbor", "dock", "keeper", "clerk"], ["harbor", "dock", "pilot", "clerk"], ["harbor", "tower", "watch", "clerk"],
+      ["orchard", "barn", "grower", "clerk"], ["orchard", "barn", "picker", "clerk"], ["lodge", "east", "ida", "clerk"]])'
+  statements_plan "$floors_terms | $comms_terms $kinds"' | .programs[-1].recorded += [
+      m(["reach", "harbor", "-", "-", "office", "mail", "lodge", "-", "-", "floor", "allowed"]; 2),
+      m(["reach", "lodge", "-", "-", "floor", "mail", "harbor", "-", "-", "office", "allowed"]; 3),
+      m(["reach", "harbor", "dock", "-", "room", "mail", "harbor", "dock", "-", "room", "allowed"]; 4),
+      m(["wake", "clerk", "^waiting>$"]; 5)]'
+  check "plan of floors with mail between the harbor and the lodge, every kind with a wake" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  local s f n holder store
+  local -a carriers=() ids=()
+  s=$(state_of)
+  store=$s/mail
+  sgit() { env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$store" "$@"; }
+  for f in deck lodge; do
+    mkdir -p -- "$run/$f/carrier"
+    printf '%s\n' '{"slots": {}}' > "$run/$f/state.json"
+  done
+  flock -o "$store" sleep 5 &
+  holder=$!
+  check "the test holds the store's lock" eventually bash -c '! flock -n "$1" true' _ "$store"
+  for n in 1 2 3; do
+    request keeper "k$n.md" "to: Lodge Ida, Harbor Pilot" "subject: k$n" --- "k$n"
+    request pilot "p$n.md" "to: Harbor Keeper" "subject: p$n" --- "p$n"
+    request ida "i$n.md" "to: Harbor Keeper, Harbor Pilot" "subject: i$n" --- "i$n"
+  done
+  for f in deck lodge; do
+    "$BASH" "$clone/BUILD/bin/workplace" carry "$f" > "$scratch/carry-$f" 2>&1 &
+    carriers+=("$!")
+  done
+  sleep 3
+  check "[C57] 5.162 point 1: while the store's lock is held, neither floor's carrier delivers" \
+    bash -c '[[ $1 == 0 && -z $(find "$2/comms/Harbor Keeper/answers" "$2/comms/Harbor Pilot/answers" "$2/comms/Lodge Ida/answers" -type f) ]]' _ "$(store_commits)" "$s"
+  wait "$holder"
+  check "[C59] 5.162: once it is free, the two floors' carriers deliver the nine mails" \
+    bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of keeper k1.md)" "$(answer_of keeper k2.md)" "$(answer_of keeper k3.md)" \
+      "$(answer_of pilot p1.md)" "$(answer_of pilot p2.md)" "$(answer_of pilot p3.md)" "$(answer_of ida i1.md)" "$(answer_of ida i2.md)" "$(answer_of ida i3.md)"
+  mapfile -t ids < <(jq -r 'select(.action == "mail" and .outcome == "ok") | .id' "$s/comms/record")
+  check "[C57] one commit for each delivery, and ids that no two floors share, counted once" \
+    bash -c '[[ $1 == 9 && $2 == 9 && $(printf "%s\n" "${@:4}" | sort -u | wc -l) == 9 && $3 == 9 ]]' _ "$(store_commits)" "${#ids[@]}" "$(< "$s/comms/next")" "${ids[@]}"
+  check "[C57] each commit holds its own mail alone: its readers' in and its writer's sent" bash -c '
+    s=$1; shift
+    for id in "$@"; do
+      want=$(jq -r --arg id "$id" "select(.id == \$id and .action == \"mail\") | ([.target[] | \"\(.)/in/\(\$id).md\"] + [\"\(.seat)/sent/\(\$id).md\"]) | sort[]" "$s/comms/record")
+      commit=$(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" log --format=%H --grep="^deliver $id\$")
+      got=$(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" show --name-only --format= "$commit" | sort)
+      [[ -n $commit && $want == "$got" ]] || exit 1
+    done' _ "$s" "${ids[@]}"
+  check "[C96] each mail's decision lines stand together, just before its line, though two floors write the record" \
+    bash -c 'for id in "${@:2}"; do jq -R -s -e --arg id "$id" "[split(\"\n\")[] | fromjson? | objects] | (to_entries | map(select(.value.seat == \"the frame\" and .value.covers == [\$id] and (.value | has(\"length\") | not)) | .key)) as \$k
+      | (to_entries | map(select(.value.id == \$id and .value.action == \"mail\") | .key)) as \$m
+      | (\$m | length) == 1 and ((\$k | length) == 0 or \$k == [range(\$m[0] - (\$k | length); \$m[0])])" "$1" > /dev/null || exit 1; done' _ "$s/comms/record" "${ids[@]}"
+  check "[C94] 5.162 point 1: wake.json holds every reader's due ids, both floors', none lost to the other's write" \
+    test "$(jq -c '[(.seats["Harbor Keeper"].ids | length), (.seats["Harbor Pilot"].ids | length), (.seats["Lodge Ida"].ids | length)]' "$s/comms/wake.json")" = '[6,6,3]'
+  check "[C94] in the order of mail.json's seats" test "$(jq -c '.seats | keys_unsorted' "$s/comms/wake.json")" = '["Harbor Keeper","Harbor Pilot","Lodge Ida"]'
+  # Which floor took the lock next is the kernel's choice, so the order is shown and not checked.
+  note "    the floors' deliveries in the store's order (D the deck, L the lodge): $(for id in "${ids[@]}"; do jq -r --arg id "$id" 'select(.id == $id and .action == "mail") | if .seat == "Lodge Ida" then "L" else "D" end' "$s/comms/record"; done | tr -d '\n')"
+  check "[C57] and no holder of the store's lock stands once they are done" test ! -e "$s/store.holder"
+  # A dead carrier's add that no commit took rides into no other delivery.
+  printf '%s\n' left > "$store/Harbor Keeper/in/zz.md"
+  flock -o "$store" sleep 3 &
+  holder=$!
+  check "the test holds the store's lock again" eventually bash -c '! flock -n "$1" true' _ "$store"
+  sgit add -- "Harbor Keeper/in/zz.md"
+  request ida i4.md "to: Harbor Keeper" "subject: i4" --- "i4"
+  wait "$holder"
+  check "a mail is delivered after the stale add" answered_ok ida i4.md
+  check "[C57] 5.162 point 1: its commit holds its own paths alone, and the stale add is unstaged, not committed" \
+    bash -c '[[ $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" show --name-only --format= HEAD | sort | tr "\n" " ") == "Harbor Keeper/in/$2.md Lodge Ida/sent/$2.md " ]] \
+      && [[ -z $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" ls-files -- "Harbor Keeper/in/zz.md") ]]' _ "$store" "$(jq -r 'select(.request == "i4.md" and .action == "mail") | .id' "$s/comms/record")"
+  for f in deck lodge; do rm -rf -- "$run/$f/carrier"; done
+  wait "${carriers[@]}"
+  # A stopped carrier's delivery that another floor's commit follows is found by its subject from the head it noted.
+  local base x=recovered-x
+  base=$(sgit rev-parse HEAD)
+  for f in "Lodge Ida/sent" "Harbor Keeper/in"; do printf '%s\n' x > "$store/$f/$x.md"; done
+  sgit add -- "Lodge Ida/sent/$x.md" "Harbor Keeper/in/$x.md"
+  sgit -c user.name=t -c user.email=t@t commit -q -m "deliver $x"
+  printf '%s\n' y > "$store/Harbor Pilot/in/recovered-y.md"
+  sgit add -- "Harbor Pilot/in/recovered-y.md"
+  sgit -c user.name=t -c user.email=t@t commit -q -m "deliver recovered-y"
+  jq -n -c --arg b "$base" '{id: "recovered-x", box: "Lodge Ida", request: "x.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving"
+  mkdir -p -- "$run/lodge/carrier"
+  "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
+  carriers=("$!")
+  check "[C57] 5.162 point 1: recovery finds the delivery's commit by its subject, after another floor's, and answers it ok" answered ida x.md "ok recovered-x"
+  check "[C57] and names its readers, the commit's" test "$(jq -c 'select(.id == "recovered-x" and .action == "mail") | .target' "$s/comms/record")" = '["Harbor Keeper"]'
+  rm -rf -- "$run/lodge/carrier"
+  wait "${carriers[@]}"
 }
 
 t_plan_relative() {
@@ -3795,7 +4002,7 @@ record_lines_reach() {
   done
   return 1
 }
-carrier_pid() { jq -r 'select(.what | startswith("the carrier, pid ")) | .what | ltrimstr("the carrier, pid ")' "$run/ledger"; }
+carrier_pid() { jq -r 'select(.what | startswith("the carrier, pid ")) | .what | ltrimstr("the carrier, pid ")' "$run${1:+/$1}/ledger"; }
 
 t_comms_fold() {
   scoped_clone
@@ -4084,11 +4291,16 @@ t_comms_carrier() {
   check "[C57] the mail it delivered is answered as delivered when the carrier starts again" answered watch again.md "ok $delivered"
   check "down" exit_is 0 wp down
   printf '%s\n' stray > "$s/mail/Harbor Keeper/in/stray.md"
+  printf '%s\n' half > "$s/mail/Harbor Keeper/in/20261112T000000Z-999999.md"
+  printf '%s\n' half > "$s/mail/Harbor Keeper/sent/20261112T000000Z-999999.md"
   jq -n -c '{id: "20261112T000000Z-999999", box: "Harbor Keeper", request: "half.md", action: "mail", seat: "Harbor Keeper"}' > "$s/comms/serving"
   check "[C57] up, after a carrier that stopped while it delivered a mail" exit_is 0 wp up
   check "[C57] the mail is answered as delivered to none" \
     answered keeper half.md "refused the carrier stopped while it served this, and it went to none; leave it in out again"
-  check "[C57] and what it had written into the store is removed" test ! -e "$s/mail/Harbor Keeper/in/stray.md"
+  check "[C57] 5.162 point 1: and what it had written into the store is removed, by the exact paths of the journal's id" \
+    bash -c '[[ ! -e $1/in/20261112T000000Z-999999.md && ! -e $1/sent/20261112T000000Z-999999.md ]]' _ "$s/mail/Harbor Keeper"
+  check "[C57] 5.162 point 1: while a file that no journal names stays, as another floor's copies would" test -e "$s/mail/Harbor Keeper/in/stray.md"
+  rm -f -- "$s/mail/Harbor Keeper/in/stray.md"
   check "[C66] both are recorded" test "$(jq -r 'select(.request == "again.md" or .request == "half.md") | .outcome' "$s/comms/record" | tr '\n' ',')" = "ok,refused,"
   check "down" exit_is 0 wp down
   check "up again" exit_is 0 wp up
@@ -4617,7 +4829,7 @@ t_wake() {
     file_comes_to "$c/typed" "$(pointer 2 "$p2")"
   check "[C94] three mails delivered between two pointers give one pointer, with the count 3 and the newest id" \
     file_comes_to "$b/typed" "$(printf '%s\n' "$(pointer 1 "$id1")" "$(pointer 3 "$newest")")"
-  check "[C94] and it went a minute or more after the first" \
+  check "[C94] and it went a minute or more after the first" eventually \
     bash -c 'mapfile -t at < <(jq -r "select(.action == \"wake\" and .target == [\"Harbor Keeper\"] and has(\"length\")) | .at" "$1"); (( ${#at[@]} == 2 && $(date -u -d "${at[1]}" +%s) - $(date -u -d "${at[0]}" +%s) >= 60 ))' _ "$s/comms/record"
   check "[C94] a pane that shows a numbered menu still has none, a minute on" test ! -e "$a/typed"
   first=$(jq -c 'select(.action == "wake" and .target == ["Harbor Keeper"] and has("length"))' "$s/comms/record" | head -n 1)
@@ -5499,6 +5711,8 @@ tests=(
   t_floors
   t_reach_floors
   t_pointer_floors
+  t_floors_up
+  t_store_lock
   t_floors_assembly
   t_the_folded_view_in_the_panes
   t_plan_end_to_end

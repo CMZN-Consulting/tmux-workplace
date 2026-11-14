@@ -2013,8 +2013,11 @@
     "floors": {
       "floor": "floor",
       "key": 1,
+      "name": 2,
       "houses": 3,
       "enforcement": 4,
+      "socket": 5,
+      "conf": 6,
       "smallest": 7,
       "house": "house",
       "workplace": "workplace",

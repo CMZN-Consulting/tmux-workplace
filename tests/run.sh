@@ -1488,6 +1488,14 @@ t_the_fold() {
     bash -c '[[ $1 == *"/harbor/vault/open read-only,"* ]]' _ "$(rows_of keeper)"
   check "[C30] rule 5: and the seat's rows are those and no more" \
     test "$(rows_of keeper)" = "/ read-only,$root/harbor/berth read-write,$root/harbor/hold hidden,$root/harbor/holdall read-write,$root/harbor/ledger hidden,$root/harbor/scratch scratch,$root/harbor/vault searchable-only,$root/harbor/vault/open read-only,$root/harbor/vault/shelf read-write,"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "123456789012344"; 9), lb($root + "/harbor/vault/open"; "123456789012345"; 10), sc(12)]'
+  check "[C31] a clearance and a label of 15 digits are taken" exit_is 0 wplan
+  check "[C30] and compared exactly: a room at 123456789012344 is cleared for a label at 123456789012345" \
+    bash -c '[[ $1 == *"/harbor/vault/open read-only,"* ]]' _ "$(rows_of keeper)"
+  statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "123456789012345"; 9), lb($root + "/harbor/vault/open"; "123456789012344"; 10), sc(12)]'
+  check "[C31] the same with the last digits the other way round is taken" exit_is 0 wplan
+  check "[C30] and a room at 123456789012345 is not cleared for a label at 123456789012344, so beneath a searchable-only row it gets no row" \
+    bash -c '[[ $1 != *"/harbor/vault/open "* ]]' _ "$(rows_of keeper)"
 
   statements_plan '.programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "3"; 9),
       lb($root + "/harbor/vault/open"; "5"; 10), lb($root + "/harbor/vault/open/inner"; "1"; 11), sc(12)]'
@@ -2175,14 +2183,22 @@ t_pointer_floors() {
     '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", ""]; 30)]|programs/COMMS.typify:30: the wake-own names no item, and the item that rules the measure is what it carries (5.146)'
     '| .programs[-1].recorded += [m(["wake-own", "courier", "enforced", "5.150"]; 30)]|programs/COMMS.typify:30: the wake-own names the kind courier, which has no wake term: a kind that wakes by itself keeps its pattern for the pointers that stay (5.146)'
     '| .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", "5.160"]; 30)]|two wake-own terms of the kind clerk on an enforced floor differ: 5.150 from programs/COMMS.typify:7, 5.160 from programs/COMMS.typify:30'
-    '| .programs[-1].recorded += [cl("harbor"; "tower"; "-"; "room"; "1234567890123456"; 30)]|programs/policy.typify:30: 1234567890123456 has more than 15 digits, and the frame compares no clearance that long'
-    '| .programs[-1].recorded += [lb($root + "/tools"; "1234567890123456"; 30)]|programs/policy.typify:30: 1234567890123456 has more than 15 digits, and the frame compares no label that long'
   )
   local entry
   for entry in "${refusals[@]}"; do
     statements_plan "$base $kinds $terms ${entry%|*}"
     check "[C93] plan refuses, with exit 1: ${entry##*|}" exit_is 1 wplan
     check "[C93] naming it" said "${entry##*|}"
+  done
+  # A number the frame compares has at most 15 digits; each input below holds that fault alone.
+  local bounds=(
+    '| .programs[-1].recorded |= map(if .term == ["clearance", "harbor", "tower", "-", "room", "3"] then .term[5] = "1234567890123456" | .origin.line = 30 else . end)|programs/policy.typify:30: 1234567890123456 has more than 15 digits, and the frame compares no clearance that long'
+    '| .programs[-1].recorded += [lb($root + "/tools"; "1234567890123456"; 30)]|programs/policy.typify:30: 1234567890123456 has more than 15 digits, and the frame compares no label that long'
+  )
+  for entry in "${bounds[@]}"; do
+    statements_plan "$base $kinds $terms ${entry%|*}"
+    check "[C31] plan refuses, with exit 1: ${entry##*|}" exit_is 1 wplan
+    check "[C31] naming it" said "${entry##*|}"
   done
   statements_plan "$comms_terms $wake_kinds $wake_terms"' | .programs[-1].recorded += [m(["wake-own", "clerk", "enforced", "5.150"]; 30)]'
   check "[C93] 5.146: a wake-own in a plan without floors refuses it, with exit 1" exit_is 1 wplan
@@ -2206,7 +2222,7 @@ t_pointer_floors() {
   check "naming it in its last line" bash -c 'tail -n 1 "$1" | grep -qF "workplace: cannot make $2/workplace-build-"' _ "$scratch/out" "$scratch/none"
   check "build" exit_is 0 wp build
   check "[C56] with floors mail.json gives each seat its kind's own wake for its floor's mode, null where none" \
-    test "$(jq -c '[.seats[] | [.name, .number, .own]]' "$clone/BUILD/mail.json")" = '[["Harbor Keeper",1,"5.150"],["Harbor Pilot",1,null],["Harbor Watch",3,"5.150"],["Orchard Grower",2,null],["Orchard Picker",2,"5.151"],["Lodge Ida",1,"5.150"],["Lodge Ivo",2,"5.150"],["Orchard Reaper",null,"5.151"],["Lodge Ira",2,null],["Orchard Gleaner",null,null]]'
+    test "$(jq -c '[.seats[] | [.name, .number, (if has("own") then .own else "absent" end)]]' "$clone/BUILD/mail.json")" = '[["Harbor Keeper",1,"5.150"],["Harbor Pilot",1,null],["Harbor Watch",3,"5.150"],["Orchard Grower",2,null],["Orchard Picker",2,"5.151"],["Lodge Ida",1,"5.150"],["Lodge Ivo",2,"5.150"],["Orchard Reaper",null,"5.151"],["Lodge Ira",2,null],["Orchard Gleaner",null,null]]'
 
   # A run made by hand, with no panes: the decision is taken at delivery and needs none (5.146 point 5).
   mkdir -p -- "$clone/BUILD/RUN/carrier"
@@ -2217,69 +2233,100 @@ t_pointer_floors() {
   request ida d1.md "to: Lodge Ivo, Lodge Ida" "subject: from the east" --- "four"
   request keeper k1.md "to: Orchard Picker" "subject: from the dock" --- "five"
   request grower g2.md "to: Orchard Reaper, Orchard Gleaner" "subject: to the field" --- "six"
-  local carrier s
+  request gleaner l1.md "to: Orchard Reaper" "subject: within the field" --- "seven"
+  local carrier s started
   s=$(state_of)
+  started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   "$BASH" "$clone/BUILD/bin/workplace" carry > "$scratch/carry" 2>&1 &
   carrier=$!
-  check "[C59] a carrier on a run made by hand delivers the six mails" \
+  check "[C59] a carrier on a run made by hand delivers the seven mails" \
     bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of grower g1.md)" "$(answer_of reaper r1.md)" "$(answer_of ivo v1.md)" \
-      "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)"
+      "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)" "$(answer_of gleaner l1.md)"
   rm -rf -- "$clone/BUILD/RUN/carrier"
   wait "$carrier"
-  idof() { jq -r --arg w "$1" --arg r "$2" 'select(.seat == $w and .request == $r and .action == "mail" and .outcome == "ok") | .id' "$s/comms/record"; }
-  decided() { jq -r --arg id "$1" 'select(.seat == "the frame" and .covers == [$id]) | "\(.target[0]):\(.outcome)"' "$s/comms/record" | tr '\n' ,; }
+  # The record is read line by line, and a line that does not parse is passed over, as the carrier passes it over.
+  idof() { jq -r -R --arg w "$1" --arg r "$2" 'fromjson? | objects | select(.seat == $w and .request == $r and .action == "mail" and .outcome == "ok") | .id' "$s/comms/record"; }
+  decided() { jq -r -R --arg id "$1" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | "\(.target[0]):\(.outcome)"' "$s/comms/record" | tr '\n' ,; }
   due() { jq -c --arg id "$1" '[.seats[] | select(.ids | index($id)) | .name]' "$s/comms/wake.json"; }
-  local g r v d k g2
+  together() {
+    jq -R -s -e --arg id "$2" '[split("\n")[] | fromjson? | objects] | (to_entries | map(select(.value.seat == "the frame" and .value.covers == [$id] and (.value | has("length") | not)) | .key)) as $k
+      | (to_entries | map(select(.value.id == $id and .value.action == "mail") | .key)) as $m
+      | ($m | length) == 1 and (($k | length) == 0 or $k == [range($m[0] - ($k | length); $m[0])])' "$1" > /dev/null
+  }
+  all_together() { local f=$1 id; shift; for id in "$@"; do together "$f" "$id" || return 1; done; }
+  local g r v d k g2 l store
   g=$(idof "Orchard Grower" g1.md) r=$(idof "Orchard Reaper" r1.md) v=$(idof "Lodge Ivo" v1.md) d=$(idof "Lodge Ida" d1.md)
-  k=$(idof "Harbor Keeper" k1.md) g2=$(idof "Orchard Grower" g2.md)
+  k=$(idof "Harbor Keeper" k1.md) g2=$(idof "Orchard Grower" g2.md) l=$(idof "Orchard Gleaner" l1.md)
+  store=$(jq -r '.store' "$clone/BUILD/mail.json")
   check "[C94] 5.146: toward a room cleared more whose kind wakes by itself, withheld; a kind with no pattern and the writer, none; each reader on its own, and a due reader has no line" \
     test "$(decided "$g")" = "Harbor Keeper:withheld,Harbor Pilot:none,Orchard Grower:none,"
   check "[C94] toward rooms of the same number and cleared less, due, in wake.json" test "$(due "$g")" = '["Harbor Watch","Lodge Ivo"]'
   check "[C94] a writer with no number counts as cleared least: withheld toward a numbered room above it, and on an unenforced floor by its mode's own wake; due by an own wake of the other mode" \
     test "$(decided "$r")$(due "$r")" = 'Harbor Keeper:withheld,Orchard Picker:withheld,["Orchard Grower"]'
   check "[C96] the withheld line of a writer with no number says so" \
-    test "$(jq -r --arg id "$r" 'select(.seat == "the frame" and .covers == [$id]) | .reason' "$s/comms/record" | tr '\n' '|')" = "the room of Harbor Keeper, at 1, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)|the room of Orchard Picker, at 2, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)|"
+    test "$(jq -r -R --arg id "$r" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$s/comms/record" | tr '\n' '|')" = "the room of Harbor Keeper, at 1, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)|the room of Orchard Picker, at 2, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)|"
   check "[C94] on a floor of rooms the numbers decide the pointer: from 2 to 1 withheld, and a kind with no pattern there gets none (5.132 point 4)" \
     test "$(decided "$v")" = "Lodge Ida:withheld,Lodge Ira:none,"
   check "[C94] on a floor of rooms from 1 to 2 due, and the writer's own copy none" test "$(decided "$d")$(due "$d")" = 'Lodge Ida:none,["Lodge Ivo"]'
   check "[C94] toward a room cleared less whose kind wakes by itself on its floor, due by the direction" test "$(decided "$k")$(due "$k")" = '["Orchard Picker"]'
   check "[C94] toward a reader with no number, due even where its kind wakes by itself; and a kind with no pattern on an unenforced floor gets none" \
     test "$(decided "$g2")$(due "$g2")" = 'Orchard Gleaner:none,["Orchard Reaper"]'
+  check "[C94] 5.146: between two rooms with no number, both cleared least, due even where the reader's kind wakes by itself" \
+    test "$(decided "$l")$(due "$l")" = '["Orchard Reaper"]'
   check "[C96] a withheld line names the mail, both rooms' numbers and the item" \
-    test "$(jq -r --arg id "$g" 'select(.seat == "the frame" and .covers == [$id] and .outcome == "withheld") | .reason' "$s/comms/record")" = "the room of Harbor Keeper, at 1, is cleared more than the writer's, at 2, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)"
+    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "withheld") | .reason' "$s/comms/record")" = "the room of Harbor Keeper, at 1, is cleared more than the writer's, at 2, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)"
   check "[C96] and a none line its reason" \
-    test "$(jq -r --arg id "$g" 'select(.seat == "the frame" and .covers == [$id] and .outcome == "none") | .reason' "$s/comms/record" | tr '\n' '|')" = "its kind has no wake pattern, so no pointer is typed for it (C94)|the writer's own mail is pointed out to no one (5.79)|"
+    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "none") | .reason' "$s/comms/record" | tr '\n' '|')" = "its kind has no wake pattern, so no pointer is typed for it (C94)|the writer's own mail is pointed out to no one (5.79)|"
   check "[C96] each mail's decision lines stand together, just before the line of its delivery" \
-    bash -c 'for id in "${@:2}"; do jq -s -e --arg id "$id" "(to_entries | map(select(.value.seat == \"the frame\" and .value.covers == [\$id] and (.value | has(\"length\") | not)) | .key)) as \$k | (to_entries | map(select(.value.id == \$id and .value.action == \"mail\") | .key)) as \$m | (\$m | length) == 1 and ((\$k | length) == 0 or (\$k == [range(\$m[0] - (\$k | length); \$m[0])]))" "$1" > /dev/null || exit 1; done' _ "$s/comms/record" "$g" "$r" "$v" "$d" "$k" "$g2"
+    all_together "$s/comms/record" "$g" "$r" "$v" "$d" "$k" "$g2" "$l"
+  check "[C96] each decision line carries the time it was made, in the record's form" \
+    bash -c 'jq -R -s -e --arg t "$2" "[split(\"\n\")[] | fromjson? | objects | select(.seat == \"the frame\" and .action == \"wake\" and (has(\"length\") | not))] | length > 0 and all(.at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\") and . >= \$t)" "$1" > /dev/null' _ "$s/comms/record" "$started"
   check "[C59] the writer is told only that its mail was delivered" test "$(cat "$s/comms/Orchard Grower/answers/g1.md")" = "ok $g"
+  check "[C59] 5.146 point 3: every reader sees its mail in in, withheld, due or none alike, the same file as the writer's sent" \
+    bash -c 's=$1; shift; while (( $# )); do w=$1 id=$2 n=$3; shift 3; for (( i = 0; i < n; i++ )); do cmp -s "$s/$1/in/$id.md" "$s/$w/sent/$id.md" || exit 1; shift; done; done' _ "$store" \
+      "Orchard Grower" "$g" 5 "Harbor Keeper" "Harbor Watch" "Harbor Pilot" "Lodge Ivo" "Orchard Grower" \
+      "Orchard Reaper" "$r" 3 "Harbor Keeper" "Orchard Picker" "Orchard Grower" \
+      "Lodge Ivo" "$v" 2 "Lodge Ida" "Lodge Ira" \
+      "Lodge Ida" "$d" 2 "Lodge Ivo" "Lodge Ida" \
+      "Harbor Keeper" "$k" 1 "Orchard Picker" \
+      "Orchard Grower" "$g2" 2 "Orchard Reaper" "Orchard Gleaner" \
+      "Orchard Gleaner" "$l" 1 "Orchard Reaper"
 
-  # A carrier stopped between a delivery's commit and the end of its decisions: it had decided for Ira by a line and
-  # noted Grower in wake.json, not yet Ida. The next carrier answers the mail and decides for Ida alone.
-  local store
-  store=$(jq -r '.store' "$clone/BUILD/mail.json")
+  # A carrier stopped between a delivery's commit and the end of its decisions. It had decided for Ira by a line and
+  # noted Grower in wake.json; Watch it had found due and not saved, and Ida it had not reached. The commit also gives
+  # the mail to a box that the build no longer makes. A torn line stands in the record. The next carrier answers the
+  # mail and decides for Gone, Watch and Ida alone, in the store's order, Watch due from the time of the delivery.
+  mkdir -p -- "$store/Gone Seat/in"
   printf '%s\n' "a mail of the stopped carrier" > "$store/Lodge Ida/in/recovered-1.md"
-  cp -- "$store/Lodge Ida/in/recovered-1.md" "$store/Lodge Ira/in/recovered-1.md"
-  cp -- "$store/Lodge Ida/in/recovered-1.md" "$store/Orchard Grower/in/recovered-1.md"
+  local box
+  for box in "Gone Seat" "Harbor Watch" "Lodge Ira" "Orchard Grower"; do cp -- "$store/Lodge Ida/in/recovered-1.md" "$store/$box/in/recovered-1.md"; done
   cp -- "$store/Lodge Ida/in/recovered-1.md" "$store/Lodge Ivo/sent/recovered-1.md"
-  git -C "$store" add -A > /dev/null 2>&1 && git -C "$store" -c user.name=test -c user.email=test@test commit -q -m "deliver recovered-1" > /dev/null 2>&1
+  git -C "$store" add -A > /dev/null 2>&1 \
+    && GIT_COMMITTER_DATE="2026-01-02T03:04:05Z" git -C "$store" -c user.name=test -c user.email=test@test commit -q -m "deliver recovered-1" > /dev/null 2>&1
   printf '%s\n' '{"at":"2026-01-01T00:00:00Z","seat":"the frame","action":"wake","target":["Lodge Ira"],"covers":["recovered-1"],"outcome":"none","reason":"its kind has no wake pattern, so no pointer is typed for it (C94)"}' >> "$s/comms/record"
-  jq '.seats["Orchard Grower"] |= (.count += 1 | .ids += ["recovered-1"])' "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
+  printf '%s\n' '{"at":"2026' >> "$s/comms/record"
+  jq '.seats["Orchard Grower"] |= (.count += 1 | .ids += ["recovered-1"]) | del(.seats["Harbor Watch"])' "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
   printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/comms/serving"
   mkdir -p -- "$clone/BUILD/RUN/carrier"
   "$BASH" "$clone/BUILD/bin/workplace" carry > "$scratch/carry" 2>&1 &
   carrier=$!
-  check "[C61] a carrier that finds a delivery's commit of a stopped carrier answers it ok" test "$(answer_of ivo v9.md)" = "ok recovered-1"
+  check "[C57] a carrier that finds a delivery's commit of a stopped carrier answers it ok" test "$(answer_of ivo v9.md)" = "ok recovered-1"
   rm -rf -- "$clone/BUILD/RUN/carrier"
   wait "$carrier"
-  check "[C96] 5.146: and decides for each reader the stopped carrier had not decided, by a line or in wake.json, and for no other" \
-    test "$(decided recovered-1)$(jq -c '.seats["Orchard Grower"].ids | map(select(. == "recovered-1")) | length' "$s/comms/wake.json")" = "Lodge Ira:none,Lodge Ida:withheld,1"
-  check "[C61] its line names the readers the delivery's commit gave the mail to, in the store's order" \
-    test "$(jq -c 'select(.id == "recovered-1" and .action == "mail") | [.target, .outcome]' "$s/comms/record")" = '[["Lodge Ida","Lodge Ira","Orchard Grower"],"ok"]'
+  check "[C96] 5.146: and decides for each reader the stopped carrier had not decided, by a line or in wake.json, and for no other, in the store's order" \
+    test "$(decided recovered-1)$(jq -c '.seats["Orchard Grower"].ids | map(select(. == "recovered-1")) | length' "$s/comms/wake.json")" = "Lodge Ira:none,Gone Seat:none,Lodge Ida:withheld,1"
+  check "[C96] a reader whose seat the build no longer makes gets a none line, with its reason" \
+    test "$(jq -r -R 'fromjson? | objects | select(.covers == ["recovered-1"] and .target == ["Gone Seat"]) | .reason' "$s/comms/record")" = "the build no longer makes this seat, so no pointer is typed for it"
+  check "[C94] a reader the stopped carrier had found due and not saved is due again, from the time of the delivery's commit" \
+    test "$(jq -c '.seats["Harbor Watch"] | [.count, .ids, .since]' "$s/comms/wake.json")" = '[1,["recovered-1"],"2026-01-02T03:04:05Z"]'
+  check "[C57] its line names the readers the delivery's commit gave the mail to, in the store's order" \
+    test "$(jq -c -R 'fromjson? | objects | select(.id == "recovered-1" and .action == "mail") | [.target, .outcome]' "$s/comms/record")" = '[["Gone Seat","Harbor Watch","Lodge Ida","Lodge Ira","Orchard Grower"],"ok"]'
+  check "[C96] the recovered mail's decision lines, the stopped carrier's and the new one's, stand together just before its ok line" together "$s/comms/record" recovered-1
 
   rm -rf -- "$clone/BUILD/RUN"
   wp status > "$scratch/out" 2>&1
   check "[C95] status lists the due readers, each with its count" \
-    bash -c 'for line in "Harbor Watch (harbor/tower/watch): 1" "Lodge Ivo (lodge/west/ivo): 2" "Orchard Grower (orchard/barn/grower): 2" "Orchard Picker (orchard/barn/picker): 1" "Orchard Reaper (orchard/field/reaper): 1"; do
+    bash -c 'for line in "Harbor Watch (harbor/tower/watch): 1" "Lodge Ivo (lodge/west/ivo): 2" "Orchard Grower (orchard/barn/grower): 2" "Orchard Picker (orchard/barn/picker): 1" "Orchard Reaper (orchard/field/reaper): 2"; do
       grep -qF "wake    $line delivered and not yet pointed out" "$1" || exit 1; done' _ "$scratch/out"
   check "[C95] and no reader that is due nothing: withheld, or of a kind with no pattern" bash -c '! grep -qE "^wake    (Harbor Keeper|Lodge Ida|Harbor Pilot|Lodge Ira|Orchard Gleaner) " "$1"' _ "$scratch/out"
 }
@@ -4341,6 +4388,8 @@ t_wake() {
   check "build" exit_is 0 wp build
   check "[C56] mail.json gives each seat of a kind with a wake its pattern" \
     test "$(jq -c '[.seats[].wake]' "$clone/BUILD/mail.json")" = '["^waiting>$",null,"^waiting>$","^waiting>$",null]'
+  check "[C56] without floors mail.json holds no floor, number or own" \
+    bash -c 'jq -e "[.seats[] | has(\"floor\") or has(\"number\") or has(\"own\")] | any | not" "$1" > /dev/null' _ "$clone/BUILD/mail.json"
   check "up" exit_is 0 wp up
   check "keeper's pane waits for a line, a line above its footer" eventually_long screen_has "Harbor Keeper" "? for shortcuts"
   check "watch's pane works, its prompt of before scrolled into the history" eventually_long screen_has "Harbor Watch" "working"

@@ -2244,7 +2244,7 @@ carrier_git() {
   [[ -n ${carrier_at-} ]] && dates=(GIT_AUTHOR_DATE="$carrier_at" GIT_COMMITTER_DATE="$carrier_at")
   store_env "$store" GIT_DIR="$store/.git" GIT_WORK_TREE="$store" GIT_AUTHOR_NAME=workplace GIT_AUTHOR_EMAIL=carrier@workplace \
     GIT_COMMITTER_NAME=workplace GIT_COMMITTER_EMAIL=carrier@workplace "${dates[@]}" \
-    git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false -c gc.auto=0 -c maintenance.auto=false "$@" 9>&-
+    git -C "$store" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false -c gc.auto=0 -c maintenance.auto=false "$@" 9>&-
 }
 
 carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 9>&-; }
@@ -2389,6 +2389,13 @@ carrier_verdict() {
         end
     end
 JQ
+}
+
+carrier_decided() {
+  # Whether the record holds a decision line for the reader $1 and the mail being served. A line that does not
+  # parse, such as a torn last one, is passed over and decides nothing.
+  jq -e -R --arg id "$carrier_id" --arg t "$1" 'fromjson? | objects | select(.seat == "the frame" and .action == "wake" and .covers == [$id] and .target == [$t])' \
+    "$comms/record" > /dev/null 2>&1
 }
 
 carrier_seat_of() {
@@ -2644,25 +2651,35 @@ carrier_recover() {
   action=$(jq -r '.action' <<< "$journal") seat=$(jq -r '.seat' <<< "$journal")
   answers=$comms/$box/answers
   if [[ $action == mail ]] && subject=$(carrier_git log -1 --format=%s 2> /dev/null) && [[ $subject == "deliver $carrier_id" ]]; then
+    # The readers are those the delivery's commit gave the mail to, read before the answer. For each that the stopped
+    # carrier did not decide for, by a line in the record or an entry in wake.json, the carrier decides now, dated by
+    # the delivery's commit, in the store's order, so the record holds a decision for every reader (5.146 point 3).
+    local path box_in reader j k delivered_at listed=1 targets
+    local -a names=() gone=()
+    carrier_git show -z --name-only --format= HEAD > "$taken/recovered.paths" 2> /dev/null || listed=0
+    delivered_at=$(carrier_git log -1 --format=%ct 2> /dev/null) || delivered_at=""
+    if [[ $delivered_at =~ ^[0-9]+$ ]]; then delivered_at=$(date -u -d "@$delivered_at" +%Y-%m-%dT%H:%M:%SZ); else delivered_at=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
+    if (( listed )); then
+      while IFS= read -r -d '' path; do
+        [[ $path == */in/"$carrier_id".md ]] || continue
+        box_in=${path%/in/"$carrier_id".md} j=""
+        for k in "${!seat_boxes[@]}"; do [[ ${seat_boxes[k]} == "$box_in" ]] && { j=$k; break; }; done
+        if [[ -n $j ]]; then reader=${seat_names[j]}; else reader=$box_in; fi
+        names+=("$reader")
+        carrier_decided "$reader" && continue
+        if [[ -z $j ]]; then
+          carrier_wake_decision "$reader" none "the build no longer makes this seat, so no pointer is typed for it"
+        elif [[ " ${wake_ids[j]-} " != *" $carrier_id "* ]]; then
+          carrier_wake_note "$delivered_at" "$seat" "$reader"
+        fi
+      done < "$taken/recovered.paths"
+    fi
+    rm -f -- "$taken/recovered.paths"
     [[ -d $answers ]] && carrier_answer "$answers" "$request" "ok $carrier_id"
-    # The readers are those the delivery's commit gave the mail to. Each that the stopped carrier did not decide for,
-    # by a line in the record or an entry in wake.json, is decided now, so the record holds a decision for every reader.
-    local path box_in reader j k
-    local -a undecided=() all=()
-    while IFS= read -r -d '' path; do
-      [[ $path == */in/"$carrier_id".md ]] || continue
-      box_in=${path%/in/"$carrier_id".md} j=""
-      for k in "${!seat_boxes[@]}"; do [[ ${seat_boxes[k]} == "$box_in" ]] && { j=$k; break; }; done
-      [[ -n $j ]] || continue
-      reader=${seat_names[j]}
-      all+=("$j")
-      [[ " ${wake_ids[j]-} " == *" $carrier_id "* ]] && continue
-      jq -e --arg id "$carrier_id" --arg t "$reader" 'select(.seat == "the frame" and .action == "wake" and .covers == [$id] and .target == [$t])' \
-        "$comms/record" > /dev/null 2>&1 && continue
-      undecided+=("$reader")
-    done < <(carrier_git show -z --name-only --format= HEAD 2> /dev/null)
-    (( ${#undecided[@]} )) && carrier_wake_note "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$seat" "${undecided[@]}"
-    carrier_record "$seat" "$request" mail "$(jq -n -c --argjson names "$carrier_names" --arg all "${all[*]}" '[$all | splits(" ") | select(. != "") | $names[tonumber]]')" ok "the carrier stopped after it delivered this, and answers it as it starts again"
+    reason="the carrier stopped after it delivered this, and answers it as it starts again"
+    (( listed )) || reason+="; the readers of its commit could not be read, so it decides for none"
+    if (( ${#names[@]} )); then targets=$(printf '%s\n' "${names[@]}" | jq -R -n -c '[inputs]') || targets='[]'; else targets='[]'; fi
+    carrier_record "$seat" "$request" mail "$targets" ok "$reason"
   else
     if [[ $action == mail ]]; then
       carrier_git reset -q > /dev/null 2>&1

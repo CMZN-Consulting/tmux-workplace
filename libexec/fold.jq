@@ -301,13 +301,52 @@ joined($b[0]; $root) as $plan
           | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
           | def holds($scope; $n; $k):
               $scope == "workplace" or ($scope == "floor" and $n[0] == floor_of($k[0])) or ($scope == "office" and $n[0] == $k[0]) or ($scope == "room" and $n[0:2] == $k[0:2]) or ($scope == "seat" and $n == $k);
+            def number_of($k):
+              ([$clearances[] | select(.term[4] == "room" and .term[1:3] == $k[0:2])] + [$clearances[] | select(.term[4] == "office" and .term[1] == $k[0])]) as $held
+              | if ($held | length) == 0 then {room: $k[0:2], value: null, origins: []}
+                else ($held[0].term[4]) as $scope | [$held[] | select(.term[4] == $scope)] as $same
+                  | {room: $k[0:2], value: ($same[0].term[5] | tonumber), origins: [$same[].origins[]]} end;
+            def relation($k; $tk):
+              if $k[0:2] == $tk[0:2] then "own room"
+              elif $k[0] != $tk[0] then "another office or floor"
+              elif ($room_floor_keys | index($k[0])) != null then "another room of the floor"
+              else number_of($k).value as $a | number_of($tk).value as $t
+                | if $a == $t then "peer"
+                  elif $t == null or ($a != null and $t > $a) then "sub-room"
+                  else "room above" end end;
+            def narrowest($c): ($c | map(.term[4] | rank) | max) as $ask | [$c[] | select((.term[4] | rank) == $ask)] as $narrow
+              | ($narrow | map(.term[9] | rank) | max) as $tgt | [$narrow[] | select((.term[9] | rank) == $tgt)][0];
             def decide($action; $k; $tk):
               [$reaches[] | select(.term[5] == $action and holds(.term[4]; .term[1:4]; $k) and holds(.term[9]; .term[6:9]; $tk))] as $c
-              | if ($c | length) == 0 then {state: (if $action == "mail" then "allowed" else "banned" end), origins: []}
-                else ($c | map(.term[4] | rank) | max) as $ask | [$c[] | select((.term[4] | rank) == $ask)] as $narrow
-                  | ($narrow | map(.term[9] | rank) | max) as $tgt | [$narrow[] | select((.term[9] | rank) == $tgt)][0]
-                  | {state: .term[10], origins} end;
-            (entities($labelled) | map({path: .term[1], value: (if .term[2] == "closed" then "closed" else (.term[2] | tonumber) end), origins}) | sort_by((.path | depth), .path)) as $labels
+              | if $floored | not then
+                  if ($c | length) == 0 then {state: (if $action == "mail" then "allowed" else "banned" end), origins: []}
+                  else narrowest($c) | {state: .term[10], origins} end
+                else mode_of($k) as $mode | (if $mode == "enforced" then relation($k; $tk) else null end) as $r
+                  | if any($c[]; .term[10] == "banned") then narrowest([$c[] | select(.term[10] == "banned")]) | {state: "banned", origins}
+                    elif ($c | length) > 0 then narrowest($c) | {state: "allowed", origins}
+                    elif ($action == "grab" and ($r | IN("own room", "sub-room"))) or ($action == "mail" and $r == "sub-room")
+                    then {state: "allowed", origins: [], ground: $r, rooms: ([number_of($k)] + (if $r == "own room" then [] else [number_of($tk)] end))}
+                    else {state: "banned", origins: []} end end;
+            def numbered($n): "\($n.room | join("/")) \(if $n.value == null then "with no number" else "at \($n.value), from \(ats($n.origins))" end)";
+            def asking($t): [$panes[] | .[1:4] | select(mode_of(.) == "enforced" and holds($t.term[4]; $t.term[1:4]; .)) | floor_of(.[0])] | unique;
+            def floors_text($fl): "the enforced floor\(if ($fl | length) > 1 then "s" else "" end) \($fl | join(", "))";
+            [($reaches[] | select(.term[5] == "write") | . as $t | asking($t) as $fl | select(($fl | length) > 0)
+              | "\(ats(.origins)): the reach of \(scope_text(.term; .term[4]; .term[1:4])) says write \(.term[10]), and it asks for seats of \(floors_text($fl)): there a seat types into no pane, and write is no word of a term, whichever way it points (5.121, 5.125 point 10)"),
+             ($reaches[] | select(.term[5] == "record" and .term[10] == "allowed") | . as $t | asking($t) as $fl | select(($fl | length) > 0)
+              | "\(ats(.origins)): the reach of \(scope_text(.term; .term[4]; .term[1:4])) allows record, and it asks for seats of \(floors_text($fl)): reading a seat's saved record stays with Management, and no term gives it to a seat of an enforced floor (5.124 point 9)"),
+             ([$panes[] | .[1:4] | select(mode_of(.) == "enforced" and (.[0] as $o | $room_floor_keys | index($o)) == null)] as $askers
+              | $reaches[] | select((.term[5] | IN("grab", "mail")) and .term[10] == "allowed") | . as $t
+              | [$askers[] as $k | $panes[] | .[1:4] as $tk | select($tk[0] == $k[0] and $tk[0:2] != $k[0:2])
+                 | relation($k; $tk) as $r | select($r | IN("room above", "peer"))
+                 | [$reaches[] | select(.term[5] == $t.term[5] and holds(.term[4]; .term[1:4]; $k) and holds(.term[9]; .term[6:9]; $tk))] as $c
+                 | select(all($c[]; .term[10] != "banned") and narrowest($c).term == $t.term)
+                 | {from: $k[0:2], to: $tk[0:2], r: $r}] | unique[]
+              | "\(ats($t.origins)): the reach of \(scope_text($t.term; $t.term[4]; $t.term[1:4])) allows \($t.term[5]) to \(scope_text($t.term; $t.term[9]; $t.term[6:9])), and so would open the room \(.to | join("/")) to the room \(.from | join("/")), "
+                + (if .r == "room above" then "which is cleared less" else "which is cleared as much" end)
+                + " in the office \(.from[0]) (\(numbered(number_of(.from))); \(numbered(number_of(.to)))): "
+                + (if .r == "room above" then "inside an office no term opens a room cleared more (5.124 point 8, 5.132 point 2)" else "inside an office a term opens no peer room (5.125 point 9, 5.132 point 2)" end))]
+            as $reach_faults
+          | (entities($labelled) | map({path: .term[1], value: (if .term[2] == "closed" then "closed" else (.term[2] | tonumber) end), origins}) | sort_by((.path | depth), .path)) as $labels
           | def cleared($c; $l): $l.value != "closed" and $c.value != null and $c.value <= $l.value;
             def governing($p): [$labels[] | select(at_or_beneath($p; .path))] | max_by(.path | depth);
             [$panes[] | . as $pane | $pane[1:4] as $k | ($kinds[$k | tojson] // "none") as $kind
@@ -356,7 +395,7 @@ joined($b[0]; $root) as $plan
              | ((if $mail == null then [] else ["mail", "grab", "write"] end) + (if $record_path == null then [] else ["record"] end)) as $actions
              | (if ($actions | length) == 0 then null
                 else [$actions[] as $action
-                      | {key: $action, value: [$panes[] | . as $tp | decide($action; $k; $tp[1:4]) | select(.state == "allowed") | {name: $tp[4], origins}]}]
+                      | {key: $action, value: [$panes[] | . as $tp | decide($action; $k; $tp[1:4]) | select(.state == "allowed") | {name: $tp[4], origins} + (if .ground == null then {} else {ground, rooms} end)]}]
                      | from_entries end) as $reach
              | ([$record_terms[] | select(.term[5] == "pane" and .term[4] == "seat" and .term[1:4] == $k)]
                 + [$record_terms[] | select(.term[5] == "pane" and .term[4] == "room" and .term[1:3] == $k[0:2])]
@@ -394,7 +433,8 @@ joined($b[0]; $root) as $plan
           | [$folds[] | select(.ssh != null) | . as $f | $f.ssh.unreached[] | select(.scope == "seat")
              | "seat \($f.name) (\($f.seat | join("/"))): the ssh-grant at \(ats(.origins)) grants the key \(.name) at the seat's own scope, and the seat holds no key, so it has no agent to hold it"
                + (if $f.key.scope == null then "" else " (the key at \(ats($f.key.origins)))" end)] as $unheld
-          | if ($clashes | length) > 0 then {errors: $clashes}
+          | if ($reach_faults | length) > 0 then {errors: $reach_faults}
+            elif ($clashes | length) > 0 then {errors: $clashes}
             elif ($rootless | length) > 0 then {errors: $rootless}
             elif ($unheld | length) > 0 then {errors: $unheld}
             else

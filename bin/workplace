@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
 floor_sub=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
@@ -490,6 +490,7 @@ print_fold_report() {
   jq -r '
     def at($o): "\($o.path // "?"):\($o.line // "?")";
     def ats($os): [$os[] | at(.)] | join(", ");
+    def numbered($n): "\($n.room | join("/")) \(if $n.value == null then "with no number" else "at \($n.value), from \(ats($n.origins))" end)";
     def said($s): "\($s.term[4]) \([$s.term[1:4][] | select(. != "-")] | join("/") | if . == "" then "" else . + " " end)\($s.term[5]) \($s.term[6]) (\(ats($s.origins)))";
     .report.names as $names
     | (.report.reach // {}) as $reach
@@ -509,7 +510,10 @@ print_fold_report() {
          (if $reach[.seat | tojson] == null then empty
           else $reach[.seat | tojson] as $r
             | (["mail", "grab", "write", "record"][] | select(. as $a | $r | has($a))) as $a
-            | "  \($a): \(if ($r[$a] | length) == 0 then "no seat" else [$r[$a][] | .name + (if (.origins | length) > 0 then " (\(ats(.origins)))" else "" end)] | join(", ") end)"
+            | "  \($a): \(if ($r[$a] | length) == 0 then "no seat" else [$r[$a][] | .name + (if (.origins | length) > 0 then " (\(ats(.origins)))"
+                elif .ground == "own room" then " (its own room, \(numbered(.rooms[0])))"
+                elif .ground == "sub-room" then " (a sub-room: \(numbered(.rooms[1])), beneath \(numbered(.rooms[0])))"
+                else "" end)] | join(", ") end)"
           end),
          (.ssh.granted[]? | "  ssh key \(.name): granted, by the \(.scope)'"'"'s term (\(ats(.origins)))"),
          (.ssh.unreached[]? | "  ssh key \(.name): the \(.scope)'"'"'s grant does not reach it, since the seat holds no key (\(ats(.origins)))"),
@@ -1099,7 +1103,8 @@ make_mail() {
     done
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg store "$store" --arg comms "$comms" \
       '. + [$s + {box: $box, in: "\($store)/\($box)/in", sent: "\($store)/\($box)/sent", out: "\($comms)/\($box)/out", answers: "\($comms)/\($box)/answers"}]' <<< "$entries")
-  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)' <<< "$folded")
+  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)
+    + (if has("floor") then {floor, number: .clearance.value} else {} end)' <<< "$folded")
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
     '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "$build_dir/mail.json" \
     || die "cannot write $build_dir/mail.json" 2

@@ -1203,7 +1203,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1865,6 +1865,123 @@ t_floors_assembly() {
   rm -rf -- "$scratch/ro:ot"
 }
 
+lodge_west='| ([.programs[] | select(.path == "lodge/east/room.typify")][0] | .path = "lodge/west/room.typify"
+      | .plan |= map(.[2] = "west" | if .[0] == "window" then .[3] = "West" else . end)) as $room
+  | ([.programs[] | select(.path == "lodge/east/ida/seat.typify")][0] | .path = "lodge/west/ivo/seat.typify"
+      | .plan |= map(if type == "object" then .term[1:4] = ["lodge", "west", "ivo"]
+                     else .[1:4] = ["lodge", "west", "ivo"] | if .[0] == "pane" then .[4] = "Lodge Ivo" else . end end)) as $seat
+  | .programs = .programs[0:-1] + [$room, $seat] + .programs[-1:]'
+orchard_field='| ([.programs[] | select(.path == "orchard/barn/room.typify")][0] | .path = "orchard/field/room.typify"
+      | .plan |= map(.[2] = "field" | if .[0] == "window" then .[3] = "Field" else . end)) as $room
+  | ([.programs[] | select(.path == "orchard/barn/picker/seat.typify")][0] | .path = "orchard/field/reaper/seat.typify"
+      | .plan |= map(if type == "object" then .term[1:4] = ["orchard", "field", "reaper"]
+                     else .[1:4] = ["orchard", "field", "reaper"] | if .[0] == "pane" then .[4] = "Orchard Reaper" else . end end)) as $seat
+  | .programs = .programs[0:-1] + [$room, $seat] + .programs[-1:]'
+
+t_reach_floors() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  local base="$floors_terms $lodge_west | $comms_terms" reach
+  local numbered='| .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "2"; 20), cl("harbor"; "tower"; "-"; "room"; "3"; 21), sc(22)]'
+  local hk='"Harbor Keeper"' hp='"Harbor Pilot"' hw='"Harbor Watch"' og='"Orchard Grower"' op='"Orchard Picker"' li='"Lodge Ida"' lv='"Lodge Ivo"'
+  reach() { seat_of "$1" '[.reach.mail, .reach.grab, .reach.write]'; }
+  local dock='harbor/dock at 2, from programs/policy.typify:20' tower='harbor/tower at 3, from programs/policy.typify:21'
+
+  statements_plan "$base $numbered"
+  check "plan of floors with mail, the rooms of harbor numbered 2 and 3, and a second room on the floor of rooms" exit_is 0 wplan
+  check "[C54] an enforced seat grabs its own room and its sub-room, mails its sub-room alone, and writes none (5.122 point 6)" \
+    test "$(reach keeper)" = "[[$hw],[$hk,$hp,$hw],[]]"
+  check "[C54] a room above it in its office it neither grabs nor mails" test "$(reach watch)" = "[[],[$hw],[]]"
+  check "[C54] on a floor of rooms a seat grabs its own room alone, and no other room has a default" test "$(reach ida)$(reach ivo)" = "[[],[$li],[]][[],[$lv],[]]"
+  check "[C54] an unenforced floor's seat has no default: it neither mails, grabs nor writes without a term" test "$(reach grower)" = "[[],[],[]]"
+  check "[C54] plan prints the grounds of each default cell: its own room, and a sub-room beneath it, with both rooms' numbers and origins" \
+    said "  grab: Harbor Keeper (its own room, $dock), Harbor Pilot (its own room, $dock), Harbor Watch (a sub-room: $tower, beneath $dock)"
+  check "[C54] the same for mail" said "  mail: Harbor Watch (a sub-room: $tower, beneath $dock)"
+  check "[C54] and an enforced seat writes no seat" bash -c '[[ $(grep -c "^  write: no seat$" "$1") == 7 ]]' _ "$scratch/out"
+  check "[C54] a room with no number is printed so" said "  grab: Lodge Ida (its own room, lodge/east with no number)"
+  check "build" exit_is 0 wp build
+  check "[C56] mail.json gives each seat its floor and its room's number, null where the room has none (5.132 point 9)" \
+    test "$(jq -c '[.seats[] | [.name, .floor, .number]]' "$clone/BUILD/mail.json")" = \
+    "[[$hk,\"deck\",2],[$hp,\"deck\",2],[$hw,\"deck\",3],[$og,\"bridge\",null],[$op,\"bridge\",null],[$li,\"lodge\",null],[$lv,\"lodge\",null]]"
+  rm -rf -- "$clone/BUILD"
+
+  statements_plan "$base"' | .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "2"; 20), sc(22)]'
+  check "plan with only harbor/dock numbered" exit_is 0 wplan
+  check "[C54] a room with no number is cleared least, so it is a sub-room of a numbered room (5.125 point 7)" test "$(reach keeper)" = "[[$hw],[$hk,$hp,$hw],[]]"
+  check "[C54] and the numbered room is above it" test "$(reach watch)" = "[[],[$hw],[]]"
+  check "[C54] printed with no number" said "Harbor Watch (a sub-room: harbor/tower with no number, beneath $dock)"
+  statements_plan "$base"
+  check "plan with no number at all" exit_is 0 wplan
+  check "[C54] two rooms with no number are peers: neither has a default toward the other" test "$(reach keeper)$(reach watch)" = "[[],[$hk,$hp],[]][[],[$hw],[]]"
+  statements_plan "$base"' | .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "2"; 20), cl("harbor"; "tower"; "-"; "room"; "2"; 21), sc(22)]'
+  check "plan with both rooms at 2" exit_is 0 wplan
+  check "[C54] two rooms of one number are peers (5.122 point 3)" test "$(reach keeper)$(reach watch)" = "[[],[$hk,$hp],[]][[],[$hw],[]]"
+  statements_plan "$base"' | .programs[-1].recorded += [cl("lodge"; "east"; "-"; "room"; "1"; 20), cl("lodge"; "west"; "-"; "room"; "2"; 21), sc(22)]'
+  check "plan with the floor of rooms' rooms numbered 1 and 2" exit_is 0 wplan
+  check "[C54] on a floor of rooms the numbers decide no reach (5.132 point 4)" test "$(reach ida)$(reach ivo)" = "[[],[$li],[]][[],[$lv],[]]"
+
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "harbor", "dock", "-", "room", "mail", "orchard", "-", "-", "office", "allowed"]; 2)]'
+  check "plan with a room's allow toward another floor" exit_is 0 wplan
+  check "[C54] another floor is reached by a term" test "$(reach keeper)" = "[[$hw,$og,$op],[$hk,$hp,$hw],[]]"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "harbor", "dock", "-", "room", "mail", "orchard", "-", "-", "office", "allowed"]; 2),
+      m(["reach", "-", "-", "-", "workplace", "mail", "orchard", "-", "-", "office", "banned"]; 3)]'
+  check "plan with the same allow and a workplace's ban" exit_is 0 wplan
+  check "[C54] with floors a ban holds against an allow of any rank (5.125 point 3, 5.132 point 1)" test "$(reach keeper)" = "[[$hw],[$hk,$hp,$hw],[]]"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "harbor", "dock", "-", "room", "grab", "harbor", "tower", "-", "room", "banned"]; 2),
+      m(["reach", "harbor", "dock", "-", "room", "mail", "harbor", "dock", "-", "room", "allowed"]; 3)]'
+  check "plan with a ban on a sub-room's grab and an allow of the room's own mail" exit_is 0 wplan
+  check "[C54] a term bans what a default gives, and opens mail in the room, to the seat itself too (5.125 point 6)" test "$(reach keeper)" = "[[$hk,$hp,$hw],[$hk,$hp],[]]"
+  check "[C54] the term's cells print their origins" said "  mail: Harbor Keeper (programs/COMMS.typify:3), Harbor Pilot (programs/COMMS.typify:3), Harbor Watch (a sub-room: $tower, beneath $dock)"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "lodge", "-", "-", "floor", "grab", "lodge", "-", "-", "floor", "allowed"]; 2),
+      m(["reach", "harbor", "-", "-", "office", "grab", "lodge", "-", "-", "floor", "allowed"]; 3)]'
+  check "plan with a floor-scope grab on the floor of rooms, and harbor's grab of it" exit_is 0 wplan
+  check "[C103] a term at the floor's scope opens its rooms to each other (5.125 point 26)" test "$(reach ida)" = "[[],[$li,$lv],[]]"
+  check "[C54] and a term opens another floor to an office" test "$(reach watch)" = "[[],[$hw,$li,$lv],[]]"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "orchard", "-", "-", "office", "mail", "harbor", "-", "-", "office", "allowed"]; 2),
+      m(["reach", "orchard", "-", "-", "office", "write", "harbor", "dock", "-", "room", "allowed"]; 3)]'
+  check "plan with an unenforced office's mail and write into an enforced floor" exit_is 0 wplan
+  check "[C54] an unenforced floor's terms decide its seats' mail and write, write included (5.132 points 5 and 6)" test "$(reach grower)" = "[[$hk,$hp,$hw],[],[$hk,$hp]]"
+
+  local refusals=(
+    '| .programs[-1].recorded += [m(["reach", "harbor", "dock", "-", "room", "write", "orchard", "-", "-", "office", "allowed"]; 2)]|programs/COMMS.typify:2: the reach of the room harbor/dock says write allowed, and it asks for seats of the enforced floor deck: there a seat types into no pane, and write is no word of a term, whichever way it points (5.121, 5.125 point 10)'
+    '| .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "write", "orchard", "-", "-", "office", "banned"]; 2)]|programs/COMMS.typify:2: the reach of the workplace says write banned, and it asks for seats of the enforced floors deck, lodge: there a seat types into no pane, and write is no word of a term, whichever way it points (5.121, 5.125 point 10)'
+    '| .programs[-1].recorded += [m(["reach", "harbor", "-", "-", "office", "record", "orchard", "-", "-", "office", "allowed"]; 2), {term: ["record-path", "records"], origin: at(12)}]|programs/COMMS.typify:2: the reach of the office harbor allows record, and it asks for seats of the enforced floor deck: reading a seat'"'"'s saved record stays with Management, and no term gives it to a seat of an enforced floor (5.124 point 9)'
+    '| .programs[-1].recorded += [m(["reach", "harbor", "tower", "-", "room", "mail", "harbor", "dock", "-", "room", "allowed"]; 2)]|programs/COMMS.typify:2: the reach of the room harbor/tower allows mail to the room harbor/dock, and so would open the room harbor/dock to the room harbor/tower, which is cleared less in the office harbor (harbor/tower at 3, from programs/policy.typify:21; harbor/dock at 2, from programs/policy.typify:20): inside an office no term opens a room cleared more (5.124 point 8, 5.132 point 2)'
+    '| .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "-", "-", "office", "allowed"]; 2)]|programs/COMMS.typify:2: the reach of the workplace allows grab to the office harbor, and so would open the room harbor/dock to the room harbor/tower, which is cleared less in the office harbor (harbor/tower at 3, from programs/policy.typify:21; harbor/dock at 2, from programs/policy.typify:20): inside an office no term opens a room cleared more (5.124 point 8, 5.132 point 2)'
+  )
+  local entry
+  for entry in "${refusals[@]}"; do
+    statements_plan "$base $numbered ${entry%|*}"
+    check "[C54] plan refuses, with exit 1: ${entry##*|}" exit_is 1 wplan
+    check "[C54] naming it" said "workplace: the fold refuses: ${entry##*|}"
+  done
+  statements_plan "$base"' | .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "2"; 20), cl("harbor"; "tower"; "-"; "room"; "2"; 21), sc(22),
+      m(["reach", "harbor", "dock", "-", "room", "grab", "harbor", "tower", "-", "room", "allowed"]; 2)]'
+  check "[C54] an allow that opens a peer room inside an office refuses the plan, with exit 1 (5.125 point 9)" exit_is 1 wplan
+  check "[C54] naming both rooms' numbers" \
+    said "programs/COMMS.typify:2: the reach of the room harbor/dock allows grab to the room harbor/tower, and so would open the room harbor/tower to the room harbor/dock, which is cleared as much in the office harbor (harbor/dock at 2, from programs/policy.typify:20; harbor/tower at 2, from programs/policy.typify:21): inside an office a term opens no peer room (5.125 point 9, 5.132 point 2)"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "-", "-", "office", "allowed"]; 2)]'
+  wplan > "$scratch/out" 2>&1
+  check "[C54] a wide allow refuses once for each pair of rooms whose cell it decides, and for no cell a default already opens" \
+    test "$(grep -c "and so would open" "$scratch/out")" = 1
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "-", "-", "office", "allowed"]; 2),
+      m(["reach", "harbor", "tower", "-", "room", "grab", "harbor", "dock", "-", "room", "banned"]; 3)]'
+  check "[C54] with a ban that closes the cell, the wide allow stands (5.132 point 2)" exit_is 0 wplan
+  check "[C54] and the room above stays closed" test "$(reach watch)" = "[[],[$hw],[]]"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "-", "-", "office", "allowed"]; 2),
+      m(["reach", "harbor", "tower", "-", "room", "grab", "harbor", "dock", "-", "room", "allowed"]; 3)]'
+  check "[C54] where a narrower allow decides the cell, the narrower one refuses" exit_is 1 wplan
+  check "[C54] and the wide one is not named" bash -c 'grep -qF "programs/COMMS.typify:3: the reach of the room harbor/tower allows grab" "$1" && ! grep -qF "COMMS.typify:2: the reach" "$1"' _ "$scratch/out"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "harbor", "tower", "-", "room", "mail", "harbor", "dock", "-", "room", "banned"]; 2),
+      m(["reach", "harbor", "-", "-", "office", "record", "orchard", "-", "-", "office", "banned"]; 3), {term: ["record-path", "records"], origin: at(12)}]'
+  check "[C54] a ban toward a room above stands, and so does a banned record (5.132 points 3 and 7)" exit_is 0 wplan
+  statements_plan "$floors_terms $lodge_west $orchard_field | $comms_terms"' | .programs[-1].recorded += [cl("orchard"; "barn"; "-"; "room"; "2"; 20), cl("orchard"; "field"; "-"; "room"; "3"; 21), sc(22),
+      m(["reach", "orchard", "field", "-", "room", "mail", "orchard", "barn", "-", "room", "allowed"]; 2)]'
+  check "[C54] on an unenforced floor an allow toward a room above in the office stands: the rule binds no unenforced asker (5.132 point 5)" exit_is 0 wplan
+  check "[C54] and its term decides" test "$(reach reaper)" = "[[$og,$op],[],[]]"
+}
+
 t_plan_relative() {
   scoped_clone
   local extra='.programs[-1].recorded += [lb($root + "/orchard"; "2"; 9), cl("harbor"; "dock"; "-"; "room"; "3"; 10), sc(11)]'
@@ -2006,7 +2123,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -2026,7 +2143,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -2035,7 +2152,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -2279,7 +2396,7 @@ t_ssh_grants_fold() {
   check "[C85] and, for a seat of the scope that holds no key, that the grant does not reach it" \
     said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
   check "[C85] the fold's version is one that reads ssh grants" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
   statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "node", "keys/node"]; 10), s(["ssh-key", "tower", "keys/tower"]; 11), s(["ssh-grant", "harbor", "tower", "-", "room", "tower", "granted"]; 12)]'
   check "plan with a key that no grant takes, and one granted to a room whose seat holds no key" exit_is 0 wplan
   check "[C85] plan names a key that no grant takes to a seat that holds a key as reaching no seat" \
@@ -2618,7 +2735,7 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
   check "[C32] plan prints each seat's home and the names it expects" \
     bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; cleared for no label, since neither its room nor its office has a clearance; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; cleared for no label, since neither its room nor its office has a clearance; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
@@ -3188,10 +3305,10 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
-  check "[C54] with no reach term every seat mails every seat, and grabs and writes none; no clearance is read" \
+  check "[C54] without floors, with no reach term, every seat mails every seat, and grabs and writes none" \
     test "$(jq -c '[.seats[] | [(.reach.mail | length), .reach.grab, .reach.write]] | unique' "$clone/PLAN/view.json")" = '[[5,[],[]]]'
   check "[C54] a seat that may grab no seat is told so" bash -c 'grep -c "^  grab: no seat$" "$1" | grep -qx 5' _ "$scratch/out"
   statements_plan
@@ -3860,7 +3977,7 @@ t_wake_fold() {
     bash -c '(( $(grep -cxF -- "$2" "$1") == 3 ))' _ "$scratch/out" \
     "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \"^waiting>\$\", by its kind's term (programs/COMMS.typify:9)"
   check "[C29] the fold's version is the one that reads the wake" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
   local planned entry
   planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
   local refusals=(
@@ -4094,7 +4211,7 @@ t_records_fold() {
   check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
   check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
   check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; cleared for no label, since neither its room nor its office has a clearance; its pane not kept; 1 rows"
-  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-v13
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
   statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
   check "plan with a record and no chain" exit_is 0 wplan
   check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"
@@ -4839,6 +4956,7 @@ tests=(
   t_the_fold
   t_plan_relative
   t_floors
+  t_reach_floors
   t_floors_assembly
   t_the_folded_view_in_the_panes
   t_plan_end_to_end

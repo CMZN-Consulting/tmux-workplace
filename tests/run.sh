@@ -1203,7 +1203,7 @@ t_plan_assembles() {
     test "$(jq -r '"\(.root) \(.name) \(.reader)"' "$manifest")" = "$root $label 0.0-stub"
   check "[C29] and each derivation's version" \
     test "$(jq -r '.derivations | keys | join(" ")' "$manifest")" = "assembly fold root-program workplace-name"
-  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+  check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
     "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
@@ -1841,11 +1841,16 @@ t_floors_assembly() {
     '.floors[1].enforced = false | .floors[1].socket = "tmux-default"|2 floors take the socket tmux-default, and at most one may'
     '.floors[0].conf = "../bridge.conf"|the floor bridge names its conf "../bridge.conf", which is not a relative path'
     '.floors[0].smallest = "wide"|the floor bridge says smallest "wide": COLSxROWS'
-    '.floors[0].name = "Bridge: upper"|the floor bridge is named "Bridge: upper", which is refused: it holds a :, which separates the words of the root program'
-    '.floors[0].key = "bri:dge"|the floor key "bri:dge" is refused: it holds a :, which separates the words of the root program'
-    '.floors[0].conf = "floors/bri:dge.conf"|the floor bridge names its conf "floors/bri:dge.conf", which is refused: it holds a :, which separates the words of the root program'
+    '.floors[0].name = "Bridge : upper"|the floor bridge is named "Bridge : upper", which is refused: it holds a colon between spaces, or at its start or end beside a space, which the reader takes for the separator of the root program'"'"'s words'
+    '.floors[0].name = "Bridge :"|the floor bridge is named "Bridge :", which is refused: it holds a colon between spaces, or at its start or end beside a space, which the reader takes for the separator of the root program'"'"'s words'
+    '.floors[0].smallest = "80x24\n"|the floor bridge says smallest "80x24\n": COLSxROWS'
+    '.floors[0].name = ": Bridge"|the floor bridge is named ": Bridge", which is refused: it holds a colon between spaces, or at its start or end beside a space, which the reader takes for the separator of the root program'"'"'s words'
+    '.floors[0].conf = ""|the floor bridge names its conf "", which is not a relative path'
+    '.layers += [""]|workplace.json names a layer that is not a relative path: ""'
+    '.floors[0].conf = "floors/bri : dge.conf"|the floor bridge names its conf "floors/bri : dge.conf", which is refused: it holds a colon between spaces, or at its start or end beside a space, which the reader takes for the separator of the root program'"'"'s words'
   )
   local entry
+  : > "$clone/floors/bri : dge.conf"
   for entry in "${cases[@]}"; do
     jq "${entry%|*}" "$clone/workplace.json" > "$scratch/w2" && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json"
     check "[C100] plan refuses, with exit 2: ${entry##*|}" exit_is 2 wplan
@@ -1866,18 +1871,77 @@ t_floors_assembly() {
   check "[C100] saying so" said "tmux.conf stands in the clone beside floors: each floor names its own file"
   rm -f -- "$clone/tmux.conf"
   check "[C100] and without it plan goes on" exit_is 0 wplan
-  local colon
-  rm -rf -- "$root/con:fig" && cp -R -- "$clone" "$root/con:fig"
-  check "[C27] 5.131 point 4: a configuration whose path relative to the root holds a : refuses plan, with exit 2" \
-    exit_is 2 env WORKPLACE_CONFIG="$root/con:fig" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
-  check "[C27] naming it" said "the configuration's path relative to the root, con:fig, holds a :, which separates the words of the root program"
-  rm -rf -- "$root/con:fig" "$scratch/ro:ot" && mkdir -- "$scratch/ro:ot" && cp -R -- "$clone" "$scratch/ro:ot/config"
+  jq '.floors[0].name = "Bridge: upper" | .floors[0].key = "bri:dge" | .floors[0].conf = "floors/bri:dge.conf"' "$clone/workplace.json" > "$scratch/w2" \
+    && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json" && : > "$clone/floors/bri:dge.conf"
+  wplan > "$scratch/out" 2>&1
+  check "[C100] 5.142: a bare colon in a floor's name, key or conf is no fault of the frame's: the root program carries them, and their classes are the reader's" \
+    grep -qxF "floor : bri:dge : Bridge: upper : offices : unenforced : tmux-default : config/floors/bri:dge.conf : 80x24" "$STUB_DIR/root-program"
+  cp -- "$scratch/w-saved" "$clone/workplace.json"; rm -f -- "$clone/floors/bri:dge.conf"
+  jq '.floors[0].name = "Bri\\dge"' "$clone/workplace.json" > "$scratch/w2" && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json"
+  wplan > "$scratch/out" 2>&1
+  check "[C100] 5.141 point 7: the floors' members keep their places, and a backslash reaches the root program once" \
+    grep -qxF 'floor : bridge : Bri\dge : offices : unenforced : tmux-default : config/floors/bridge.conf : 80x24' "$STUB_DIR/root-program"
+  cp -- "$scratch/w-saved" "$clone/workplace.json"
+  local other
+  for other in "con:fig" "con.fig" "-config"; do
+    rm -rf -- "$root/$other" && cp -R -- "$clone" "$root/$other"
+    check "[C27] 5.142: a configuration whose base name does not fit the class of the workplace's name refuses plan, with exit 2: $other" \
+      exit_is 2 env WORKPLACE_CONFIG="$root/$other" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+    check "[C27] naming it" said "workplace: the configuration's base name \"$other\" is refused: the workplace's name is derived from it, and it does not fit the class of that name, /[A-Za-z0-9][A-Za-z0-9_-]*/ (5.142)"
+    rm -rf -- "$root/$other"
+  done
+  rm -rf -- "$root/c : d" && cp -R -- "$clone" "$root/c : d"
+  check "[C27] a configuration whose path relative to the root holds the separator refuses plan, with exit 2" \
+    exit_is 2 env WORKPLACE_CONFIG="$root/c : d" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C27] naming it, by one line, though its base name, which holds it too, does not fit the name's class either" \
+    bash -c 'grep -qxF "workplace: the configuration'"'"'s path relative to the root, c : d, is refused: it holds a colon between spaces, or at its start or end beside a space, which the reader takes for the separator of the root program'"'"'s words" "$1" && [[ $(grep -c "is refused" "$1") == 1 ]]' _ "$scratch/out"
+  rm -rf -- "$root/c : d" "$scratch/r : t" "$scratch/ro:ot"
+  mkdir -- "$scratch/r : t" && cp -R -- "$clone" "$scratch/r : t/config"
+  local spaced colon
+  spaced=$(cd -P -- "$scratch/r : t" && pwd -P)
+  check "[C27] a root that holds the separator refuses plan, with exit 2" \
+    exit_is 2 env WORKPLACE_ROOT="$spaced" WORKPLACE_CONFIG="$spaced/config" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C27] naming it" said "workplace: the root $spaced is refused: it holds a colon between spaces, or at its start or end beside a space, which the reader takes for the separator of the root program's words"
+  mkdir -- "$scratch/ro:ot" && cp -R -- "$clone" "$scratch/ro:ot/config"
   colon=$(cd -P -- "$scratch/ro:ot" && pwd -P)
-  check "[C27] a root whose path holds a : refuses plan, with exit 2" \
-    exit_is 2 env WORKPLACE_ROOT="$colon" WORKPLACE_CONFIG="$colon/config" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
-  check "[C27] naming it, and not the configuration's own path, which holds none" \
-    bash -c 'grep -qxF "workplace: the root $2 holds a :, which separates the words of the root program" "$1" && ! grep -qF "relative to the root" "$1"' _ "$scratch/out" "$colon"
-  rm -rf -- "$scratch/ro:ot"
+  env WORKPLACE_ROOT="$colon" WORKPLACE_CONFIG="$colon/config" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan > "$scratch/out" 2>&1
+  check "[C27] 5.142: a root with a bare colon passes the assembler, the last word of its line, which the reader reads whole" \
+    bash -c 'grep -qxF "workdir : $1" "$2" && ! grep -qF "is refused" "$3"' _ "$colon" "$STUB_DIR/root-program" "$scratch/out"
+  rm -rf -- "$scratch/r : t" "$scratch/ro:ot"
+  rm -f -- "$clone/floors/bri : dge.conf"
+  rm -rf -- "$root/x :" && cp -R -- "$clone" "$root/x :"
+  check "[C27] 5.142: a path relative to the root that ends in a space and a colon holds no separator as written, and its base name is refused by its class, with exit 2" \
+    exit_is 2 env WORKPLACE_CONFIG="$root/x :" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C27] by A14 alone, naming the base name" \
+    bash -c 'grep -qF "workplace: the configuration'"'"'s base name \"x :\" is refused" "$1" && [[ $(grep -c "is refused" "$1") == 1 ]]' _ "$scratch/out"
+  rm -rf -- "$root/x :" "$root/a:b" && mkdir -- "$root/a:b" && cp -R -- "$clone" "$root/a:b/config"
+  env WORKPLACE_CONFIG="$root/a:b/config" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan > "$scratch/out" 2>&1
+  check "[C27] 5.142: a bare colon in the path relative to the root passes the assembler, into every conf it heads" \
+    bash -c 'grep -qF "floor : bridge : Bridge : offices : unenforced : tmux-default : a:b/config/floors/bridge.conf : 80x24" "$1" && ! grep -qF "is refused" "$2"' _ "$STUB_DIR/root-program" "$scratch/out"
+  rm -rf -- "$root/a:b" "$scratch/r : t" "$scratch/c : d"
+  mkdir -- "$scratch/r : t" && cp -R -- "$clone" "$scratch/r : t/con.fig"
+  spaced=$(cd -P -- "$scratch/r : t" && pwd -P)
+  check "[C27] a root that holds the separator, and a base name outside the class: two faults" \
+    exit_is 2 env WORKPLACE_ROOT="$spaced" WORKPLACE_CONFIG="$spaced/con.fig" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C27] two lines, A12's and A14's" \
+    bash -c 'grep -qF "workplace: the root $2 is refused" "$1" && grep -qF "workplace: the configuration'"'"'s base name \"con.fig\" is refused" "$1"' _ "$scratch/out" "$spaced"
+  cp -R -- "$clone" "$scratch/c : d"
+  spaced=$(cd -P -- "$scratch/c : d" && pwd -P)
+  check "[C27] a clone that is the root, whose base name holds the separator" \
+    exit_is 2 env WORKPLACE_ROOT="$spaced" WORKPLACE_CONFIG="$spaced" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C27] refuses by the root's line alone, since the base name's fault is that same separator" \
+    bash -c 'grep -qF "workplace: the root $2 is refused" "$1" && [[ $(grep -c "is refused" "$1") == 1 ]]' _ "$scratch/out" "$spaced"
+  rm -rf -- "$scratch/r : t" "$scratch/c : d" "$root/con.fig"
+  cp -R -- "$clone" "$root/con.fig"
+  jq 'del(.floors)' "$clone/workplace.json" > "$root/con.fig/workplace.json" && : > "$root/con.fig/tmux.conf"
+  check "[C27] 5.142: without floors and with no socket the name is derived, so a base name outside the class refuses, with exit 2" \
+    exit_is 2 env WORKPLACE_CONFIG="$root/con.fig" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C27] naming it" said "workplace: the configuration's base name \"con.fig\" is refused"
+  jq 'del(.floors) + {socket: "default"}' "$clone/workplace.json" > "$root/con.fig/workplace.json"
+  env WORKPLACE_CONFIG="$root/con.fig" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan > "$scratch/out" 2>&1
+  check "[C27] with socket default the name is default, and the base name is not judged" \
+    bash -c '! grep -qF "base name" "$1" && grep -qxF "server : default : con.fig/tmux.conf" "$2"' _ "$scratch/out" "$STUB_DIR/root-program"
+  rm -rf -- "$root/con.fig"
 }
 
 lodge_west='| ([.programs[] | select(.path == "lodge/east/room.typify")][0] | .path = "lodge/west/room.typify"
@@ -1891,6 +1955,12 @@ orchard_field='| ([.programs[] | select(.path == "orchard/barn/room.typify")][0]
   | ([.programs[] | select(.path == "orchard/barn/picker/seat.typify")][0] | .path = "orchard/field/reaper/seat.typify"
       | .plan |= map(if type == "object" then .term[1:4] = ["orchard", "field", "reaper"]
                      else .[1:4] = ["orchard", "field", "reaper"] | if .[0] == "pane" then .[4] = "Orchard Reaper" else . end end)) as $seat
+  | .programs = .programs[0:-1] + [$room, $seat] + .programs[-1:]'
+harbor_yard='| ([.programs[] | select(.path == "harbor/tower/room.typify")][0] | .path = "harbor/yard/room.typify"
+      | .plan |= map(.[2] = "yard" | if .[0] == "window" then .[3] = "Yard" else . end)) as $room
+  | ([.programs[] | select(.path == "harbor/tower/watch/seat.typify")][0] | .path = "harbor/yard/sentry/seat.typify"
+      | .plan |= map(if type == "object" then .term[1:4] = ["harbor", "yard", "sentry"]
+                     else .[1:4] = ["harbor", "yard", "sentry"] | if .[0] == "pane" then .[4] = "Harbor Sentry" else . end end)) as $seat
   | .programs = .programs[0:-1] + [$room, $seat] + .programs[-1:]'
 
 t_reach_floors() {
@@ -1913,7 +1983,7 @@ t_reach_floors() {
   check "[C54] plan prints the grounds of each default cell: its own room, and a sub-room beneath it, with both rooms' numbers and origins" \
     said "  grab: Harbor Keeper (its own room, $dock), Harbor Pilot (its own room, $dock), Harbor Watch (a sub-room: $tower, beneath $dock)"
   check "[C54] the same for mail" said "  mail: Harbor Watch (a sub-room: $tower, beneath $dock)"
-  check "[C54] and an enforced seat writes no seat" bash -c '[[ $(grep -c "^  write: no seat$" "$1") == 7 ]]' _ "$scratch/out"
+  check "[C54] and no seat writes: an enforced seat by rule, an unenforced one for want of a term" bash -c '[[ $(grep -c "^  write: no seat$" "$1") == 7 ]]' _ "$scratch/out"
   check "[C54] a room with no number is printed so" said "  grab: Lodge Ida (its own room, lodge/east with no number)"
   check "build" exit_is 0 wp build
   check "[C56] mail.json gives each seat its floor and its room's number, null where the room has none (5.132 point 9)" \
@@ -1995,6 +2065,56 @@ t_reach_floors() {
       m(["reach", "orchard", "field", "-", "room", "mail", "orchard", "barn", "-", "room", "allowed"]; 2)]'
   check "[C54] on an unenforced floor an allow toward a room above in the office stands: the rule binds no unenforced asker (5.132 point 5)" exit_is 0 wplan
   check "[C54] and its term decides" test "$(reach reaper)" = "[[$og,$op],[],[]]"
+
+  statements_plan "$base"' | .programs[-1].recorded += [cl("harbor"; "-"; "-"; "office"; "2"; 20), cl("harbor"; "tower"; "-"; "room"; "3"; 21), sc(22)]'
+  check "plan with harbor numbered 2 by its office and tower 3 by its own line" exit_is 0 wplan
+  check "[C54] a room with no line of its own takes its office's number (5.122 point 1, 5.141 point 7)" test "$(reach keeper)" = "[[$hw],[$hk,$hp,$hw],[]]"
+  check "[C54] printed with the office's clearance" said "Harbor Watch (a sub-room: $tower, beneath harbor/dock at 2, from programs/policy.typify:20)"
+  statements_plan "$base"' | .programs[-1].recorded += [cl("lodge"; "west"; "-"; "room"; "1"; 20), sc(22)]'
+  check "plan with one room of the floor of rooms numbered" exit_is 0 wplan
+  check "[C32] a seat of a floor of rooms with no number is printed so, and no office is spoken of (5.141 point 7)" \
+    bash -c 'grep "^seat Lodge Ida (lodge/east/ida): " "$1" | grep -qF "; cleared for no label, since its room has no clearance;"' _ "$scratch/out"
+  statements_plan "$floors_terms $lodge_west $harbor_yard | $comms_terms"' | .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "1"; 20), cl("harbor"; "tower"; "-"; "room"; "2"; 21),
+      cl("harbor"; "yard"; "-"; "room"; "2"; 23), sc(22), m(["reach", "harbor", "tower", "-", "room", "grab", "harbor", "-", "-", "office", "allowed"]; 2)]'
+  check "[C54] a term that opens a room above and a peer from one room refuses, with exit 1" exit_is 1 wplan
+  check "[C54] one line for each pair of rooms, by the asking room and then the target room (5.141 point 7)" \
+    test "$(grep -o "and so would open the room harbor/[a-z]* to the room harbor/tower" "$scratch/out" | tr '\n' ,)" = "and so would open the room harbor/dock to the room harbor/tower,and so would open the room harbor/yard to the room harbor/tower,"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "harbor", "tower", "-", "room", "mail", "harbor", "dock", "-", "room", "allowed"]; 2),
+      m(["reach", "harbor", "-", "-", "office", "record", "orchard", "-", "-", "office", "allowed"]; 3), m(["reach", "harbor", "dock", "-", "room", "write", "orchard", "-", "-", "office", "banned"]; 4),
+      {term: ["record-path", "records"], origin: at(12)}]'
+  check "[C54] R1, R2 and R3 in one plan refuse, with exit 1" exit_is 1 wplan
+  check "[C54] in that order, R1 first" test "$(grep -oE "says write|allows record|so would open" "$scratch/out" | tr '\n' ,)" = "says write,allows record,so would open,"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "orchard", "-", "-", "office", "record", "harbor", "-", "-", "office", "allowed"]; 2),
+      {term: ["record-path", "records"], origin: at(12)}]'
+  check "[C54] an allowed record asked from an unenforced floor stands (5.132 point 7)" exit_is 0 wplan
+  check "[C54] and its term decides the record list" test "$(seat_of grower '.reach.record')" = "[$hk,$hp,$hw]"
+
+  local fold
+  rm -rf -- "$scratch/loose" && mkdir -- "$scratch/loose" && cp -R -- "$tool/." "$scratch/loose/"
+  fold=$(< "$scratch/loose/libexec/fold.jq")
+  printf '%s\n' "${fold/'          | if ($reach_faults | length) > 0 then {errors: $reach_faults}'/'          | if false then {}'}" > "$scratch/loose/libexec/fold.jq"
+  check "a copy of the loop whose fold has no R1, R2 or R3" bash -c '! cmp -s "$1" "$2"' _ "$tool/libexec/fold.jq" "$scratch/loose/libexec/fold.jq"
+  statements_plan "$base $numbered"' | .programs[-1].recorded += [m(["reach", "harbor", "dock", "-", "room", "write", "orchard", "barn", "grower", "seat", "allowed"]; 2),
+      m(["reach", "harbor", "dock", "-", "room", "record", "orchard", "barn", "grower", "seat", "allowed"]; 3), m(["reach", "harbor", "tower", "-", "room", "mail", "harbor", "dock", "keeper", "seat", "allowed"]; 4),
+      {term: ["record-path", "records"], origin: at(12)}]'
+  check "[C54] 5.141 point 4: the finished table refuses what that copy's terms would give, with exit 1" exit_is 1 loose_wplan
+  check "[C54] an enforced seat's write" \
+    said "workplace: the fold refuses: seat Harbor Keeper (harbor/dock/keeper), on the enforced floor deck, may write to Orchard Grower (orchard/barn/grower) by its finished reach: a seat of an enforced floor types into no pane (5.121, 5.125 point 10)"
+  check "[C54] its record" \
+    said "workplace: the fold refuses: seat Harbor Keeper (harbor/dock/keeper), on the enforced floor deck, may read the record of Orchard Grower (orchard/barn/grower) by its finished reach: no seat of an enforced floor reads a saved record (5.124 point 9)"
+  check "[C54] and a mail toward a room above it in its office" \
+    said "workplace: the fold refuses: seat Harbor Watch (harbor/tower/watch), on the enforced floor deck, may mail Harbor Keeper (harbor/dock/keeper) by its finished reach, a room above its own in the office harbor: inside an office a seat reaches no room cleared more or as much (5.124 point 8, 5.125 point 9)"
+  statements_plan "$base"' | .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "2"; 20), cl("harbor"; "tower"; "-"; "room"; "2"; 21), sc(22),
+      m(["reach", "harbor", "dock", "-", "room", "grab", "harbor", "tower", "-", "room", "allowed"]; 2)]'
+  check "[C54] the same copy plans a grab between two rooms of one number" exit_is 1 loose_wplan
+  check "[C54] and the finished table refuses it, as a room cleared as much" \
+    said "workplace: the fold refuses: seat Harbor Keeper (harbor/dock/keeper), on the enforced floor deck, may grab Harbor Watch (harbor/tower/watch) by its finished reach, a room cleared as much as its own in the office harbor: inside an office a seat reaches no room cleared more or as much (5.124 point 8, 5.125 point 9)"
+  rm -rf -- "$scratch/loose"
+  statements_plan "$floors_terms $lodge_west $harbor_yard | $comms_terms"' | .programs[-1].recorded += [cl("harbor"; "dock"; "-"; "room"; "1"; 20), cl("harbor"; "tower"; "-"; "room"; "2"; 21),
+      cl("harbor"; "yard"; "-"; "room"; "2"; 23), sc(22), m(["reach", "-", "-", "-", "workplace", "grab", "harbor", "-", "-", "office", "allowed"]; 2)]'
+  check "[C54] a wide term that opens cells from two asking rooms refuses, with exit 1" exit_is 1 wplan
+  check "[C54] its lines run by the asking room, then by the target room (5.141 point 7)" \
+    test "$(grep -oE "open the room harbor/[a-z]* to the room harbor/[a-z]*" "$scratch/out" | sed 's/open the room //; s/ to the room /</' | tr '\n' ,)" = "harbor/dock<harbor/tower,harbor/yard<harbor/tower,harbor/dock<harbor/yard,harbor/tower<harbor/yard,"
 }
 
 t_plan_relative() {
@@ -2138,7 +2258,7 @@ t_identity_selection() {
   check "[C34] each seat holds a key by the narrowest scope that speaks: its room's, its own, its office's, the workplace's" \
     test "$(jq -c '[.seats[] | [.seat[2], .key.state, .key.scope, [.key.origins[].line]]]' "$clone/PLAN/view.json")" = \
     '[["keeper","held","room",[3]],["pilot","none","seat",[4]],["watch","none","office",[2]],["grower","held","workplace",[1]],["picker","held","workplace",[1]]]'
-  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+  check "[C34] the fold's version is one that reads keys" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
   statements_plan '.programs[-1].recorded += [{term: ["key", "-", "-", "-", "workplace", "held"], origin: at(1)}]'
   check "plan with the workplace's key alone" exit_is 0 wplan
   check "[C34] the workplace's key alone reaches every seat" \
@@ -2158,7 +2278,7 @@ t_identity_selection() {
   jq '.derivations.fold = "frame-older-v0"' "$manifest" > "$scratch/m" && cp -- "$scratch/m" "$manifest"
   check "[C29] build of a plan folded by another version, whose view this loop's fold gives again" exit_is 0 wp build
   check "[C29] says so in one line and goes on" \
-    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14; the views are equal, so build goes on"
+    said "the plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15; the views are equal, so build goes on"
   check "[C36] a build makes the state directory, 0700, and no key home where no seat holds a key" \
     bash -c '[[ $(stat -c %a "$1") == 700 && ! -e $1/keys ]]' _ "$HOME/.local/state/workplace/$label"
   rm -rf -- "$clone/BUILD"
@@ -2167,7 +2287,7 @@ t_identity_selection() {
     && cp -- "$scratch/m" "$manifest"
   check "[C29] where the views differ, build refuses" exit_is 1 wp build
   check "[C29] naming both versions and saying to plan again" \
-    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14; run plan again"
+    said "The plan was folded by frame-older-v0, and this loop folds by frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15; run plan again"
   statements_plan "$key_terms"' | .state.environment += [{key: ["harbor", "dock", "keeper", "GNUPGHOME"], value: ["/elsewhere"], masked: false, origin: at(40)}]'
   check "[C39] plan refuses a holding seat's row for GNUPGHOME, with exit 1" exit_is 1 wplan
   check "[C39] naming the seat, the name and both origins" \
@@ -2411,7 +2531,7 @@ t_ssh_grants_fold() {
   check "[C85] and, for a seat of the scope that holds no key, that the grant does not reach it" \
     said "  ssh key node-rsa: the office's grant does not reach it, since the seat holds no key (programs/SSH.typify:5)"
   check "[C85] the fold's version is one that reads ssh grants" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
   statements_plan "$key_terms | $ssh_terms"' | .programs[-1].recorded += [s(["ssh-key", "node", "keys/node"]; 10), s(["ssh-key", "tower", "keys/tower"]; 11), s(["ssh-grant", "harbor", "tower", "-", "room", "tower", "granted"]; 12)]'
   check "plan with a key that no grant takes, and one granted to a room whose seat holds no key" exit_is 0 wplan
   check "[C85] plan names a key that no grant takes to a seat that holds a key as reaching no seat" \
@@ -2750,7 +2870,7 @@ t_home_and_values_selection() {
     test "$(jq -c '[.seats[] | [.seat[2], [.expects[]? | [.name, .scopes, [.origins[].line]]]]]' "$clone/PLAN/view.json")" = \
     '[["keeper",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace","seat"],[1,3]]]],["pilot",[["WPT_DOCK",["room"],[2]],["WPT_TOKEN",["workplace"],[1]]]],["watch",[["WPT_TOKEN",["workplace"],[1]]]],["grower",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]],["picker",[["WPT_ORCHARD",["office"],[4]],["WPT_TOKEN",["workplace"],[1]]]]]'
   check "[C29] the fold's version is the one that reads homes and expected values" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
   check "[C32] plan prints each seat's home and the names it expects" \
     bash -c 'grep -qF "seat Harbor Keeper (harbor/dock/keeper): kind navigator; cleared for no label, since neither its room nor its office has a clearance; home kept, by WPT_HOME; expects WPT_DOCK, WPT_TOKEN;" "$1" && grep -qF "seat Orchard Grower (orchard/barn/grower): kind gardener; cleared for no label, since neither its room nor its office has a clearance; home scratch, by WPT_HOME; expects WPT_ORCHARD, WPT_TOKEN;" "$1"' _ "$scratch/out"
   statements_plan
@@ -3320,7 +3440,7 @@ t_comms_fold() {
   check "[C55] why names the mailbox, which decides the path whatever the rows say" \
     bash -c 'grep -qxF "the seat'"'"'s mailbox: shown by the frame after the rows (Comms) at $2, whatever is there on the machine: out read-write, where the seat leaves its requests; in, sent and answers read-only; the seat'"'"'s own, and no other seat'"'"'s" "$1" && grep -qxF "  the frame'"'"'s mask above decides for the path, and the row does not" "$1"' _ "$scratch/out" "$root/mailbox"
   check "[C29] the fold's version is the one that reads mail and reach" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
   statements_plan "$comms_terms"
   check "plan with a mail term alone" exit_is 0 wplan
   check "[C54] without floors, with no reach term, every seat mails every seat, and grabs and writes none" \
@@ -3996,7 +4116,7 @@ t_wake_fold() {
     bash -c '(( $(grep -cxF -- "$2" "$1") == 3 ))' _ "$scratch/out" \
     "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \"^waiting>\$\", by its kind's term (programs/COMMS.typify:9)"
   check "[C29] the fold's version is the one that reads the wake" \
-    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+    test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
   local planned entry
   planned=$(cat "$clone/PLAN/view.json" "$clone/PLAN/manifest.json" | sha256sum)
   local refusals=(
@@ -4230,7 +4350,7 @@ t_records_fold() {
   check "[C69] plan prints the records" said "records: shown at $root/records; 268435456 bytes a day for a pane; chained to the file"
   check "[C69] and whose records a seat may read" said "  record: Harbor Pilot (programs/LOGS.typify:4)"
   check "[C69] and whether its pane is kept" said "seat Orchard Grower (orchard/barn/grower): kind none; cleared for no label, since neither its room nor its office has a clearance; its pane not kept; 1 rows"
-  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+  check "[C29] the fold's version is the one that reads records" test "$(jq -r .derivations.fold "$clone/PLAN/manifest.json")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
   statements_plan 'def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}}; .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1)]'
   check "plan with a record and no chain" exit_is 0 wplan
   check "[C69] with no record-chain the files are kept and no chain is made, and plan says so" said "records: shown to no seat; 268435456 bytes a day for a pane; no chain is made, and the files are kept"
@@ -4341,7 +4461,7 @@ t_records_in_panes() {
     test "$(cd "$s/records" && find . -maxdepth 1 -type d -printf '%P %m\n' | LC_ALL=C sort | tr '\n' ',')" = " 700,Harbor Keeper 700,Harbor Pilot 700,Harbor Watch 700,Orchard Grower 700,Orchard Picker 700,"
   check "[C70] and BUILD/records.json, listed in the MANIFEST, with each seat's directory, pane and reading" \
     bash -c 'grep -q "  records.json$" "$1/MANIFEST" && [[ $(jq -c "[.seats[0] | .name, .pane, .reads]" "$1/records.json") == "[\"Harbor Keeper\",\"kept\",[\"Harbor Pilot\"]]" ]]' _ "$clone/BUILD"
-  check "[C70] a day's file is named by its UTC day, and only its owner reads it" test "$(stat -c %a "$(record_of keeper)/$(day_written "$(record_of keeper)").pane")" = 600
+  check "[C70] the day's file that the keeper wrote last is its owner's alone (mode 600)" test "$(stat -c %a "$(record_of keeper)/$(day_written "$(record_of keeper)").pane")" = 600
   local report=$root/harbor/berth/keeper
   check "[C76] at the record path a seat is shown one directory for each seat whose record it may read, under that seat's name, and no other" \
     grep -qxF "entries $root/records: Harbor Pilot " "$report"

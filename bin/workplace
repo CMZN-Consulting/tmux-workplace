@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-v14
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-v15
 floor_sub=""
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
@@ -228,8 +228,14 @@ assemble() {
   if [[ $clone == "$root" ]]; then relative=""
   elif [[ $root == / ]]; then relative=${clone#/}
   else relative=${clone#"$root"/}; fi
-  problems=$(jq -r -L "$tool/libexec" --arg root "$root" --arg relative "$relative" 'include "table";
-    def path_word: type == "string" and (test("[[:cntrl:]]") | not) and (startswith("/") | not)
+  problems=$(jq -r -L "$tool/libexec" --arg root "$root" --arg relative "$relative" --arg base "${clone##*/}" 'include "table";
+    def separator: test(" : ") or startswith(": ") or endswith(" :");
+    def rootsep: $root | separator;
+    # The relative path is written only as the head of a word, before "/" and a file name (from_root), so only
+    # a separator inside it or at its start can stand in a word as written.
+    def relsep: $relative != "" and ($relative + "/" | separator);
+    def separated: "it holds a colon between spaces, or at its start or end beside a space, which the reader takes for the separator of the root program'"'"'s words";
+    def path_word: type == "string" and . != "" and (test("[[:cntrl:]]") | not) and (startswith("/") | not)
       and (split("/") | all(. != "" and . != "." and . != ".."));
     def floor_words: ["key", "name", "houses", "enforced", "socket", "conf", "smallest"];
     if type != "object" then "workplace.json is not an object"
@@ -244,7 +250,7 @@ assemble() {
           | ($f | keys[] | select(IN(floor_words[]) | not) | "the floor at index \($i) holds \(.), which the loop does not read"),
             (floor_words[] | select(. as $w | $f | has($w) | not) | "the floor at index \($i) lacks \(.)")),
          (.floors[] | select(has("key")) | .key as $k
-          | ($k | key_fault // (if contains(":") then "it holds a :, which separates the words of the root program" else null end)) as $fault | select($fault != null)
+          | ($k | key_fault) as $fault | select($fault != null)
           | "the floor key \($k | tojson) is refused: \($fault)"),
          ([.floors[].key | strings] | group_by(.)[] | select(length > 1) | "the floor key \(.[0]) is listed \(length) times"),
          (.floors[] | . as $f | ($f.key | if type == "string" then . else tojson end) as $k
@@ -254,12 +260,12 @@ assemble() {
             (if $f.enforced == true and $f.socket == "tmux-default"
              then "the floor \($k) is enforced and takes tmux-default: an enforced floor stands on a socket of its run, so that no plain tmux command reaches it (5.124 point 2)" else empty end),
             (if $f | has("conf") and ($f.conf | path_word | not) then "the floor \($k) names its conf \($f.conf | tojson), which is not a relative path"
-             elif $f | has("conf") and ($f.conf | contains(":")) then "the floor \($k) names its conf \($f.conf | tojson), which is refused: it holds a :, which separates the words of the root program"
+             elif $f | has("conf") and ($f.conf | if $relative == "" then . else $relative + "/" + . end | separator) and (relsep | not) then "the floor \($k) names its conf \($f.conf | tojson), which is refused: \(separated)"
              else empty end),
-            (if $f | has("smallest") and (($f.smallest | type) != "string" or ($f.smallest | test("^[1-9][0-9]*x[1-9][0-9]*$") | not))
+            (if $f | has("smallest") and (($f.smallest | type) != "string" or ($f.smallest | test("^[1-9][0-9]*x[1-9][0-9]*$") and (contains("\n") | not) | not))
              then "the floor \($k) says smallest \($f.smallest | tojson): COLSxROWS" else empty end),
             (if $f | has("name") then
-               ($f.name | name_fault // (if contains(":") then "it holds a :, which separates the words of the root program" else null end)) as $nf
+               ($f.name | name_fault // (if separator then separated else null end)) as $nf
                | select($nf != null) | "the floor \($k) is named \($f.name | tojson), which is refused: \($nf)"
              else empty end)),
          ([.floors[] | select(.socket == "tmux-default")] | length) as $d
@@ -272,16 +278,22 @@ assemble() {
           | "the layer name \(.[0]) is listed \(length) times in workplace.json")
        end),
       (if has("socket") and (has("floors") | not) and .socket != "default" then "workplace.json says socket \(.socket | tojson), and only \"default\" is known" else empty end),
-      (if $root | contains(":") then "the root \($root) holds a :, which separates the words of the root program" else empty end),
-      (if $relative | contains(":") then "the configuration'"'"'s path relative to the root, \($relative), holds a :, which separates the words of the root program" else empty end)
+      (if rootsep then "the root \($root) is refused: \(separated)" else empty end),
+      (if relsep then "the configuration'"'"'s path relative to the root, \($relative), is refused: \(separated)" else empty end),
+      (if (has("floors") or ((.socket // "") != "default")) and ($base | test("^[A-Za-z0-9][A-Za-z0-9_-]*$") | not)
+          and ((($base | separator) and (rootsep or relsep)) | not)
+       then "the configuration'"'"'s base name \($base | tojson) is refused: the workplace'"'"'s name is derived from it, and it does not fit the class of that name, /[A-Za-z0-9][A-Za-z0-9_-]*/ (5.142)" else empty end)
     end' "$file" 2>&1) || die "workplace.json is not JSON that jq can read: $problems" 2
   if [[ -n $problems ]]; then
     while IFS= read -r line; do warn "$line"; done <<< "$problems"
     exit 2
   fi
-  local -a layers lines floors=()
+  local -a layers lines floors=() floor_words=()
   mapfile -t layers < <(jq -r '.layers[]' "$file")
-  mapfile -t floors < <(jq -r '.floors[]? | [.key, .name, .houses, (if .enforced then "enforced" else "unenforced" end), .socket, .conf, .smallest] | @tsv' "$file")
+  # Each floor's seven members, NUL-separated, so that an empty word keeps its place and a backslash is not
+  # doubled, as a tab-separated line would do; floors holds the index of each floor's first member.
+  mapfile -d '' -t floor_words < <(jq --raw-output0 '.floors[]? | .key, .name, .houses, (if .enforced then "enforced" else "unenforced" end), .socket, .conf, .smallest' "$file")
+  for (( line = 0; line < ${#floor_words[@]}; line += 7 )); do floors+=("$line"); done
   assembled_root_rule=root-two-lines-v1
   (( ${#floors[@]} )) && assembled_root_rule=root-floors-v1
   assembled_name=default
@@ -324,7 +336,7 @@ assemble() {
   if (( ${#floors[@]} )); then
     [[ ! -e $clone/tmux.conf && ! -L $clone/tmux.conf ]] || die "tmux.conf stands in the clone beside floors: each floor names its own file" 2
     for line in "${floors[@]}"; do
-      IFS=$'\t' read -r fkey fname fhouses fenforced fsocket fconf fsmallest <<< "$line"
+      fkey=${floor_words[line]} fconf=${floor_words[line + 5]}
       [[ -f $clone/$fconf && ! -L $clone/$fconf ]] || die "the floor $fkey names its conf $fconf, which is not a file in the clone" 2
       floor_confs+=("$fconf")
     done
@@ -360,7 +372,8 @@ assemble() {
   if (( ${#floors[@]} )); then
     root_lines+=("workplace : $assembled_name")
     for line in "${floors[@]}"; do
-      IFS=$'\t' read -r fkey fname fhouses fenforced fsocket fconf fsmallest <<< "$line"
+      fkey=${floor_words[line]} fname=${floor_words[line + 1]} fhouses=${floor_words[line + 2]} fenforced=${floor_words[line + 3]}
+      fsocket=${floor_words[line + 4]} fconf=${floor_words[line + 5]} fsmallest=${floor_words[line + 6]}
       root_lines+=("floor : $fkey : $fname : $fhouses : $fenforced : $fsocket : $(from_root "$fconf") : $fsmallest")
     done
   else
@@ -501,7 +514,8 @@ print_fold_report() {
       (.view.ssh.keys[]? | "ssh key \(.name): \(.path) (\(ats(.origins)))" + (if .name | IN($reached[]) then "" else ", and it reaches no seat: no grant takes it to a seat that holds a key" end)),
       (.view.seats[]
        | "seat \($names[.seat | tojson]) (\(.seat | join("/"))): kind \(.kind); "
-         + (if .clearance.value == null then "cleared for no label, since neither its room nor its office has a clearance"
+         + (if .clearance.value == null and .floor != null and .floor == .seat[0] then "cleared for no label, since its room has no clearance"
+            elif .clearance.value == null then "cleared for no label, since neither its room nor its office has a clearance"
             else "clearance \(.clearance.value), the \(.clearance.scope)'"'"'s (\(ats(.clearance.origins)))" end)
          + (if .home == null then "" else "; home \(.home.state), by \(.home.variable)" end)
          + (if .expects == null then "" else "; expects \([.expects[].name] | join(", "))" end)

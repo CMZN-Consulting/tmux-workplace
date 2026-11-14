@@ -322,7 +322,7 @@ joined($b[0]; $root) as $plan
                   if ($c | length) == 0 then {state: (if $action == "mail" then "allowed" else "banned" end), origins: []}
                   else narrowest($c) | {state: .term[10], origins} end
                 else mode_of($k) as $mode | (if $mode == "enforced" then relation($k; $tk) else null end) as $r
-                  | if any($c[]; .term[10] == "banned") then narrowest([$c[] | select(.term[10] == "banned")]) | {state: "banned", origins}
+                  | if any($c[]; .term[10] == "banned") then {state: "banned", origins: []}
                     elif ($c | length) > 0 then narrowest($c) | {state: "allowed", origins}
                     elif ($action == "grab" and ($r | IN("own room", "sub-room"))) or ($action == "mail" and $r == "sub-room")
                     then {state: "allowed", origins: [], ground: $r, rooms: ([number_of($k)] + (if $r == "own room" then [] else [number_of($tk)] end))}
@@ -340,7 +340,7 @@ joined($b[0]; $root) as $plan
                  | relation($k; $tk) as $r | select($r | IN("room above", "peer"))
                  | [$reaches[] | select(.term[5] == $t.term[5] and holds(.term[4]; .term[1:4]; $k) and holds(.term[9]; .term[6:9]; $tk))] as $c
                  | select(all($c[]; .term[10] != "banned") and narrowest($c).term == $t.term)
-                 | {from: $k[0:2], to: $tk[0:2], r: $r}] | unique[]
+                 | {from: $k[0:2], to: $tk[0:2], r: $r}] | unique_by([.from, .to])[]
               | "\(ats($t.origins)): the reach of \(scope_text($t.term; $t.term[4]; $t.term[1:4])) allows \($t.term[5]) to \(scope_text($t.term; $t.term[9]; $t.term[6:9])), and so would open the room \(.to | join("/")) to the room \(.from | join("/")), "
                 + (if .r == "room above" then "which is cleared less" else "which is cleared as much" end)
                 + " in the office \(.from[0]) (\(numbered(number_of(.from))); \(numbered(number_of(.to)))): "
@@ -433,7 +433,20 @@ joined($b[0]; $root) as $plan
           | [$folds[] | select(.ssh != null) | . as $f | $f.ssh.unreached[] | select(.scope == "seat")
              | "seat \($f.name) (\($f.seat | join("/"))): the ssh-grant at \(ats(.origins)) grants the key \(.name) at the seat's own scope, and the seat holds no key, so it has no agent to hold it"
                + (if $f.key.scope == null then "" else " (the key at \(ats($f.key.origins)))" end)] as $unheld
+          | ([$panes[] | {key: .[4], value: .[1:4]}] | from_entries) as $coord_of
+          | [$folds[] | select(.mode == "enforced" and .reach != null) | . as $f
+             | (["write", "record"][] as $a | ($f.reach[$a] // [])[] as $t
+                | "seat \($f.name) (\($f.seat | join("/"))), on the enforced floor \(floor_of($f.seat[0])), may \(if $a == "write" then "write to" else "read the record of" end) \($t.name) (\($coord_of[$t.name] | join("/"))) by its finished reach: "
+                  + (if $a == "write" then "a seat of an enforced floor types into no pane (5.121, 5.125 point 10)" else "no seat of an enforced floor reads a saved record (5.124 point 9)" end)),
+               (["grab", "mail"][] as $a | ($f.reach[$a] // [])[] as $t | $coord_of[$t.name] as $tk
+                | select(($room_floor_keys | index($f.seat[0])) == null)
+                | relation($f.seat; $tk) as $r | select($r | IN("room above", "peer"))
+                | "seat \($f.name) (\($f.seat | join("/"))), on the enforced floor \(floor_of($f.seat[0])), may \($a) \($t.name) (\($tk | join("/"))) by its finished reach, "
+                  + (if $r == "room above" then "a room above its own" else "a room cleared as much as its own" end)
+                  + " in the office \($f.seat[0]): inside an office a seat reaches no room cleared more or as much (5.124 point 8, 5.125 point 9)")]
+            as $table_faults
           | if ($reach_faults | length) > 0 then {errors: $reach_faults}
+            elif ($table_faults | length) > 0 then {errors: $table_faults}
             elif ($clashes | length) > 0 then {errors: $clashes}
             elif ($rootless | length) > 0 then {errors: $rootless}
             elif ($unheld | length) > 0 then {errors: $unheld}

@@ -3315,6 +3315,12 @@ t_floors_readers() {
   check "doctor" exit_is 0 wp doctor
   check "[C102] review of 4a: doctor reads the build through its top and names each floor's homes" \
     bash -c 'grep -qxF "ok      the seats'"'"' homes in $1/floors/deck/homes: 3 kept, 0 scratch" "$2" && grep -qxF "ok      the seats'"'"' homes in $1/floors/lodge/homes: 1 kept, 0 scratch" "$2"' _ "$s" "$scratch/out"
+  # The clone named through a link whose name holds & and |, which a sed replacement would read as its own.
+  ln -s -- "$clone" "$scratch/c&l|one"
+  env WORKPLACE_CONFIG="$scratch/c&l|one" "$BASH" "$loop" doctor > "$scratch/out" 2>&1
+  check "[C102] follow-up of 4a: doctor names each floor's homes where the clone's path holds & and |" \
+    bash -c 'grep -qxF "ok      the seats'"'"' homes in $1/floors/deck/homes: 3 kept, 0 scratch" "$2" && grep -qxF "ok      the seats'"'"' homes in $1/floors/lodge/homes: 1 kept, 0 scratch" "$2"' _ "$s" "$scratch/out"
+  rm -f -- "$scratch/c&l|one"
   wp record verify "Harbor Keeper" unstored > "$scratch/out" 2>&1
   rc=$?
   check "[C75] review of 4a: with floors, record verify reads the seat's floor's records" bash -c '[[ $1 != 2 ]] && ! grep -q "keeps no record" "$2"' _ "$rc" "$scratch/out"

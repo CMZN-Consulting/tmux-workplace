@@ -1870,7 +1870,7 @@ t_closed_names() {
   check "[C31] follow-up of 4a: build refuses a row that is a link to the user's tmux socket directory, a mask of the frame's, with exit 1" exit_is 1 wp build
   check "[C31] naming the socket directory's mask" \
     said "$grower: its row $root/tlink (read-only, from programs/policy.typify:10) is the directory $sockets, at or beneath $sockets, the user's tmux socket directory, which every view masks (C68)"
-  if [[ -d /var/log/journal ]]; then
+  if [[ -d /var/log/journal && $(readlink -e -- /var/log/journal) == /var/log/journal ]]; then
     mkdir -p -- "$root/records"
     ln -s -- /var/log/journal "$root/jlink"
     statements_plan "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-chain") | .term[1]) = "journal"
@@ -1886,7 +1886,7 @@ t_closed_names() {
     rm -rf -- "$clone/BUILD"
     check "[C31] follow-up of 4a: where no chain is kept the journal's directory is no mask, and build takes the same row" exit_is 0 wp build
   else
-    skip "[C31] this machine has no /var/log/journal, so a row that is a link to the journal's directory is not tried; tried where one stands"
+    skip "[C31] this machine has no /var/log/journal at that physical path, so a row that is a link to the journal's directory is not tried; tried where one stands"
   fi
 
   statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
@@ -3225,7 +3225,8 @@ t_carrier_floors() {
   printf '%s\n' busy > "$d/screen"
   jq -n -c '{id: "20261115T000000Z-900001", box: "Lodge Ida", request: "f1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/floors/lodge/comms/serving"
   jq -n -c '{id: "20261115T000000Z-900002", box: "Lodge Ida", request: "s1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/comms/serving"
-  flock -o "$s/mail" sleep 60 &
+  # As above, the holder outlives every wait until the test lets it go.
+  flock -o "$s/mail" sleep 300 &
   holder=$!
   check "the test holds the store's lock again" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
   check "up lodge, with a stopped request's journal in its state, while the test holds the store's lock" exit_is 0 wp up lodge
@@ -5646,6 +5647,9 @@ t_wake() {
     "[\"the frame\",\"wake\",[\"Harbor Keeper\"],[\"$id1\"],\"ok\",${#line},\"$(printf '%s' "$line" | sha256sum | cut -d' ' -f1)\",true]"
   check "[C96] the next covers the three" \
     test "$(jq -c 'select(.action == "wake" and .target == ["Harbor Keeper"] and has("length")) | .covers | length' "$s/comms/record" | tail -n 1)" = 3
+  # After a pointer's line the carrier settles wake.json under a hold of its own, so the list is read once it has.
+  eventually_long bash -c 'jq -e "(.seats[\"Harbor Keeper\"].count // 0) == 0 and (.seats[\"Harbor Watch\"].count // 0) == 0" "$1" > /dev/null' \
+    _ "$s/comms/wake.json" || note "    wake.json still counts keeper or watch after a minute"
   check "status" exit_is 0 wp status
   check "[C95] a seat reached leaves the list, and one not yet reached stands in it" \
     bash -c '! grep -q "^wake    Harbor Keeper" "$1" && ! grep -q "^wake    Harbor Watch" "$1" && grep -qxF "wake    Orchard Grower (orchard/barn/grower): 1 delivered and not yet pointed out, the first at $2" "$1"' _ "$scratch/out" "$at1"

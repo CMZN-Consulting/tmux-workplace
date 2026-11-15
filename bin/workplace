@@ -666,7 +666,6 @@ refuse_closed_names() {
        | .key[3], .value[0], "\($names[.key[0:3] | tojson] // "?") (\(.key[0:3] | join("/")))",
          ([(.origins // [.origin // {}])[] | "\(.path // "?"):\(.line // "?")"] | join(", ")))')
   wait "$!" || { warn "cannot read the views in $view"; return 1; }
-  (( ${#rows[@]} )) || { warn "cannot read the views in $view"; return 1; }
   chain=${rows[0]}
   rows=("${rows[@]:1}")
   mapfile -d '' -t masks < <(frame_masks "$chain")

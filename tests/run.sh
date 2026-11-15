@@ -1900,8 +1900,9 @@ t_closed_names() {
   printf '%s\n' '#!/usr/bin/env bash' \
     'for word in "$@"; do [[ $word == *".term[1], (.origin | at)"* ]] && { printf "%s\n" "the test fails this jq" >&2; exit 5; }; done' \
     "exec ${real@Q} \"\$@\"" > "$scratch/jq-plan/jq"
+  # The views' jq fails after it has printed what it read, so that only its exit status tells the rule.
   printf '%s\n' '#!/usr/bin/env bash' \
-    'for word in "$@"; do [[ $word == *".key[3], .value[0], "* ]] && { printf "%s\n" "the test fails this jq" >&2; exit 5; }; done' \
+    'for word in "$@"; do [[ $word == *".key[3], .value[0], "* ]] && { '"${real@Q}"' "$@"; printf "%s\n" "the test fails this jq" >&2; exit 5; }; done' \
     "exec ${real@Q} \"\$@\"" > "$scratch/jq-view/jq"
   chmod +x -- "$scratch/jq-plan/jq" "$scratch/jq-view/jq"
   rm -rf -- "$clone/BUILD"

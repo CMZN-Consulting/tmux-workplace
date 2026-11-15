@@ -1641,6 +1641,24 @@ t_the_fold() {
   check "plan with that row and a hidden row at the path where it would show the closed directory" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
   check "[C31] builds, since the hidden row lies over that path and is mounted after the bind" exit_is 0 wp build
+  # A scratch row at the closed directory itself is refused (only a hidden row stands at or beneath one), so the cover
+  # is shown one level up: a label on cellar/casks, and a scratch row at aa/cellar, beneath the read-write row.
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/orchard/cellar/casks"; "closed"; 11), sc(12),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-write"; 10),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "scratch"; 13)]'
+  check "plan with a read-write row through a link to orchard and a scratch row above the closed casks" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] review of 4a: builds, since a scratch row lies over the path where the bind would show the casks, as a hidden one does" exit_is 0 wp build
+  statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/orchard/cellar/casks"; "closed"; 11), sc(12),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-write"; 10)]'
+  check "plan with that read-write row alone" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] review of 4a: build refuses it without the scratch row, with exit 1" exit_is 1 wp build
+  check "[C31] naming the casks and where they would show" said "which holds $root/orchard/cellar/casks, closed by the label at programs/policy.typify:11 as $root/orchard/cellar/casks, and would show it at $root/aa/cellar/casks"
+  statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-write"; 10)]'
+  check "plan with the read-write row alone" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] review of 4a: build refuses a read-write row that would show the closed directory, as it refuses a read-only one, with exit 1" exit_is 1 wp build
   statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard"; "read-only"; 10)]'
   check "plan with a read-only row at the closed directory's parent, written by its physical path" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
@@ -2000,6 +2018,15 @@ t_floors() {
   check "build again" exit_is 0 wp build
   check "[C5] 5.162 (the addendum's P5): a build takes its generation's number from the counter, so that no number is taken twice" \
     test "$(top_gen) $(< "$s/generation.next")" = "$counter $(( counter + 1 ))"
+  local kept_counter
+  kept_counter=$(< "$s/generation.next")
+  printf '%s\n' 07 > "$s/generation.next"
+  rm -rf -- "$clone/BUILD"
+  check "[C5] review of 4a: a counter that holds anything but a number refuses build, with exit 1" exit_is 1 wp build
+  check "[C5] naming it" said "build refuses: $s/generation.next holds 07, which is not the count of this workplace's generations"
+  check "[C5] and makes no build" test ! -e "$clone/BUILD"
+  printf '%s\n' "$kept_counter" > "$s/generation.next"
+  check "build again" exit_is 0 wp build
   local floors_named g
   g=$(top_gen)
   floors_named=$(jq -r --arg g "$g" '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "floor") | "floors/\(.[1])/\($g)/MANIFEST"] | join(" ")' "$clone/PLAN/plan.json")
@@ -2017,6 +2044,7 @@ t_floors() {
     "cp -- \"\$1/BUILD/shared/$g/plan.json\" \"\$1/BUILD/plan.json\"|holds a file its MANIFEST does not list: plan.json|"
     ": > \"\$1/BUILD/floors/deck/$g/stray\"|holds a file its MANIFEST does not list: floors/deck/$g/stray|lodge"
     "chmod u+w -- \"\$1/BUILD/floors/lodge/$g/MANIFEST\" && printf x >> \"\$1/BUILD/floors/lodge/$g/MANIFEST\"|floors/lodge/$g/MANIFEST does not match its MANIFEST|deck"
+    "chmod u+w -- \"\$1/BUILD/floors/deck/$g/MANIFEST\" && sed -i '1a\\\\' \"\$1/BUILD/floors/deck/$g/MANIFEST\"|floors/deck/$g/MANIFEST holds a line that is not a hash and a name|lodge"
     "chmod u+w -- \"\$1/BUILD/MANIFEST\" \"\$1/BUILD/floors/lodge\" && sed -i '/  floors\/lodge\//d' \"\$1/BUILD/MANIFEST\" && chmod -R u+w -- \"\$1/BUILD/floors/lodge\" && rm -rf -- \"\$1/BUILD/floors/lodge\"|MANIFEST names the floors bridge deck, and the plan's floors are bridge deck lodge|"
   )
   for entry in "${breaks[@]}"; do
@@ -2603,6 +2631,13 @@ t_floors_up() {
   check "[C53] each floor's server carries the clone's mark" \
     bash -c '[[ -n $1 && $1 == "$2" && $1 == "$3" ]]' _ "$(cd -- "$clone" && pwd -P)" "$(on deck T show-options -gqv @workplace-clone)" "$(on lodge T show-options -gqv @workplace-clone)"
   check "[C17] 5.160 point 8: exec finds a seat's floor and prints its call" exit_is 0 wp exec --print -- "Lodge Ida"
+  local stray_gen
+  stray_gen=$(sed -n 's|^[0-9a-f]\{64\}  \(floors/deck/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
+  chmod u+w -- "$clone/BUILD/$stray_gen"
+  : > "$clone/BUILD/$stray_gen/stray"
+  check "[C5] review of 4a: exec of a lodge seat verifies the lodge's generation alone, so a fault in the deck's stops it not" exit_is 0 wp exec --print -- "Lodge Ida"
+  check "[C5] while exec of a deck seat is refused, with exit 2" exit_is 2 wp exec --print -- "Harbor Keeper"
+  rm -f -- "$clone/BUILD/$stray_gen/stray"
   check "[C98] 5.160 point 8: with floors, restart names its floor, or refuses with exit 2" exit_is 2 wp restart
   check "[C98] saying so" said "with floors, restart names its floor: workplace restart F"
   check "[C98] restart of a seat of another floor than the one named refuses, with exit 2" exit_is 2 wp restart deck "Lodge Ida"
@@ -2669,7 +2704,8 @@ t_floors_up() {
   check "[C22] bare status reports every floor" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor lodge is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor bridge is down" "$1"' _ "$scratch/out"
   check "[C22] 5.167: and says that a floor's own file is not read in 4a" said "conf    the floor's own file is not read in 4a"
   check "[C22] review of 4a: and that the floor on the default socket is not stood up in 4a" said "lacks   the floor bridge stands on the default socket, which 4a does not stand up: up refuses it, and it comes with 4a2 (5.167)"
-  check "[C22] with no conf line for it" bash -c '! grep -A1 -x "floor   bridge: generation [0-9]*" "$1" | grep -q "^conf "' _ "$scratch/out"
+  check "[C22] with no conf line for it, nor the unenforced run floor's lacks lines" \
+    bash -c '! grep -A1 -x "floor   bridge: generation [0-9]*" "$1" | grep -q "^conf " && ! grep -q "^lacks   the floor bridge is unenforced" "$1"' _ "$scratch/out"
   check "[C22] status of one floor" exit_is 0 wp status deck
   check "[C22] reports that floor alone" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && ! grep -q "floor lodge" "$1"' _ "$scratch/out"
   check "[C22] 5.160: with the shared generation and the floor's, as the top names them" \
@@ -4598,6 +4634,10 @@ t_comms_carrier() {
     check "[C57] the carrier runs under no-new-privileges" test "$(nnp_of "$pid")" = "NoNewPrivs:1"
   fi
   check "[C22] status exits 0" exit_is 0 wp status
+  printf '%s\n' '{"floor":"deck","pid":1,"at":"2026-11-15T00:00:00Z","id":null}' > "$s/store.holder"
+  check "[C22] review of 4a: without floors, status reads no S/store.holder, which no carrier without floors writes" \
+    bash -c '"$BASH" "$1" status > "$2" 2>&1; ! grep -q "^store " "$2"' _ "$loop" "$scratch/out"
+  rm -f -- "$s/store.holder"
   check "[C57] status names the carrier" said "ok      the carrier, pid $pid"
   check "[C57] one carrier for a store: another that starts beside it ends, with exit 2" exit_is 2 timeout 10 "$BASH" "$clone/BUILD/bin/workplace" carry
   check "[C57] naming the workplace's state" said "another carrier serves the workplace whose state is $s; this one ends"

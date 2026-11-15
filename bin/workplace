@@ -22,6 +22,7 @@ floor_sub=""
 build_out=""
 # With floors, the floor a command acts on, and where that floor's run and its build files stand (5.160 point 8).
 run_floor="" f_gen=""
+report_floors=()
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git flock dd mv tail date)
 LOG_PROGRAMS=(dd date tail head)
@@ -108,6 +109,7 @@ locate() {
   run_dir=$build_dir/RUN
   build_resolve
   f_gen=$build_dir
+  located=1
 }
 
 jq_message() {
@@ -1321,6 +1323,17 @@ need_programs_for() {
 
 carrier_unit() { printf 'workplace-carrier-%s.service\n' "$1"; }
 
+# A floor's key in a unit's name: each byte outside letters, digits and _ . : - written \xHH, so that no key that C67
+# allows makes the name a pattern to systemctl (*, ? and [ among them), and no two keys make one name.
+unit_escape() {
+  local s=$1 out="" c i
+  for (( i = 0; i < ${#s}; i++ )); do
+    c=${s:i:1}
+    if [[ $c == [A-Za-z0-9_.:-] ]]; then out+=$c; else printf -v c '\\x%02x' "'$c"; out+=$c; fi
+  done
+  printf '%s\n' "$out"
+}
+
 make_records() {
   local workplace=$1 path state_dir dir entries='[]' seat box rel chain origins at state_mark
   [[ $(jq -r '.view.records // empty | type' <<< "$folded") == object ]] || return 0
@@ -1353,7 +1366,7 @@ make_records() {
     make_dirs "$state_dir" "records/$box" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the record of $(jq -r '.name' <<< "$seat") stands"
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg dir "$dir" '. + [$s + {box: $box, dir: "\($dir)/\($box)"}]' <<< "$entries")
   done < <(jq -c --arg f "${floor_sub#floors/}" '.report.names as $n | .view.seats[] | select($f == "" or .floor == $f) | {seat, name: $n[.seat | tojson], pane: .record.pane, reads: (.reach.record // [])}' <<< "$folded")
-  jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --argjson o "$origins" --arg c "$chain" --arg u "$(carrier_unit "$workplace${floor_sub:+-${floor_sub#floors/}}")" \
+  jq -n --arg w "$workplace" --arg s "$state_dir" --arg d "$dir" --arg p "$path" --argjson o "$origins" --arg c "$chain" --arg u "$(carrier_unit "$workplace${floor_sub:+-$(unit_escape "${floor_sub#floors/}")}")" \
     --arg m "$state_mark" --argjson limit "$(jq '.view.records.limit' <<< "$folded")" --argjson seats "$entries" \
     '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), origins: $o, limit: $limit,
       chain: (if $c == "" then null else $c end), unit: $u, mark: $m, seats: $seats}' > "${build_out:-$build_dir}/records.json" \
@@ -1416,12 +1429,14 @@ build_state_begin() {
   fi
   ( umask 077 && jq -n -c --arg c build --argjson p "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{command: $c, pid: $p, at: $at}' > "$s/build.holder.new" ) \
     && mv -f -- "$s/build.holder.new" "$s/build.holder" || die "cannot write $s/build.holder" 2
+  # The counter starts empty, as build makes it, and holds the next number after; one that holds anything else is
+  # refused rather than read as 1, so that no number is taken twice (5.162).
   next=$(< "$s/generation.next") || die "cannot read $s/generation.next" 2
-  [[ $next =~ ^[1-9][0-9]{0,8}$ ]] || next=1
-  for d in "$build_dir"/shared/* "$build_dir"/floors/*/*; do
-    n=${d##*/}
-    [[ $n =~ ^[1-9][0-9]{0,8}$ ]] && (( n + 1 > next )) && next=$(( n + 1 ))
-  done
+  if [[ -z $next ]]; then
+    next=1
+  elif [[ ! $next =~ ^[1-9][0-9]{0,8}$ ]]; then
+    die "build refuses: $s/generation.next holds $(printf '%q' "$next"), which is not the count of this workplace's generations"
+  fi
   ( umask 077 && printf '%s\n' "$(( next + 1 ))" > "$s/generation.next.new" ) && mv -f -- "$s/generation.next.new" "$s/generation.next" \
     || die "cannot write $s/generation.next" 2
   build_generation=$next
@@ -1542,8 +1557,8 @@ cmd_build() {
   # The floors, in the order of their terms: the fold's where the plan is folded, else the plan's floor terms. With
   # floors BUILD is laid out in generations (5.160 point 2): BUILD/shared/N holds the plan's copies and mail.json,
   # BUILD/floors/F/N a floor's keys, homes and records, each generation with its own MANIFEST, and BUILD/MANIFEST, the
-  # top, lists the frame and those MANIFESTs. A whole build writes generation 1 of each. Without floors BUILD is laid
-  # out as accepted.
+  # top, lists the frame and those MANIFESTs. A build's generations take the counter's number (build_state_begin).
+  # Without floors BUILD is laid out as accepted.
   local -a floor_keys=()
   [[ -n $folded ]] && mapfile -t floor_keys < <(jq -r '.view.floors[]?.key' <<< "$folded")
   (( ${#floor_keys[@]} )) || mapfile -t floor_keys < <(jq -r '.programs[].plan[]? | (if type == "object" then .term else . end)
@@ -1644,6 +1659,9 @@ build_resolve() {
     if [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]]; then
       IFS= read -r -d '' b_top < "$build_dir/MANIFEST" || true
       b_top_sha=$(printf '%s' "$b_top" | sha256sum) && b_top_sha=${b_top_sha%% *}
+      # A NUL ends the read before the file does; such a top is no text, and verify refuses it.
+      b_top_nul=0
+      [[ ${#b_top} == "$(stat -c %s -- "$build_dir/MANIFEST" 2> /dev/null)" ]] || b_top_nul=1
     fi
     top=$b_top
   fi
@@ -1670,16 +1688,18 @@ verify_build() {
   local top line name file rel gen g shared_lines=0
   # The top is read once, by locate (5.162; the addendum's P4): its bytes, its sha and the generations it names.
   top=$b_top
-  [[ -n $top ]] || { warn "cannot read $build_dir/MANIFEST"; return 1; }
+  [[ -r $build_dir/MANIFEST ]] || { warn "cannot read $build_dir/MANIFEST"; return 1; }
+  (( ! ${b_top_nul-0} )) || { warn "MANIFEST holds a NUL byte, and a MANIFEST is text"; return 1; }
   build_resolve "$top"
   local -A want=() skip=()
+  # The top's lines, its one final newline taken off: an empty line among them is refused, as it was before floors.
   while IFS= read -r line; do
-    [[ -n $line ]] || continue
+    [[ -n $top ]] || break
     name=${line#*  }
     [[ $line == *"  "* && -n $name ]] || { warn "MANIFEST holds a line that is not a hash and a name"; return 1; }
     want[$name]=${line%%  *}
     [[ $name == shared/* ]] && shared_lines=$(( shared_lines + 1 ))
-  done <<< "$top"
+  done <<< "${top%$'\n'}"
   if [[ $b_layout == flat ]]; then
     [[ -z $floor ]] || { warn "the build stands on no floors, so it has no floor $floor"; return 1; }
     for name in "${manifest_files[@]}"; do
@@ -1706,7 +1726,6 @@ verify_build() {
     for gen in "${gens[@]}"; do
       [[ -f $build_dir/$gen/MANIFEST && ! -L $build_dir/$gen/MANIFEST ]] || { warn "$build_dir/$gen has no MANIFEST"; return 1; }
       while IFS= read -r line; do
-        [[ -n $line ]] || continue
         name=${line#*  }
         [[ $line == *"  "* && -n $name && $name != */* && $name != MANIFEST ]] \
           || { warn "$gen/MANIFEST holds a line that is not a hash and a name"; return 1; }
@@ -2577,7 +2596,8 @@ cmd_exec() {
   (( $# == 1 )) || die "exec takes a seat's name, with --print and -- before it" 2
   local seat=$1 floor
   need_jq
-  locate
+  # restart runs exec in a subshell of its own, after its own locate: the top is read once a command (C5).
+  (( ${located-0} )) || locate
   # With floors a seat's floor is read in the build's plan, and exec acts on that floor's run (5.160 point 8).
   if [[ $b_layout == generations ]]; then
     floor=$(seat_floor "$seat")
@@ -3557,9 +3577,19 @@ cmd_record() {
   local name=$2 day=${3-} records seat file rel since="" until="" size expected=0 prev=0000000000000000000000000000000000000000000000000000000000000000 entry at offset length hash previous got
   need_jq
   locate
+  # With floors a seat's records are its floor's (C102); the record of requests per floor comes with S2's stop 4b.
+  if [[ $b_layout == generations ]]; then
+    [[ $name != --requests ]] || die "with floors, record verify --requests comes with the record of requests of each floor, in S2's stop 4b" 2
+    local floor
+    floor=$(seat_floor "$name")
+    [[ -n $floor && -n ${b_floor[$floor]+x} ]] || die "no seat is named $name in this workplace" 2
+    floor_scope "$floor"
+    verify_build "$floor" || die "record verify reads only a verified build" 2
+  else
+    verify_build || die "record verify reads only a verified build" 2
+  fi
   records=$f_gen/records.json
   [[ -f $records ]] || die "this workplace keeps no record" 2
-  verify_build || die "record verify reads only a verified build" 2
   [[ -n $(jq -r '.chain // empty' "$records") ]] || die "this workplace keeps no chain, so its records cannot be verified" 2
   records_marked "$records" || exit 2
   if [[ $name == --requests ]]; then
@@ -3927,10 +3957,22 @@ cmd_doctor() {
   else
     say "absent  env -S: needed only by a plan in which a seat expects a value"
   fi
-  local config=${WORKPLACE_CONFIG-} workplace file
-  local -a problems
-  if [[ $config == /* && -f $config/BUILD/plan.json && -n $state_dir ]]; then
-    workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$config/BUILD/plan.json" 2> /dev/null)
+  local config=${WORKPLACE_CONFIG-} workplace file dplan doc_top="" g
+  local -a problems dhomes=()
+  # A build on floors is read through its top, read once: the plan in the shared generation, the homes in each
+  # floor's (C5).
+  dplan=$config/BUILD/plan.json
+  [[ $config == /* ]] && dhomes=("$config/BUILD/homes.json")
+  if [[ $config == /* && -f $config/BUILD/MANIFEST && ! -L $config/BUILD/MANIFEST ]]; then
+    doc_top=$(< "$config/BUILD/MANIFEST")
+    g=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' <<< "$doc_top" | head -n 1)
+    if [[ -n $g ]]; then
+      dplan=$config/BUILD/$g/plan.json
+      mapfile -t dhomes < <(sed -n 's|^[0-9a-f]\{64\}  \(floors/[^/]*/[0-9]*\)/MANIFEST$|\1|p' <<< "$doc_top" | sed "s|^|$config/BUILD/|; s|\$|/homes.json|")
+    fi
+  fi
+  if [[ $config == /* && -f $dplan && -n $state_dir ]]; then
+    workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$dplan" 2> /dev/null)
     file=$state_dir/$workplace/values.json
     if [[ ! -e $file && ! -L $file ]]; then
       say "absent  the run-time file $file: needed only by a seat that expects a value"
@@ -3943,9 +3985,10 @@ cmd_doctor() {
         say "ok      the run-time file $file, which only its owner may read; its values are not shown"
       fi
     fi
-    if [[ -f $config/BUILD/homes.json ]]; then
-      say "ok      the seats' homes in $state_dir/$workplace/homes: $(jq -r '[.seats[] | select(.state == "kept")] | length' "$config/BUILD/homes.json") kept, $(jq -r '[.seats[] | select(.state == "scratch")] | length' "$config/BUILD/homes.json") scratch"
-    fi
+    for file in "${dhomes[@]}"; do
+      [[ -f $file ]] || continue
+      say "ok      the seats' homes in $(jq -r '.state' "$file")/homes: $(jq -r '[.seats[] | select(.state == "kept")] | length' "$file") kept, $(jq -r '[.seats[] | select(.state == "scratch")] | length' "$file") scratch"
+    done
   fi
   return "$bad"
 }
@@ -3956,7 +3999,7 @@ cmd_down() {
   locate
   # With floors, down takes one floor down, F, and leaves the others up (5.160 point 8). A floor whose RUN/F stands
   # is taken down even where the build no longer names it, so that no run is stranded.
-  if [[ $b_layout == generations || ( $# == 1 && -d $build_dir/RUN/${1-}/carrier ) ]]; then
+  if [[ $b_layout == generations || ( $# == 1 && -n ${1-} && $1 != */* && -d $build_dir/RUN/$1 && ! -L $build_dir/RUN/$1 && ! -e $build_dir/RUN/state.json ) ]]; then
     (( $# <= 1 )) || die "down takes one floor" 2
     (( $# == 1 )) || die "with floors, down names its floor: workplace down F" 2
     [[ -n $1 && $1 != */* && $1 != . && $1 != .. ]] || die "the build has no floor $1" 2
@@ -4026,7 +4069,7 @@ seats_report() {
     done < <(jq -c '.seats[]' "$b_mail")
     say "mail    the store $(jq -r '.store' "$b_mail"), shown at $(jq -r '.path' "$b_mail"); requests waiting in the seats' out: $waiting"
     (( ${#waits[@]} )) && printf '%s\n' "${waits[@]}"
-    store_status "$(jq -r '.store' "$b_mail")"
+    [[ $b_layout == generations ]] && store_status "$(jq -r '.store' "$b_mail")"
     file=$(jq -r '.comms' "$b_mail")/wake.json
     if [[ -f $file ]]; then
       jq -r --slurpfile w "$file" '.seats[] | select(.wake != null) | . as $s | ($w[0].seats[$s.box] // null) as $p
@@ -4035,7 +4078,14 @@ seats_report() {
     fi
     file=""
   fi
-  if [[ -f $f_gen/homes.json ]]; then
+  # With floors each floor in the report's scope has its homes in its own generation.
+  local -a home_files=("$f_gen/homes.json")
+  if [[ $b_layout == generations ]]; then
+    home_files=()
+    for line in "${report_floors[@]}"; do [[ -n ${b_floor[$line]-} ]] && home_files+=("$build_dir/${b_floor[$line]}/homes.json"); done
+  fi
+  for file in "${home_files[@]}"; do
+    [[ -f $file ]] || continue
     while IFS= read -r entry; do
       path=$(jq -r '.path' <<< "$entry")
       if [[ $(jq -r '.state' <<< "$entry") == scratch ]]; then
@@ -4046,8 +4096,9 @@ seats_report() {
         say "missing home $path of $(jq -r '"\(.name) (\(.seat | join("/")))"' <<< "$entry"); build again"
         bad=1
       fi
-    done < <(jq -c '.seats[]' "$f_gen/homes.json")
-  fi
+    done < <(jq -c '.seats[]' "$file")
+  done
+  file=""
   [[ -f $b_view ]] || return "$bad"
   workplace=$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "workplace" or .[0] == "server") | .[1]][0] // "default"' "$b_plan")
   state_dir=$(workplace_state "$workplace") && file=$state_dir/values.json
@@ -4137,6 +4188,7 @@ cmd_status() {
   fi
   local bad=0 sum floor verify_floor=""
   (( $# == 1 && ${#floors[@]} == 1 )) && verify_floor=${floors[0]}
+  report_floors=("${floors[@]}")
   if [[ ! -d $build_dir ]]; then
     say "build: none"
   elif verify_build ${verify_floor:+"$verify_floor"}; then
@@ -4165,11 +4217,17 @@ status_run() {
   local bad=0 run
   if [[ -n $run_floor ]]; then
     say "floor   $run_floor${b_floor[$run_floor]:+: generation ${b_floor[$run_floor]##*/}}"
-    say "conf    the floor's own file is not read in 4a: its server reads an empty file and stands on tmux's defaults, and the floor's file comes with the frame's set after it in 4a2 (5.167)"
-    if [[ $(jq -r --arg f "$run_floor" '[.programs[].plan[]? | (if type == "object" then .term else . end)
-        | select(type == "array" and .[0] == "floor" and .[1] == $f) | .[4]][0] // ""' "$b_plan" 2> /dev/null) == unenforced ]]; then
-      say "lacks   the floor $run_floor is unenforced, and in 4a its server runs under the bar on no new privileges, which 4a2 lifts (5.124 point 3, 5.167)"
-      say "lacks   its seats have no view, and their mailboxes stand on the machine at the mail path only in 4a2, so until then a seat of $run_floor reads no mail there (5.167)"
+    local fterm
+    fterm=$(jq -c --arg f "$run_floor" '[.programs[].plan[]? | (if type == "object" then .term else . end)
+        | select(type == "array" and .[0] == "floor" and .[1] == $f)][0] // []' "$b_plan" 2> /dev/null) || fterm='[]'
+    if [[ $(jq -r '.[5] // ""' <<< "$fterm") == tmux-default ]]; then
+      say "lacks   the floor $run_floor stands on the default socket, which 4a does not stand up: up refuses it, and it comes with 4a2 (5.167)"
+    else
+      say "conf    the floor's own file is not read in 4a: its server reads an empty file and stands on tmux's defaults, and the floor's file comes with the frame's set after it in 4a2 (5.167)"
+      if [[ $(jq -r '.[4] // ""' <<< "$fterm") == unenforced ]]; then
+        say "lacks   the floor $run_floor is unenforced, and in 4a its server runs under the bar on no new privileges, which 4a2 lifts (5.124 point 3, 5.167)"
+        say "lacks   its seats have no view, and their mailboxes stand on the machine at the mail path only in 4a2, so until then a seat of $run_floor reads no mail there (5.167)"
+      fi
     fi
   fi
   if [[ ! -d $run_dir ]]; then
@@ -4356,10 +4414,33 @@ cmd_unbuild() {
   locate
   local -a files homes
   local name state_dir="" sum=none home n total=0
+  [[ ! -e $build_dir || ( -d $build_dir && ! -L $build_dir ) ]] || die "unbuild refuses: $build_dir is not a directory" 2
+  state_dir=$(unbuild_state) || state_dir=""
+  # First the locks, each without a wait (the addendum's R6 and R34): the build's, wherever it stands and whatever the
+  # build's layout, since a build of floors writes its top last; and each floor's, made where it is missing, so that
+  # the first up of a floor after a build is fenced too. Only then are RUN and BUILD read, so that unbuild removes no
+  # build that a build or an up is reading, and no up begins under it.
+  if [[ -n $state_dir && -d $state_dir && ! -L $state_dir ]]; then
+    local lock floor_dir
+    if [[ -e $state_dir/build.lock || -L $state_dir/build.lock ]]; then
+      [[ -f $state_dir/build.lock && ! -L $state_dir/build.lock ]] || die "unbuild refuses: $state_dir/build.lock is not a file" 2
+      command -v flock > /dev/null || die "unbuild needs flock to take $state_dir/build.lock, and flock is not on PATH" 2
+      exec {lock_fd}< "$state_dir/build.lock" || die "cannot open $state_dir/build.lock" 2
+      flock -n "$lock_fd" || die "unbuild refuses: a build holds $state_dir/build.lock; run it again when that ends"
+    fi
+    for floor_dir in "$state_dir"/floors/*; do
+      [[ -d $floor_dir && ! -L $floor_dir ]] || continue
+      lock=$floor_dir/up.lock
+      [[ -e $lock || -L $lock ]] || ( umask 077 && : >> "$lock" ) || die "cannot make $lock" 2
+      [[ -f $lock && ! -L $lock ]] || die "unbuild refuses: $lock is not a file" 2
+      command -v flock > /dev/null || die "unbuild needs flock to take $lock, and flock is not on PATH" 2
+      exec {lock_fd}< "$lock" || die "cannot open $lock" 2
+      flock -n "$lock_fd" || die "unbuild refuses: an up or a restart holds $lock; run it again when that ends"
+    done
+  fi
   if [[ ! -e $build_dir && ! -L $build_dir ]]; then
     say "unbuild: there is no build under $clone"
   else
-    [[ -d $build_dir && ! -L $build_dir ]] || die "unbuild refuses: $build_dir is not a directory" 2
     if [[ $b_layout == generations && -d $run_dir && ! -L $run_dir ]]; then
       # With floors RUN holds a directory for each floor that is up; an empty RUN goes (5.160 point 8).
       local -a up_floors=("$run_dir"/*)
@@ -4367,18 +4448,6 @@ cmd_unbuild() {
       rmdir -- "$run_dir" 2> /dev/null || die "cannot remove the empty $run_dir" 2
     fi
     [[ ! -e $run_dir && ! -L $run_dir ]] || die "unbuild refuses: the workplace is up, since $run_dir stands; run workplace down first"
-  fi
-  state_dir=$(unbuild_state) || state_dir=""
-  # With floors unbuild takes the build's lock and every floor's lock, each without waiting, so that it removes no
-  # build that a build or an up is reading (the addendum's R6 and R34). It makes no lock file: it opens one only where
-  # it stands.
-  if [[ $b_layout == generations && -n $state_dir ]]; then
-    local lock
-    for lock in "$state_dir/build.lock" "$state_dir"/floors/*/up.lock; do
-      [[ -f $lock && ! -L $lock ]] || continue
-      exec {lock_fd}< "$lock" || die "cannot open $lock" 2
-      flock -n "$lock_fd" || die "unbuild refuses: a build or an up holds $lock; run it again when that ends"
-    done
   fi
   if [[ -d $build_dir && ! -L $build_dir ]]; then
     [[ -n $b_top_sha ]] && sum=$b_top_sha

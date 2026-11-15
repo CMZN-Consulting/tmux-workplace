@@ -121,8 +121,10 @@ def name_fault:
   elif test("^\\s|\\s$") then "it begins or ends with white space"
   else null end;
 
-# The carrier's own names beside the seats' boxes in the store and its comms (5.162 point 5).
-def carrier_names: ["next", "record", "serving", "taken", "wake.json"];
+# The carrier's own names beside the seats' boxes in its comms, with the files it writes beside them as they change,
+# and the frame's own beside the seats' directories in the records (5.162 point 5).
+def carrier_names: ["next", "next.new", "record", "serving", "serving.new", "taken", "wake.json", "wake.json.new"];
+def record_names: ["chain", "chain.state", "chain.state.new", "mark"];
 
 def name_problems($binding):
   plan_terms[] | . as $r | ($binding.unique // [])[] | select(.[0] == $r.term[0] and .[1] < ($r.term | length))
@@ -130,6 +132,8 @@ def name_problems($binding):
   | ($v | name_fault
      // (if [carrier_names[] | . == $v] | any
          then "it is one of the carrier's own names beside the seats' boxes, \(carrier_names | join(", ")), and its box would stand on the carrier's files (5.162 point 5)"
+         elif ([record_names[] | . == $v] | any) or ($v | test("^mark\\.[0-9]+$"))
+         then "it is one of the frame's own names beside the seats' directories in the records, \(record_names | join(", ")) and mark.N, and its directory would stand on the frame's files (5.162 point 5)"
          else null end)) as $fault
   | select($fault != null)
   | "\($r | term_at) (\($r.term[0])): the seat's name \($v | tojson) is refused: \($fault)";

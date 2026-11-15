@@ -1771,6 +1771,150 @@ t_the_fold() {
   check "[C31] naming it" said "01 is not a whole number"
 }
 
+# The rule on closed names at build, guard by guard (5.176 points 7 and 11). The plans are t_the_fold's: a closed
+# label on orchard/cellar beneath a searchable-only orchard, and one row of a seat's own written through a link.
+t_closed_names() {
+  scoped_clone
+  local base='st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/orchard/cellar"; "closed"; 11), sc(12)'
+  local grower="seat Orchard Grower (orchard/barn/grower)" by="closed by the label at programs/policy.typify:11 as $root/orchard/cellar"
+  local none="where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it" state
+  mkdir -p -- "$root/orchard/cellar/casks" "$root/p"
+  ln -s -- orchard/cellar/secret "$root/flink"
+  ln -s -- . "$root/zz"
+  ln -s -- orchard/cellar "$root/calias"
+  ln -s -- calias/secret "$root/flink2"
+  ln -s -- orchard/cellar/casks "$root/clink"
+  ln -s -- orchard "$root/aa"
+  ln -s -- ../orchard "$root/p/aa"
+
+  for state in read-only read-write; do
+    statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/flink"; "'"$state"'"; 10)]'
+    check "plan with a $state row whose last part is a link to a file beneath a closed label, which the fold reads as written" exit_is 0 wplan
+    rm -rf -- "$clone/BUILD"
+    check "[C31] follow-up of 4a: build refuses a $state row whose last part is a link to a file beneath a closed label, with exit 1" exit_is 1 wp build
+    check "[C31] naming the seat, the $state row and the file it leads to, by its real path, at or beneath the closed directory" \
+      said "$grower: its row $root/flink ($state, from programs/policy.typify:10) is the file $root/orchard/cellar/secret, at or beneath $root/orchard/cellar, $by"
+  done
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/flink"; "read-only"; 10)]'
+  check "plan with a read-only row written through a link in the middle of its path, whose last part is a link to a file beneath a closed label" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses a link to a file through a link in the middle of the row's path, with exit 1" exit_is 1 wp build
+  check "[C31] naming the file it leads to" \
+    said "$grower: its row $root/zz/flink (read-only, from programs/policy.typify:10) is the file $root/orchard/cellar/secret, at or beneath $root/orchard/cellar, $by"
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/flink2"; "read-only"; 10)]'
+  check "plan with a read-only row whose last part is a link to a file through a link in the middle of the link's own target" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses a link to a file through a link in the middle of its target, with exit 1" exit_is 1 wp build
+  check "[C31] naming the file at the end of every link" \
+    said "$grower: its row $root/flink2 (read-only, from programs/policy.typify:10) is the file $root/orchard/cellar/secret, at or beneath $root/orchard/cellar, $by"
+
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/clink"; "read-only"; 10)]'
+  check "plan with a read-only row that is a link to orchard/cellar/casks, beneath the closed orchard/cellar" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] the addendum's own check: build refuses a link into a directory beneath a closed one, with exit 1" exit_is 1 wp build
+  check "[C31] naming the directory it leads to" \
+    said "$grower: its row $root/clink (read-only, from programs/policy.typify:10) is the directory $root/orchard/cellar/casks, at or beneath $root/orchard/cellar, $by"
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/calias/casks"; "read-only"; 10)]'
+  check "plan with a read-only row strictly beneath the closed directory by its real path, written through a link in the middle" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses a row strictly beneath a closed directory as it refuses one at it, with exit 1" exit_is 1 wp build
+  check "[C31] with the refusal of a row at or beneath it" \
+    said "$grower: its row $root/calias/casks (read-only, from programs/policy.typify:10) is the directory $root/orchard/cellar/casks, at or beneath $root/orchard/cellar, $by"
+
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
+                                                st("orchard"; "barn"; "picker"; "seat"; $root + "/aa/cellar"; "hidden"; 13)]'
+  check "plan with grower's read-only row through a link to orchard, and a hidden row where it would show the closed directory written for picker alone" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses it, with exit 1: another seat's row lies over nothing in grower's view" exit_is 1 wp build
+  check "[C31] naming grower's row and the place where it would show the closed directory" \
+    said "$grower: its row $root/aa (read-only, from programs/policy.typify:10) is the directory $root/orchard, which holds $root/orchard/cellar, $by, and would show it at $root/aa/cellar, $none"
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
+                                                st("orchard"; "barn"; "picker"; "seat"; $root + "/aa/cellar"; "hidden"; 13),
+                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 14)]'
+  check "plan with the same hidden row written for grower too" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "builds, since grower's own hidden row lies over that place" exit_is 0 wp build
+
+  # The fold refuses a row beneath a hidden row of the same seat, so the row above is searchable-only, which covers as a
+  # hidden row does where it lies beneath the row.
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/p"; "searchable-only"; 13),
+                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/p/aa"; "read-only"; 10)]'
+  check "plan with grower's read-only row through a link to orchard, beneath a searchable-only row of grower's own above it" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses it, with exit 1: a row above the row is mounted before the row's bind, and lies over nothing that the bind shows" exit_is 1 wp build
+  check "[C31] naming the place where it would show the closed directory" \
+    said "$grower: its row $root/p/aa (read-only, from programs/policy.typify:10) is the directory $root/orchard, which holds $root/orchard/cellar, $by, and would show it at $root/p/aa/cellar, $none"
+
+  ln -s -- config/programs "$root/cfgin"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/cfgin"; "read-only"; 10)]'
+  check "plan with a read-only row that is a link into the clone" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses a row that is a link into the clone, a mask of the frame's, with exit 1" exit_is 1 wp build
+  check "[C31] naming the clone's mask" \
+    said "$grower: its row $root/cfgin (read-only, from programs/policy.typify:10) is the directory $clone/programs, at or beneath $clone, the clone, which every view masks (C52)"
+  local state_dir=$HOME/.local/state/workplace
+  mkdir -p -- "$state_dir"
+  ln -s -- "$state_dir" "$root/stlink"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/stlink"; "read-only"; 10)]'
+  check "plan with a read-only row that is a link to the workplaces' state R" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses a row that is a link to the state R, a mask of the frame's, with exit 1" exit_is 1 wp build
+  check "[C31] naming R's mask" \
+    said "$grower: its row $root/stlink (read-only, from programs/policy.typify:10) is the directory $state_dir, at or beneath $state_dir, the workplaces' state R, which every view masks (C39)"
+  local sockets=$TMUX_TMPDIR/tmux-$EUID
+  mkdir -p -m 0700 -- "$sockets"
+  ln -s -- "$sockets" "$root/tlink"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/tlink"; "read-only"; 10)]'
+  check "plan with a read-only row that is a link to the test's own tmux socket directory, under its TMUX_TMPDIR" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: build refuses a row that is a link to the user's tmux socket directory, a mask of the frame's, with exit 1" exit_is 1 wp build
+  check "[C31] naming the socket directory's mask" \
+    said "$grower: its row $root/tlink (read-only, from programs/policy.typify:10) is the directory $sockets, at or beneath $sockets, the user's tmux socket directory, which every view masks (C68)"
+  if [[ -d /var/log/journal ]]; then
+    mkdir -p -- "$root/records"
+    ln -s -- /var/log/journal "$root/jlink"
+    statements_plan "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-chain") | .term[1]) = "journal"
+      | .programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/jlink"; "read-only"; 22)]'
+    check "plan with a chain to the journal and a read-only row that is a link to /var/log/journal" exit_is 0 wplan
+    rm -rf -- "$clone/BUILD"
+    check "[C31] follow-up of 4a: build refuses a row that is a link to the journal's directory where a chain is kept, a mask of the frame's, with exit 1" exit_is 1 wp build
+    check "[C31] naming the journal's mask" \
+      said "$grower: its row $root/jlink (read-only, from programs/policy.typify:22) is the directory /var/log/journal, at or beneath /var/log/journal, the journal's directory, which a view masks where a chain is kept (C73)"
+    statements_plan "$records_terms"' | .programs[-1].recorded |= map(select(.term[0] != "record-chain"))
+      | .programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/jlink"; "read-only"; 22)]'
+    check "plan with the same row and no chain" exit_is 0 wplan
+    rm -rf -- "$clone/BUILD"
+    check "[C31] follow-up of 4a: where no chain is kept the journal's directory is no mask, and build takes the same row" exit_is 0 wp build
+  else
+    skip "[C31] this machine has no /var/log/journal, so a row that is a link to the journal's directory is not tried; tried where one stands"
+  fi
+
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
+                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 13)]'
+  check "plan that the rule takes: grower's row through a link to orchard, and grower's hidden row where it would show the closed directory" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "build takes it" exit_is 0 wp build
+  local real
+  real=$(command -v jq)
+  mkdir -p -- "$scratch/jq-plan" "$scratch/jq-view"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'for word in "$@"; do [[ $word == *".term[1], (.origin | at)"* ]] && { printf "%s\n" "the test fails this jq" >&2; exit 5; }; done' \
+    "exec ${real@Q} \"\$@\"" > "$scratch/jq-plan/jq"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'for word in "$@"; do [[ $word == *".key[3], .value[0], "* ]] && { printf "%s\n" "the test fails this jq" >&2; exit 5; }; done' \
+    "exec ${real@Q} \"\$@\"" > "$scratch/jq-view/jq"
+  chmod +x -- "$scratch/jq-plan/jq" "$scratch/jq-view/jq"
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: where the rule cannot read the plan's labels of closed, build refuses the plan that it takes otherwise, with exit 1" \
+    exit_is 1 env PATH="$scratch/jq-plan:$PATH" "$BASH" "$loop" build
+  check "[C31] saying that it cannot read the plan's labels" said "workplace: cannot read the plan's labels of closed in $clone/PLAN/plan.json"
+  rm -rf -- "$clone/BUILD"
+  check "[C31] follow-up of 4a: where the rule cannot read the views, build refuses the plan that it takes otherwise, with exit 1" \
+    exit_is 1 env PATH="$scratch/jq-view:$PATH" "$BASH" "$loop" build
+  check "[C31] saying that it cannot read the views" said "workplace: cannot read the views in $clone/PLAN/view.json"
+  rm -rf -- "$clone/BUILD"
+}
+
 floors_clone() {
   jq '. + {floors: [
     {key: "bridge", name: "Bridge", houses: "offices", enforced: false, socket: "tmux-default", conf: "floors/bridge.conf", smallest: "80x24"},
@@ -6126,6 +6270,7 @@ tests=(
   t_plan_assembles
   t_plan_refusals
   t_the_fold
+  t_closed_names
   t_plan_relative
   t_floors
   t_reach_floors

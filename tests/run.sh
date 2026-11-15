@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 export LC_ALL=C
 set -o nounset -o pipefail
-unset TMUX TMUX_PANE
+unset TMUX TMUX_PANE XDG_STATE_HOME
 
 here=$(cd -P -- "${BASH_SOURCE[0]%/*}" && pwd -P)
 tool=${here%/tests}

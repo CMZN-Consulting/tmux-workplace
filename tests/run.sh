@@ -3238,8 +3238,9 @@ t_carrier_floors() {
         .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1), r(["record-path", "records"]; 2), r(["record-chain", "journal"]; 3)]'
     check "plan of floors whose deck's key is $key, which as a pattern matches lodge, with the records chained to the journal" exit_is 0 wplan
     check "build" exit_is 0 wp build
-    check "up lodge" exit_is 0 wp up lodge
+    # The floor whose key is a pattern comes up first, so that down meets the lodge's unit running beside its own.
     check "up $key" exit_is 0 wp up "$key"
+    check "up lodge" exit_is 0 wp up lodge
     check "[C72] follow-up of 4a: the floor $key's carrier runs as a unit of its own, $own, where each byte of the key outside letters, digits and _ . : - is written \\xHH" systemctl --user is-active --quiet "$own"
     check "[C72] follow-up of 4a: and the lodge's carrier as its own, $lodge_unit" systemctl --user is-active --quiet "$lodge_unit"
     lodge_inv=$(systemctl --user show -p InvocationID --value "$lodge_unit" 2> /dev/null)

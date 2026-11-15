@@ -3297,6 +3297,87 @@ t_the_folded_view_in_the_panes() {
   check "[C33] naming the file" said "PLAN/view.json is missing"
 }
 
+# A copy of the frame of the test's own, at $scratch/frame, which a test may change after a build without editing the
+# tree that the suite runs from.
+frame_wp() { "$BASH" "$scratch/frame/bin/workplace" "$@"; }
+
+t_closed_names_up() {
+  local pane refusal
+  scoped_clone
+  rm -rf -- "$scratch/frame" && mkdir -- "$scratch/frame" && cp -R -- "$tool/." "$scratch/frame/"
+  check "a copy of the frame of the test's own, its binding the tree's" cmp -s "$tool/host/binding.json" "$scratch/frame/host/binding.json"
+  # A pane sees the cover: grower's read-write row is written through the link zz, which leads to the root, so that it
+  # holds the closed cellar under another name; a hidden row of grower's lies where the row would show the cellar.
+  ln -s -- . "$root/zz"
+  printf '%s\n' planted > "$root/orchard/cellar/planted"
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard/cellar"; "closed"; 30), sc(31),
+      st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard"; "read-write"; 32)]'
+  check "plan with grower's read-write row through the link zz to orchard, which holds the closed cellar, and no cover" exit_is 0 wplan
+  check "[C31] follow-up of 4a: build refuses that view, since nothing lies where the row would show the cellar, with exit 1" exit_is 1 frame_wp build
+  check "[C31] naming that place" said "and would show it at $root/zz/orchard/cellar, where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it"
+  rm -rf -- "$clone/BUILD"
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard/cellar"; "closed"; 30), sc(31),
+      st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard"; "read-write"; 32),
+      st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard/cellar"; "hidden"; 33)]
+    | (.programs[] | select(.path == "orchard/barn/grower/seat.typify") | .plan[1].term[5]) |= (fromjson
+        + ["rw=" + $root + "/zz/orchard/almanac", "hidden=" + $root + "/zz/orchard/cellar", "hidden=" + $root + "/orchard/cellar"] | tojson)'
+  check "plan with that row and a hidden row of grower's at the place where it would show the cellar" exit_is 0 wplan
+  check "[C31] follow-up of 4a: build accepts it, since the cover lies over that place" exit_is 0 frame_wp build
+  check "up" exit_is 0 frame_wp up
+  check "grower ran" wait_for_probe "Orchard Grower" grower
+  check "[C31] follow-up of 4a: grower's row through the link is bound: it writes orchard's almanac, which the root's read-only row alone would refuse" \
+    screen_has "Orchard Grower" "rw $root/zz/orchard/almanac: write=ok"
+  check "[C31] follow-up of 4a: a pane sees the cover: where that row would show the closed cellar, grower finds it empty, neither its secret nor the file planted in it" \
+    screen_has "Orchard Grower" "hidden $root/zz/orchard/cellar: unseen"
+  check "[C31] and so at the cellar's own path, which the row's bind lies over" screen_has "Orchard Grower" "hidden $root/orchard/cellar: unseen"
+  check "and both files stand in the cellar on the machine" test -s "$root/orchard/cellar/secret" -a -s "$root/orchard/cellar/planted"
+  check "down" exit_is 0 frame_wp down
+  rm -rf -- "$clone/BUILD"
+  rm -f -- "$root/zz"
+  # A link swapped after the build: grower's read-only row lnk/inner leads first to a harmless directory, and then
+  # beneath the closed cellar. The label is written relative to the root, so that only a binding that joins a label's
+  # path finds the cellar.
+  mkdir -p -- "$root/harbor/charts/inner" "$root/orchard/cellar/inner"
+  ln -s -- harbor/charts "$root/lnk"
+  statements_plan '.programs[-1].recorded += [lb("orchard/cellar"; "closed"; 30), sc(31),
+      st("orchard"; "barn"; "grower"; "seat"; $root + "/lnk/inner"; "read-only"; 32)]'
+  check "plan with a closed label written relative to the root and grower's read-only row through the link lnk to harbor/charts" exit_is 0 wplan
+  check "build, which the rule accepts" exit_is 0 frame_wp build
+  ln -sfn -- orchard/cellar "$root/lnk"
+  refusal="its row $root/lnk/inner (read-only, from programs/policy.typify:32) is the directory $root/orchard/cellar/inner, at or beneath $root/orchard/cellar, closed by the label at programs/policy.typify:30 as $root/orchard/cellar"
+  check "[C31] follow-up of 4a: a link swapped after the build into a directory beneath the closed cellar makes up exit 1" exit_is 1 frame_wp up
+  check "[C31] saying so" said "up refuses: a seat's view would hold a closed directory under another name"
+  check "[C31] naming the row and the directory it now leads to" said "$refusal"
+  check "[C31] and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  check "[C31] and started no server" no_server
+  jq 'del(.paths.recorded.label)' "$scratch/frame/host/binding.json" > "$scratch/binding" && mv -- "$scratch/binding" "$scratch/frame/host/binding.json"
+  check "the frame's copy now holds a binding that does not join a label's path" test "$(jq -c '.paths.recorded.label' "$scratch/frame/host/binding.json")" = null
+  check "[C31] follow-up of 4a: up decides by the build's binding, which joins the label, and not by the frame's, which would not find the cellar: exit 1" \
+    exit_is 1 frame_wp up
+  check "[C31] naming the same row" said "$refusal"
+  check "[C31] and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  printf '%s\n' 'not JSON' > "$scratch/frame/host/binding.json"
+  printf '%s\n' 'def broken(: ;' >> "$scratch/frame/libexec/table.jq"
+  ln -sfn -- harbor/charts "$root/lnk"
+  check "[C31] follow-up of 4a: with the link back, up from a frame whose binding is not JSON and whose table.jq does not compile reads the build's, and starts" \
+    exit_is 0 frame_wp up
+  check "grower ran" wait_for_probe "Orchard Grower" grower
+  pane=$(pane_by_title "Orchard Grower")
+  T send-keys -t "$pane" C-c
+  check "grower's program ends" eventually_long dead_pane "Orchard Grower"
+  ln -sfn -- orchard/cellar "$root/lnk"
+  check "[C31] follow-up of 4a: after up, the link swapped into a directory beneath the closed cellar makes restart exit 1" \
+    exit_is 1 frame_wp restart "Orchard Grower"
+  check "[C31] saying so" said "restart refuses: a seat's view would hold a closed directory under another name"
+  check "[C31] naming the row, as the build's binding and library read it" said "$refusal"
+  check "[C31] and grower's pane stays dead" dead_pane "Orchard Grower"
+  ln -sfn -- harbor/charts "$root/lnk"
+  check "[C31] follow-up of 4a: with the link back, restart from that frame reads the build's binding and library, and starts grower again" \
+    exit_is 0 frame_wp restart "Orchard Grower"
+  check "grower runs again" eventually_long live_pane "Orchard Grower"
+  check "down" exit_is 0 frame_wp down
+}
+
 t_plan_end_to_end() {
   local pinned=e500ac3ff69c79f114593ae86ad0c2ece3644c39da4226425ef8fa7060c8f4a9 reference=/tmp/workplace-reference-s3
   if ! command -v typify > /dev/null; then
@@ -6282,6 +6363,7 @@ tests=(
   t_floors_unenforced
   t_floors_assembly
   t_the_folded_view_in_the_panes
+  t_closed_names_up
   t_plan_end_to_end
   t_identity_selection
   t_identity

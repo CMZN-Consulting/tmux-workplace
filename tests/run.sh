@@ -2864,6 +2864,12 @@ t_floors_up() {
   wp status > "$scratch/out" 2>&1
   check "[C22] bare status reports every floor" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor lodge is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor bridge is down" "$1"' _ "$scratch/out"
   check "[C22] 5.167: and says that a floor's own file is not read in 4a" said "conf    the floor's own file is not read in 4a"
+  local conf_line="conf    the floor's own file is not read in 4a: its server reads an empty file and stands on tmux's defaults, and the floor's file comes with the frame's set after it in 4a2 (5.167)"
+  check "[C22] follow-up of 4a: the conf line stands for every floor on a run socket: the deck's, just after its floor line" \
+    bash -c 'grep -A1 -x "floor   deck: generation [0-9]*" "$1" | grep -qxF -- "$2"' _ "$scratch/out" "$conf_line"
+  check "[C22] follow-up of 4a: and the lodge's, just after its floor line" \
+    bash -c 'grep -A1 -x "floor   lodge: generation [0-9]*" "$1" | grep -qxF -- "$2"' _ "$scratch/out" "$conf_line"
+  check "[C22] follow-up of 4a: two conf lines in all, one for each floor on a run socket" test "$(grep -c '^conf ' "$scratch/out")" = 2
   check "[C22] review of 4a: and that the floor on the default socket is not stood up in 4a" said "lacks   the floor bridge stands on the default socket, which 4a does not stand up: up refuses it, and it comes with 4a2 (5.167)"
   check "[C22] with no conf line for it, nor the unenforced run floor's lacks lines" \
     bash -c '! grep -A1 -x "floor   bridge: generation [0-9]*" "$1" | grep -q "^conf " && ! grep -q "^lacks   the floor bridge is unenforced" "$1"' _ "$scratch/out"
@@ -3114,6 +3120,135 @@ t_wake_floors() {
   rm -rf -- "$run/deck/carrier"
   wait "$deck"
   check "down lodge" exit_is 0 wp down lodge
+}
+
+# Ruled properties of the floors' carriers that no other check holds (5.176 point 11): the journal in the floor's own
+# state, recovery under a hold, a bounded wait for the store's lock and a stop while another holds it, and a floor's
+# key that would be a pattern to systemctl. The floors stand up with up, their carriers with them.
+t_carrier_floors() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/screens"
+  local d=$root/screens
+  printf '%s\n' busy > "$d/screen"
+  local kinds='| kinds([["harbor", "dock", "keeper", "clerk"], ["harbor", "dock", "pilot", "clerk"], ["harbor", "tower", "watch", "clerk"],
+      ["orchard", "barn", "grower", "clerk"], ["orchard", "barn", "picker", "clerk"], ["lodge", "east", "ida", "clerk"]])'
+  statements_plan "$floors_terms | $comms_terms $kinds"' | .programs[-1].recorded += [
+      m(["reach", "harbor", "-", "-", "office", "mail", "lodge", "-", "-", "floor", "allowed"]; 2),
+      m(["reach", "lodge", "-", "-", "floor", "mail", "harbor", "-", "-", "office", "allowed"]; 3),
+      m(["reach", "harbor", "dock", "-", "room", "mail", "harbor", "dock", "-", "room", "allowed"]; 4),
+      m(["wake", "clerk", "^waiting>$"]; 5)]
+    | def add($path; $args): (.programs[] | select(.path == $path) | .plan[1].term[5]) |= (fromjson + $args | tojson);
+      add("lodge/east/ida/seat.typify"; ["screen=" + $root + "/screens/screen", "typed=" + $root + "/screens/typed"])
+    | .programs[-1].recorded += [st("lodge"; "east"; "-"; "room"; $root + "/screens"; "read-write"; 20)]'
+  check "plan of floors with mail between the harbor and the lodge and in the dock, and a wake for the lodge's reader" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  local s holder path k1 lodge_carrier real_git
+  s=$(state_of)
+  # A gate on git's commit for the deck's carrier alone: while the test's file gate.on stands, a delivery waits in its
+  # commit, under its hold, so that its journal and its copy stand until the test has looked.
+  real_git=$(command -v git)
+  mkdir -p -- "$scratch/gate"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "for a in \"\$@\"; do [[ \$a == commit ]] || continue; for (( i = 0; i < 600; i++ )); do [[ -e '$scratch/gate.on' ]] || break; sleep 0.1; done; break; done" \
+    "exec '$real_git' \"\$@\"" > "$scratch/gate/git"
+  chmod +x -- "$scratch/gate/git"
+  check "up deck, its carrier's git gated by the test" exit_is 0 env PATH="$scratch/gate:$PATH" "$BASH" "$loop" up deck
+  : > "$scratch/gate.on"
+  request keeper m1.md "to: Harbor Pilot" "subject: gated" --- "body"
+  check "[C56] follow-up of 4a: while a delivery of the deck waits in its commit, its journal stands in the deck's own state, S/floors/deck/comms/serving, naming it, and its copy in S/floors/deck/comms/taken" \
+    eventually_long bash -c '[[ $(jq -r .request "$1/serving" 2> /dev/null) == m1.md ]] && c=("$1"/taken/*.copy) && [[ -f ${c[0]} ]]' _ "$s/floors/deck/comms"
+  check "[C56] follow-up of 4a: and S/comms holds neither a journal nor a taken" bash -c '[[ ! -e $1/serving && ! -e $1/taken ]]' _ "$s/comms"
+  rm -f -- "$scratch/gate.on"
+  check "the mail is delivered once the gate is open" answered_ok keeper m1.md
+  check "[C56] follow-up of 4a: once it is answered its journal is removed from the deck's state, and none stands in S/comms" \
+    eventually bash -c '[[ ! -e $1/floors/deck/comms/serving && ! -e $1/comms/serving ]]' _ "$s"
+  check "up lodge" exit_is 0 wp up lodge
+  check "ida's pane works" eventually_long on lodge screen_has "Lodge Ida" "working"
+  path=$(jq -r '.path' "$clone/BUILD/shared/$(top_gen)/mail.json")
+  request keeper k1.md "to: Lodge Ida" "subject: one" --- "body"
+  check "the deck's carrier delivers a mail to the lodge's reader" answered_ok keeper k1.md
+  k1=$(answer_of keeper k1.md) k1=${k1#ok }
+  check "the reader is due its pointer, while its pane is not ready" \
+    eventually bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.count, .ids]" "$1") == "[1,[\"$2\"]]" ]]' _ "$s/comms/wake.json" "$k1"
+  # The bounded wait (5.160 point 5): the test holds the store's lock across several passes. A request of the lodge's
+  # writer makes each pass try the lock and fail; once the request is taken back, a later pass types the pointer, which
+  # needs no lock, so the pass that failed did end. Then down stops the carrier while the lock is still held.
+  flock -o "$s/mail" sleep 60 &
+  holder=$!
+  check "the test holds the store's lock" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
+  request ida i1.md "to: Harbor Keeper" "subject: waits" --- "body"
+  sleep 3
+  check "[C57] follow-up of 4a: while the test holds the store's lock, the lodge's carrier does not take its writer's request: it waits in out, with no answer" \
+    bash -c '[[ -f $1/out/i1.md && ! -e $1/answers/i1.md ]]' _ "$s/comms/Lodge Ida"
+  rm -f -- "$s/comms/Lodge Ida/out/i1.md"
+  printf '%s\n' ready > "$d/screen"
+  check "[C57] follow-up of 4a: its wait for the lock is bounded: the pass whose try failed ends, and a later pass, the lock still held, types the pointer, which needs no lock" \
+    file_comes_to "$d/typed" "mail: 1 new, newest $k1.md, in $path/in, and the page $path/README.md says what this line is"
+  check "the test still holds the store's lock" bash -c '! flock -n "$1" true' _ "$s/mail"
+  lodge_carrier=$(carrier_pid lodge)
+  check "[C57] follow-up of 4a: down lodge, while the test still holds the store's lock, ends the floor's carrier within the ten seconds down waits, with exit 0" exit_is 0 wp down lodge
+  check "[C57] follow-up of 4a: its carrier's process is gone, and the test held the lock throughout" \
+    bash -c '[[ -n $1 ]] && ! kill -0 "$1" 2> /dev/null && ! flock -n "$2" true' _ "$lodge_carrier" "$s/mail"
+  pkill -P "$holder" sleep 2> /dev/null
+  wait "$holder" 2> /dev/null
+  # Recovery under a hold (5.162 point 1): a stopped request's journal in the lodge's own state, and one in the shared
+  # S/comms, which is no floor's, planted while the lodge is down; the lodge comes up while the test holds the lock.
+  printf '%s\n' busy > "$d/screen"
+  jq -n -c '{id: "20261115T000000Z-900001", box: "Lodge Ida", request: "f1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/floors/lodge/comms/serving"
+  jq -n -c '{id: "20261115T000000Z-900002", box: "Lodge Ida", request: "s1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/comms/serving"
+  flock -o "$s/mail" sleep 60 &
+  holder=$!
+  check "the test holds the store's lock again" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
+  check "up lodge, with a stopped request's journal in its state, while the test holds the store's lock" exit_is 0 wp up lodge
+  sleep 3
+  check "[C57] follow-up of 4a: recovery runs under a hold: while the test holds the store's lock, the lodge's carrier does not recover the journal: it stays, and its request has no answer and no line" \
+    bash -c '[[ -f $1 && ! -e $2/answers/f1.grab ]] && ! grep -qF "\"request\":\"f1.grab\"" "$3"' _ "$s/floors/lodge/comms/serving" "$s/comms/Lodge Ida" "$s/comms/record"
+  pkill -P "$holder" sleep 2> /dev/null
+  wait "$holder" 2> /dev/null
+  check "[C57] follow-up of 4a: once the test lets go, the carrier recovers it: its request is answered" \
+    answered ida f1.grab "refused the carrier stopped while it served this, and whether it acted is not known"
+  check "[C57] follow-up of 4a: its line stands in the record, and the journal is removed" \
+    eventually bash -c '[[ ! -e $1 && $(jq -r "select(.request == \"f1.grab\") | .outcome" "$2") == refused ]]' _ "$s/floors/lodge/comms/serving" "$s/comms/record"
+  sleep 2
+  check "[C56] follow-up of 4a: a journal in the shared S/comms is no floor's: neither floor's carrier recovers it, and its request has no answer and no line" \
+    bash -c '[[ -f $1 && ! -e $2/answers/s1.grab ]] && ! grep -qF "\"request\":\"s1.grab\"" "$3"' _ "$s/comms/serving" "$s/comms/Lodge Ida" "$s/comms/record"
+  rm -f -- "$s/comms/serving"
+  check "down deck" exit_is 0 wp down deck
+  check "down lodge" exit_is 0 wp down lodge
+  check "unbuild" exit_is 0 wp unbuild
+  # A floor's key that holds *, ? or [ is a pattern to systemctl that matches the lodge's unit, unless it is escaped.
+  # Units are made only where the records' chain goes to the journal.
+  if ! systemctl --user show-environment > /dev/null 2>&1; then
+    skip "[C72] follow-up of 4a: no user manager answers here, so no carrier's unit is made, and a floor's key with *, ? or [ is tried where one answers"
+    return 0
+  fi
+  mkdir -p -- "$root/records"
+  local pair key esc kj own lodge_unit=workplace-carrier-$label-lodge.service lodge_inv
+  for pair in 'l*|l\x2a' 'l?dge|l\x3fdge' '[l]odge|\x5bl\x5dodge'; do
+    key=${pair%%|*} esc=${pair#*|}
+    own=workplace-carrier-$label-$esc.service
+    kj=$(jq -n --arg k "$key" '$k')
+    floors_clone
+    jq --arg k "$key" '(.floors[] | select(.key == "deck") | .key) = $k' "$clone/workplace.json" > "$scratch/w" && cp -- "$scratch/w" "$clone/workplace.json"
+    statements_plan "$floors_terms | $kj as \$k"' | (.programs[0].plan[] | select(.[0] == "floor" and .[1] == "deck") | .[1]) = $k
+      | (.programs[] | select(.path == "harbor/office.typify") | .plan[] | select(type == "array" and .[0] == "house") | .[1]) = $k
+      | def r($t; $line): {term: $t, origin: {kind: "program", line: $line, path: "programs/LOGS.typify"}};
+        .programs[-1].recorded += [r(["record", "-", "-", "-", "workplace", "pane", "kept"]; 1), r(["record-path", "records"]; 2), r(["record-chain", "journal"]; 3)]'
+    check "plan of floors whose deck's key is $key, which as a pattern matches lodge, with the records chained to the journal" exit_is 0 wplan
+    check "build" exit_is 0 wp build
+    check "up lodge" exit_is 0 wp up lodge
+    check "up $key" exit_is 0 wp up "$key"
+    check "[C72] follow-up of 4a: the floor $key's carrier runs as a unit of its own, $own, where each byte of the key outside letters, digits and _ . : - is written \\xHH" systemctl --user is-active --quiet "$own"
+    check "[C72] follow-up of 4a: and the lodge's carrier as its own, $lodge_unit" systemctl --user is-active --quiet "$lodge_unit"
+    lodge_inv=$(systemctl --user show -p InvocationID --value "$lodge_unit" 2> /dev/null)
+    check "[C72] follow-up of 4a: down $key, with exit 0" exit_is 0 wp down "$key"
+    check "[C72] follow-up of 4a: stops the floor $key's own unit" bash -c '! systemctl --user is-active --quiet "$1"' _ "$own"
+    check "[C72] follow-up of 4a: and no other: the lodge's unit still runs, the same invocation" \
+      bash -c '[[ -n $2 ]] && systemctl --user is-active --quiet "$1" && [[ $(systemctl --user show -p InvocationID --value "$1") == "$2" ]]' _ "$lodge_unit" "$lodge_inv"
+    check "down lodge" exit_is 0 wp down lodge
+    check "unbuild" exit_is 0 wp unbuild
+  done
 }
 
 # The readers with floors (review of 4a): status' homes per floor, doctor through the top, record verify by the
@@ -6359,6 +6494,7 @@ tests=(
   t_floors_up
   t_store_lock
   t_wake_floors
+  t_carrier_floors
   t_floors_readers
   t_floors_unenforced
   t_floors_assembly

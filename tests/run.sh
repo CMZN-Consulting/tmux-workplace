@@ -1915,6 +1915,33 @@ t_closed_names() {
   rm -rf -- "$clone/BUILD"
 }
 
+t_closed_names_unfolded() {
+  local grower="seat Orchard Grower (orchard/barn/grower)"
+  # A plan with no fold term: its views are the plan's own view cell (C33), and the rule reads them as a pane gets them.
+  local unfolded='.state.view += [{key: ["orchard", "barn", "grower", ($root + "/cfglink")], value: ["read-only"], masked: false,
+    origin: {kind: "program", path: "orchard/barn/grower/seat.typify", line: 10}}]'
+  ln -s -- config "$root/cfglink"
+  rm -f -- "$clone/PLAN/view.json"
+  make_plan --arg root "$root" "$unfolded"
+  check "a plan with no fold term, whose view cell gives grower a read-only row that is a link to the clone" test ! -e "$clone/PLAN/view.json"
+  check "[C31] [C33] follow-up of 4a: build refuses a plan with no fold term whose view cell holds a row that is a link to the clone, with exit 1" \
+    exit_is 1 wp build
+  check "[C31] naming the row and the clone's mask" \
+    said "$grower: its row $root/cfglink (read-only, from orchard/barn/grower/seat.typify:10) is the directory $clone, at or beneath $clone, the clone, which every view masks (C52)"
+  rm -rf -- "$clone/BUILD"
+  mkdir -p -- "$root/unfolded"
+  ln -sfn -- unfolded "$root/cfglink"
+  make_plan --arg root "$root" "$unfolded"
+  check "build of the same plan, made again with the link leading to a directory of its own" exit_is 0 wp build
+  ln -sfn -- config "$root/cfglink"
+  check "[C31] [C33] follow-up of 4a: the link swapped into the clone after the build makes up of the unfolded plan exit 1" exit_is 1 wp up
+  check "[C31] naming the row and the clone's mask" \
+    said "$grower: its row $root/cfglink (read-only, from orchard/barn/grower/seat.typify:10) is the directory $clone, at or beneath $clone, the clone, which every view masks (C52)"
+  check "[C31] and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  check "[C31] and started no server" no_server
+  rm -rf -- "$clone/BUILD"
+}
+
 floors_clone() {
   jq '. + {floors: [
     {key: "bridge", name: "Bridge", houses: "offices", enforced: false, socket: "tmux-default", conf: "floors/bridge.conf", smallest: "80x24"},
@@ -6489,6 +6516,7 @@ tests=(
   t_plan_refusals
   t_the_fold
   t_closed_names
+  t_closed_names_unfolded
   t_plan_relative
   t_floors
   t_reach_floors

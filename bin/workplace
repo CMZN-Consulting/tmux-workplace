@@ -625,10 +625,10 @@ frame_masks() {
 # - A closed label is written by its physical path, with no link in it: a tmpfs written through a link lies where the
 #   link leads, and a label whose last part is a link gets none, since bubblewrap mounts nothing on a link (5.162
 #   point 6). So a label's tmpfs, where it has one, lies at its written path, which is its physical one.
-# - A row that is not hidden may not be, by its physical path, at or beneath a closed directory's, nor beneath a
-#   mask's under a name that the mask does not cover. Beneath the runtime directory's mask a seat's rows are mounted
+# - A row that is not hidden may not be, by its real path, at or beneath a closed directory's, nor beneath a mask's
+#   under a name that the mask does not cover. Beneath the runtime directory's mask a seat's rows are mounted
 #   again, so that one is passed over.
-# - A read-only or read-write row whose physical path holds a closed directory shows it at the row's written path
+# - A read-only or read-write row whose real path holds a closed directory shows it at the row's written path
 #   joined with the rest of the closed directory's physical path. Something must lie over that path after the row's
 #   bind: a hidden, scratch or searchable-only row of the view written at it or at an ancestor of it beneath the row
 #   (such a row sorts after the row, and the rows are mounted in that order), or, for a mask, the mask itself, which is
@@ -636,13 +636,15 @@ frame_masks() {
 #   its own, and that row is what lies over it.
 # - A row is judged by its real path, where every link in it leads, its last part too, a file as well as a directory
 #   (5.176 point 7).
+# - The rows are the views' as a pane gets them: the folded view's where the plan folds, and the plan's own view cell
+#   where it does not (C33), so the masks hold in an unfolded view too. A plan that folds with no view given is
+#   refused, as is a label that is not an absolute path once the binding joins it.
 # A path that does not exist is passed over. With a seat named, only that seat's rows are read. The binding and the
 # library are those the views were made with: the tool's own at build, and BUILD's own at up, restart and a pane's
-# exec (5.176 point 11).
+# exec (5.176 point 11). Where the plan or the views cannot be read, the rule refuses.
 refuse_closed_names() {
   local view=$1 plan=$2 binding=$3 lib=$4 only=${5-} c r p row state seat origins label lorigin cphys rphys kind name target rest covered chain what
   local -a closed=() rows=() masks=() faults=() covers=()
-  [[ -f $view ]] || return 0
   mapfile -d '' -t closed < <(jq --raw-output0 -L "$lib" --arg root "$root" --slurpfile b "$binding" '
     include "table";
     def at: "\(.path // "?"):\(.line // "?")";
@@ -650,19 +652,32 @@ refuse_closed_names() {
     | .programs[]?.recorded[]? | select((.term | type) == "array" and .term[0] == "label" and .term[2] == "closed")
     | .term[1], (.origin | at)' "$plan")
   wait "$!" || { warn "cannot read the plan's labels of closed in $plan"; return 1; }
-  mapfile -d '' -t rows < <(jq --raw-output0 --arg only "$only" --slurpfile p "$plan" '
-    ([$p[0].programs[]?.plan[]? | (if type == "object" then .term else . end) | select(type == "array" and .[0] == "pane")
+  # The first field is the chain, where one is kept, and the rows follow, four fields each.
+  mapfile -d '' -t rows < <(jq -n --raw-output0 -L "$lib" --arg root "$root" --arg only "$only" --slurpfile b "$binding" \
+    --slurpfile p "$plan" --slurpfile v "$view" '
+    include "table";
+    ($p[0] | joined($b[0]; $root)) as $plan | $b[0].tables.view as $spec
+    | if folded($plan; $spec) and $v[0] == null then error("the plan folds, and no folded view is given") else . end
+    | ([$plan.programs[]?.plan[]? | (if type == "object" then .term else . end) | select(type == "array" and .[0] == "pane")
       | {key: (.[1:4] | tojson), value: .[4]}] | from_entries) as $names
-    | .rows[] | select($only == "" or (.key[0:3] | join("/")) == $only)
-    | .key[3], .value[0], "\($names[.key[0:3] | tojson] // "?") (\(.key[0:3] | join("/")))",
-      ([.origins[]? | "\(.path // "?"):\(.line // "?")"] | join(", "))' "$view")
+    | (if folded($plan; $spec) then ($v[0].records.chain? // "") else "" end | tostring),
+      (table_rows($plan; $v[0]; $spec)[] | select(type == "object" and (.key | type) == "array")
+       | select($only == "" or (.key[0:3] | join("/")) == $only)
+       | .key[3], .value[0], "\($names[.key[0:3] | tojson] // "?") (\(.key[0:3] | join("/")))",
+         ([(.origins // [.origin // {}])[] | "\(.path // "?"):\(.line // "?")"] | join(", ")))')
   wait "$!" || { warn "cannot read the views in $view"; return 1; }
-  chain=$(jq -r '.records.chain // empty' "$view" 2> /dev/null)
+  (( ${#rows[@]} )) || { warn "cannot read the views in $view"; return 1; }
+  chain=${rows[0]}
+  rows=("${rows[@]:1}")
   mapfile -d '' -t masks < <(frame_masks "$chain")
   # Each closed thing: its written path, its physical path, its kind (label, closed, beneath), and its name.
   local -a things=()
   for (( c = 0; c + 1 < ${#closed[@]}; c += 2 )); do
     label=${closed[c]} lorigin=${closed[c + 1]}
+    if [[ $label != /* ]]; then
+      faults+=("$lorigin: the label of closed names $label, which is no absolute path once the binding joins it, so the rule cannot find it on the machine")
+      continue
+    fi
     if [[ -L $label ]]; then
       faults+=("$lorigin: the label of closed names $label, whose last part is a link, and bubblewrap mounts nothing on a link (5.162 point 6)")
       continue
@@ -2507,7 +2522,7 @@ cmd_up() {
     || die "the server's socket would be $socket, ${#socket} bytes, and a socket's path holds at most 107; give the clone a shorter path" 2
   [[ -d $tmux_dir ]] || tmux_dir=""
   [[ -d $tmux_default && $tmux_default != "$tmux_dir" ]] || tmux_default=""
-  refuse_closed_names "$b_view" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" || die "up refuses: a seat's view would hold a closed directory under another name"
+  refuse_closed_names "$view_file" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" || die "up refuses: a seat's view would hold a closed directory under another name"
   if [[ -n $run_floor ]]; then
     # RUN is made without -p, so that an up that finds BUILD gone stops here.
     [[ -d $build_dir/RUN ]] || mkdir -- "$build_dir/RUN" 2> /dev/null || [[ -d $build_dir/RUN ]] || die "cannot make $build_dir/RUN" 2
@@ -2642,7 +2657,9 @@ cmd_exec() {
   [[ -f $file ]] || die "no seat is named $seat in this workplace" 2
   record=$(jq -c --arg n "$seat" 'select(.name == $n)' "$file") || die "cannot read $file"
   [[ -n $record ]] || die "the record at $file is not the seat $seat's" 2
-  refuse_closed_names "$b_view" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" "$(jq -r '.key | join("/")' <<< "$record")" \
+  local exec_view=/dev/null
+  [[ -f $b_view ]] && exec_view=$b_view
+  refuse_closed_names "$exec_view" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" "$(jq -r '.key | join("/")' <<< "$record")" \
     || die "exec refuses: the seat's view would hold a closed directory under another name" 2
   local -a inherit pairs command assignments=()
   mapfile -t inherit < <(jq -r '.inherit[]' <<< "$record")
@@ -4333,7 +4350,7 @@ cmd_restart() {
   plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
   [[ -n $run_floor ]] && floor_lock "$run_floor" "restart $run_floor"
-  refuse_closed_names "$b_view" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" || die "restart refuses: a seat's view would hold a closed directory under another name"
+  refuse_closed_names "$view_file" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" || die "restart refuses: a seat's view would hold a closed directory under another name"
   state=$(< "$run_dir/state.json")
   local verdict=0
   run_server || verdict=$?

@@ -591,6 +591,15 @@ physical_of() {
   fi
 }
 
+# The real path of PATH, in the global physical: every link in it resolved, its last part too, a file's as well as a
+# directory's (5.176 point 7). A bind written through a link to a file lies on the file it leads to.
+real_of() {
+  local r
+  physical_of "$1"
+  [[ -d $1 || ! -L $1 ]] && return 0
+  r=$(readlink -e -- "$1" && printf .) && physical=${r%$'\n.'}
+}
+
 # The frame's own masks, which a view lays over its rows (C39, C52, C68, C73, C84), each as a path, its kind and its
 # name in a refusal, NUL-separated: the clone, R, the user's tmux socket directories, the journal's directories where a
 # chain is kept, and the runtime directory, beneath which a seat's rows are mounted again after its mask (kind
@@ -625,15 +634,16 @@ frame_masks() {
 #   (such a row sorts after the row, and the rows are mounted in that order), or, for a mask, the mask itself, which is
 #   mounted after every row, at its path. A label beneath a hidden, scratch or searchable-only row has no tmpfs of
 #   its own, and that row is what lies over it.
-# A path that does not exist is passed over. With a seat named, only that seat's rows are read. The binding is the
-# tool's own in the clone, and BUILD's own in a build, where a pane's exec runs.
+# - A row is judged by its real path, where every link in it leads, its last part too, a file as well as a directory
+#   (5.176 point 7).
+# A path that does not exist is passed over. With a seat named, only that seat's rows are read. The binding and the
+# library are those the views were made with: the tool's own at build, and BUILD's own at up, restart and a pane's
+# exec (5.176 point 11).
 refuse_closed_names() {
-  local view=$1 plan=$2 only=${3-} c r p row state seat origins label lorigin cphys rphys kind name target rest covered binding chain
+  local view=$1 plan=$2 binding=$3 lib=$4 only=${5-} c r p row state seat origins label lorigin cphys rphys kind name target rest covered chain what
   local -a closed=() rows=() masks=() faults=() covers=()
   [[ -f $view ]] || return 0
-  binding=$tool/host/binding.json
-  [[ -f $binding ]] || binding=$tool/binding.json
-  mapfile -d '' -t closed < <(jq --raw-output0 -L "$tool/libexec" --arg root "$root" --slurpfile b "$binding" '
+  mapfile -d '' -t closed < <(jq --raw-output0 -L "$lib" --arg root "$root" --slurpfile b "$binding" '
     include "table";
     def at: "\(.path // "?"):\(.line // "?")";
     joined($b[0]; $root)
@@ -675,12 +685,14 @@ refuse_closed_names() {
     for (( r = 0; r + 3 < ${#rows[@]}; r += 4 )); do
       row=${rows[r]} state=${rows[r + 1]} seat=${rows[r + 2]} origins=${rows[r + 3]}
       [[ $state != hidden && -e $row ]] || continue
-      physical_of "$row"
+      real_of "$row"
       rphys=$physical
+      what=directory
+      [[ -d $row ]] || what=file
       if [[ $rphys == "$cphys" || $rphys == "$cphys"/* || ( $cphys == / && $rphys != / ) ]]; then
         [[ $kind == beneath ]] && continue
         if [[ $kind == closed ]] && [[ $row == "$label" || $row == "$label"/* || $row == "$cphys" || $row == "$cphys"/* ]]; then continue; fi
-        faults+=("seat $seat: its row $row ($state, from $origins) is the directory $rphys, at or beneath $cphys, $name: no view holds a closed directory under another name (5.159 point 6)")
+        faults+=("seat $seat: its row $row ($state, from $origins) is the $what $rphys, at or beneath $cphys, $name: no view holds a closed directory under another name (5.159 point 6)")
       elif [[ ( $state == read-only || $state == read-write ) && ( $cphys == "$rphys"/* || ( $rphys == / && $cphys != / ) ) ]]; then
         rest=${cphys#"${rphys%/}"/}
         target=${row%/}/$rest
@@ -1422,8 +1434,8 @@ build_floor_seats() {
 # With floors a build first takes its state (5.160 point 2, 5.162; the addendum's P5 and Q8): S itself, mode 0700;
 # the build's lock, held for the whole build and closed in every process the build starts; its holder; the
 # generations' lock; and the counter of generations. Each is a file of this user's with mode 0600. A generation's
-# number is the counter's, or one above the highest that BUILD holds, named or not, so that a number a stopped
-# build left is never taken again; the counter outlives unbuild, since S stands.
+# number is the counter's, and an empty counter gives 1; the build writes the next number back before it makes BUILD,
+# so that a number a stopped build took is never taken again, and the counter outlives unbuild, since S stands.
 build_state_begin() {
   local workplace=$1 base s name f next d n
   command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
@@ -1540,7 +1552,7 @@ cmd_build() {
     view_file=$plan_dir/view.json
   fi
   refuse_rows "$plan_dir/plan.json" "$view_file" no || die "build refuses: PLAN/plan.json shows a seat a place the frame closes"
-  refuse_closed_names "$view_file" "$plan_dir/plan.json" || die "build refuses: a seat's view would hold a closed directory under another name"
+  refuse_closed_names "$view_file" "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec" || die "build refuses: a seat's view would hold a closed directory under another name"
   plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq" "$view_file"
   check_name "$manifest" || die "build refuses: the plan's workplace name is not the one its clone gives"
   if [[ $facts_member == none ]]; then
@@ -1809,8 +1821,8 @@ seat_floor() {
 }
 
 # The floor's own lock, S_F/up.lock, and its holder (5.162; the addendum's Q8 and R7): an up or a restart of F holds
-# it, and a second, or a build of F, is refused with exit 1, naming the holder. Its descriptor, fd 6, is closed in
-# every process the command starts.
+# it, and a second up or restart of F is refused at once with exit 1, naming the holder; unbuild takes it too, and
+# writes no holder. Its descriptor, fd 6, is closed in every process the command starts.
 floor_lock() {
   local floor=$1 command=$2 base s file
   command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
@@ -2495,7 +2507,7 @@ cmd_up() {
     || die "the server's socket would be $socket, ${#socket} bytes, and a socket's path holds at most 107; give the clone a shorter path" 2
   [[ -d $tmux_dir ]] || tmux_dir=""
   [[ -d $tmux_default && $tmux_default != "$tmux_dir" ]] || tmux_default=""
-  refuse_closed_names "$b_view" "$b_plan" || die "up refuses: a seat's view would hold a closed directory under another name"
+  refuse_closed_names "$b_view" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" || die "up refuses: a seat's view would hold a closed directory under another name"
   if [[ -n $run_floor ]]; then
     # RUN is made without -p, so that an up that finds BUILD gone stops here.
     [[ -d $build_dir/RUN ]] || mkdir -- "$build_dir/RUN" 2> /dev/null || [[ -d $build_dir/RUN ]] || die "cannot make $build_dir/RUN" 2
@@ -2630,7 +2642,7 @@ cmd_exec() {
   [[ -f $file ]] || die "no seat is named $seat in this workplace" 2
   record=$(jq -c --arg n "$seat" 'select(.name == $n)' "$file") || die "cannot read $file"
   [[ -n $record ]] || die "the record at $file is not the seat $seat's" 2
-  refuse_closed_names "$b_view" "$b_plan" "$(jq -r '.key | join("/")' <<< "$record")" \
+  refuse_closed_names "$b_view" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" "$(jq -r '.key | join("/")' <<< "$record")" \
     || die "exec refuses: the seat's view would hold a closed directory under another name" 2
   local -a inherit pairs command assignments=()
   mapfile -t inherit < <(jq -r '.inherit[]' <<< "$record")
@@ -2852,8 +2864,10 @@ carrier_release() {
 # One line of the record, written under the store's lock after a torn last line is ended (5.153), so that it parses by
 # itself whichever floor's carrier stopped while it wrote. A line decided while no lock is held, a grab's, a write's or
 # a pointer's, takes a hold of its own, within the pass's budget; where it gets none it waits in the carrier's queue,
-# which the next hold writes first, in its order. Only at the carrier's end, where its last hold gets none within a
-# second, are the lines that wait written without the lock, so that none is lost (a limit).
+# which the next hold writes first, in its order, after the mend. Only at the carrier's end, where its last hold gets
+# none within a second, are the lines that wait written without the lock and without the mend (a limit). A line that
+# waits lives in the carrier's memory alone, so a hard kill of the carrier loses it, though its act is done (a limit,
+# which 4b's record of each floor closes; 5.176 point 8).
 carrier_append() {
   local line=$1
   [[ -n $line ]] || return 1
@@ -3983,7 +3997,8 @@ cmd_doctor() {
     g=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' <<< "$doc_top" | head -n 1)
     if [[ -n $g ]]; then
       dplan=$config/BUILD/$g/plan.json
-      mapfile -t dhomes < <(sed -n 's|^[0-9a-f]\{64\}  \(floors/[^/]*/[0-9]*\)/MANIFEST$|\1|p' <<< "$doc_top" | sed "s|^|$config/BUILD/|; s|\$|/homes.json|")
+      mapfile -t dhomes < <(sed -n 's|^[0-9a-f]\{64\}  \(floors/[^/]*/[0-9]*\)/MANIFEST$|\1|p' <<< "$doc_top")
+      for g in "${!dhomes[@]}"; do dhomes[g]=$config/BUILD/${dhomes[g]}/homes.json; done
     fi
   fi
   if [[ $config == /* && -f $dplan && -n $state_dir ]]; then
@@ -4318,7 +4333,7 @@ cmd_restart() {
   plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
   need_programs "${plan_programs[@]}"
   [[ -n $run_floor ]] && floor_lock "$run_floor" "restart $run_floor"
-  refuse_closed_names "$b_view" "$b_plan" || die "restart refuses: a seat's view would hold a closed directory under another name"
+  refuse_closed_names "$b_view" "$b_plan" "$build_dir/binding.json" "$build_dir/libexec" || die "restart refuses: a seat's view would hold a closed directory under another name"
   state=$(< "$run_dir/state.json")
   local verdict=0
   run_server || verdict=$?

@@ -3173,8 +3173,9 @@ t_carrier_floors() {
     eventually bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.count, .ids]" "$1") == "[1,[\"$2\"]]" ]]' _ "$s/comms/wake.json" "$k1"
   # The bounded wait (5.160 point 5): the test holds the store's lock across several passes. A request of the lodge's
   # writer makes each pass try the lock and fail; once the request is taken back, a later pass types the pointer, which
-  # needs no lock, so the pass that failed did end. Then down stops the carrier while the lock is still held.
-  flock -o "$s/mail" sleep 60 &
+  # needs no lock, so the pass that failed did end. Then down stops the carrier while the lock is still held. The
+  # holder outlives every wait below, and the test lets it go itself.
+  flock -o "$s/mail" sleep 300 &
   holder=$!
   check "the test holds the store's lock" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
   request ida i1.md "to: Harbor Keeper" "subject: waits" --- "body"

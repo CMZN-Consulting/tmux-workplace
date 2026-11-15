@@ -148,6 +148,21 @@ sha_of() {
   printf '%s\n' "${sum%%  *}"
 }
 
+# sha256sum's lines with each name as it is. GNU sha256sum begins the line of a name that holds a backslash with one,
+# and doubles the name's backslashes; a floor's key may hold one (C67), and no name under BUILD holds a newline or a
+# carriage return, which it would escape too, since a key holds no control character.
+sums_plain() {
+  local line name
+  while IFS= read -r line; do
+    if [[ $line == '\'* ]]; then
+      line=${line#'\'}
+      name=${line#*  }
+      line="${line%%  *}  ${name//'\\'/'\'}"
+    fi
+    printf '%s\n' "$line"
+  done
+}
+
 collect_facts() {
   local path type mode uid named
   local -a fields
@@ -1625,7 +1640,7 @@ cmd_build() {
     for name in "$shared" "${floor_keys[@]/#/floors/}"; do
       [[ $name == floors/* ]] && name=$name/$gen
       generation_manifest "$build_dir/$name" || die "cannot write $build_dir/$name/MANIFEST" 2
-      top+=("$(cd -- "$build_dir" && sha256sum -- "$name/MANIFEST")") || die "cannot hash $build_dir/$name/MANIFEST" 2
+      top+=("$(cd -- "$build_dir" && sha256sum -- "$name/MANIFEST" | sums_plain)") || die "cannot hash $build_dir/$name/MANIFEST" 2
     done
     printf '%s\n' "${top[@]}" > "$build_dir/MANIFEST.new" && mv -T -- "$build_dir/MANIFEST.new" "$build_dir/MANIFEST" \
       || die "cannot write $build_dir/MANIFEST"
@@ -1749,7 +1764,7 @@ verify_build() {
   done
   local -a sums names=()
   for name in "${!want[@]}"; do [[ -n ${skip[$name]+x} ]] || names+=("$name"); done
-  mapfile -t sums < <(cd -- "$build_dir" && sha256sum -- "${names[@]}" 2> /dev/null)
+  mapfile -t sums < <(cd -- "$build_dir" && sha256sum -- "${names[@]}" 2> /dev/null | sums_plain)
   (( ${#sums[@]} == ${#names[@]} )) || { warn "a file the MANIFEST lists is missing from $build_dir"; return 1; }
   for line in "${sums[@]}"; do
     name=${line#*  }
@@ -1771,7 +1786,7 @@ floor_word() {
   local command=$1 count=$2 floor=${3-}
   [[ $b_layout == generations ]] || return 0
   (( count >= 1 )) || die "with floors, $command names its floor: workplace $command F" 2
-  [[ -n ${b_floor[$floor]+x} ]] || die "the build has no floor $floor" 2
+  [[ -n $floor && -n ${b_floor[$floor]+x} ]] || die "the build has no floor $floor" 2
 }
 
 # Act on the floor F, or, with none, on the workplace without floors: its run directory RUN/F, and the generation
@@ -3415,7 +3430,7 @@ cmd_carry() {
   if [[ $b_layout == generations ]]; then
     (( $# <= 1 )) || die "carry takes one floor; up starts it" 2
     (( $# == 1 )) || die "with floors, carry names its floor: workplace carry F; up starts it" 2
-    [[ -n ${b_floor[$1]+x} ]] || die "the build has no floor $1" 2
+    [[ -n $1 && -n ${b_floor[$1]+x} ]] || die "the build has no floor $1" 2
     floor_scope "$1"
   else
     (( $# == 0 )) || die "carry takes no arguments; up starts it" 2

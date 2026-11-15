@@ -2061,9 +2061,26 @@ t_floors() {
   done
   check "[C101] 5.160 point 8: with floors, up names its floor, or refuses with exit 2" exit_is 2 wp up
   check "[C101] saying so" said "with floors, up names its floor: workplace up F"
+  check "[C101] review of 4a: up of an empty word refuses, with exit 2, as one the build does not make" exit_is 2 wp up ''
+  check "[C101] with the frame's line alone, and no line of bash's" test "$(< "$scratch/out")" = "workplace: the build has no floor "
+  check "[C101] review of 4a: and so does status of an empty word" exit_is 2 wp status ''
+  check "[C101] with the frame's line alone" test "$(< "$scratch/out")" = "workplace: the build has no floor "
+  check "[C101] review of 4a: and carry of an empty word" exit_is 2 wp carry ''
+  check "[C101] with the frame's line alone" test "$(< "$scratch/out")" = "workplace: the build has no floor "
   check "[C102] unbuild" exit_is 0 wp unbuild
   check "[C102] removes the key homes in every floor's state" \
     bash -c '[[ ! -e $1/floors/deck/keys ]] && grep -qF "unbuild: removed the key homes in $1/floors/deck/keys, 1 homes" "$2"' _ "$s" "$scratch/out"
+
+  # A floor's key may hold a backslash (C67), which sha256sum escapes in the lines it writes.
+  jq '.floors |= map(if .key == "lodge" then .key = "lo\\dge" else . end)' "$clone/workplace.json" > "$scratch/w" && cp -- "$scratch/w" "$clone/workplace.json"
+  statements_plan "${floors_terms//'"lodge"'/'"lo\\dge"'}"
+  check "plan with a floor whose key holds a backslash" exit_is 0 wplan
+  check "build of it" exit_is 0 wp build
+  check "[C5] review of 4a: the top names that floor's generation by its key as written, where sha256sum would escape it" \
+    grep -qE '^[0-9a-f]{64}  floors/lo\\dge/[0-9]+/MANIFEST$' "$clone/BUILD/MANIFEST"
+  check "[C5] review of 4a: and the build verifies, whole" exit_is 0 wp status
+  check "[C5] and that floor's own verify" exit_is 0 wp status 'lo\dge'
+  check "unbuild it" exit_is 0 wp unbuild
 }
 
 t_floors_assembly() {

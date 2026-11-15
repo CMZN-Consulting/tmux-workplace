@@ -2832,6 +2832,8 @@ t_store_lock() {
   check "[C94] in the order of mail.json's seats" test "$(jq -c '.seats | keys_unsorted' "$s/comms/wake.json")" = '["Harbor Keeper","Harbor Pilot","Lodge Ida"]'
   # Which floor took the lock next is the kernel's choice, so the order is shown and not checked.
   note "    the floors' deliveries in the store's order (D the deck, L the lodge): $(for id in "${ids[@]}"; do jq -r --arg id "$id" 'select(.id == $id and .action == "mail") | if .seat == "Lodge Ida" then "L" else "D" end' "$s/comms/record"; done | tr -d '\n')"
+  # A carrier removes the holder as it lets the store's lock go, which is after the last delivery's line.
+  eventually_long flock -n "$store" true || note "    the store's lock is still held after a minute"
   check "[C57] and no holder of the store's lock stands once they are done" test ! -e "$s/store.holder"
   # A dead carrier's add that no commit took rides into no other delivery.
   printf '%s\n' left > "$store/Harbor Keeper/in/zz.md"
@@ -5101,6 +5103,8 @@ t_comms_from_a_pane() {
   check "[C64] nothing a request named ran: no file was made, and the server stands" \
     bash -c 'for n in 3 4 5 6 7 8; do test ! -e "$1/pwned$n" || exit 1; done; test ! -e "$2/carrier/pwned3" && test ! -e "$3/pwned3" && "${@:4}" list-sessions > /dev/null' _ \
     "$root" "$run" "$s" setpriv --no-new-privs tmux -S "$run/$label" -u
+  # The carrier removes what it took after the request's line, and its journal after that.
+  eventually_long test ! -e "$s/comms/serving" || note "    the carrier's journal $s/comms/serving still stands after a minute"
   check "[C62] [C63] what the carrier took, and its own copies, are removed once each request is answered" test -z "$(find "$s/comms/taken" -mindepth 1 -print -quit)"
   check "[C65] the store runs no hook: not its own, not the user's hooksPath, fsmonitor or filter; the user's signing is not asked" \
     bash -c 'test ! -e "$1/hook-ran" && test "$(jq -r "select(.request == \"h2.md\") | .outcome" "$2")" = ok' _ "$scratch" "$s/comms/record"

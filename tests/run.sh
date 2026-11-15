@@ -2699,6 +2699,8 @@ t_store_lock() {
   check "[C59] 5.162: once it is free, the two floors' carriers deliver the nine mails" \
     bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of keeper k1.md)" "$(answer_of keeper k2.md)" "$(answer_of keeper k3.md)" \
       "$(answer_of pilot p1.md)" "$(answer_of pilot p2.md)" "$(answer_of pilot p3.md)" "$(answer_of ida i1.md)" "$(answer_of ida i2.md)" "$(answer_of ida i3.md)"
+  # The carrier answers before it writes the line, so the lines are awaited.
+  check "the nine mails' lines stand in the record" eventually bash -c '[[ $(jq -r "select(.action == \"mail\" and .outcome == \"ok\") | .id" "$1" | wc -l) == 9 ]]' _ "$s/comms/record"
   mapfile -t ids < <(jq -r 'select(.action == "mail" and .outcome == "ok") | .id' "$s/comms/record")
   check "[C57] one commit for each delivery, and ids that no two floors share, counted once" \
     bash -c '[[ $1 == 9 && $2 == 9 && $(printf "%s\n" "${@:4}" | sort -u | wc -l) == 9 && $3 == 9 ]]' _ "$(store_commits)" "${#ids[@]}" "$(< "$s/comms/next")" "${ids[@]}"
@@ -2729,6 +2731,7 @@ t_store_lock() {
   request ida i4.md "to: Harbor Keeper" "subject: i4" --- "i4"
   wait "$holder"
   check "a mail is delivered after the stale add" answered_ok ida i4.md
+  check "its line stands in the record" eventually bash -c '[[ -n $(jq -r "select(.request == \"i4.md\" and .action == \"mail\") | .id" "$1") ]]' _ "$s/comms/record"
   check "[C57] 5.162 point 1: its commit holds its own paths alone, and the stale add is unstaged, not committed" \
     bash -c '[[ $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" show --name-only --format= HEAD | sort | tr "\n" " ") == "Harbor Keeper/in/$2.md Lodge Ida/sent/$2.md " ]] \
       && [[ -z $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" ls-files -- "Harbor Keeper/in/zz.md") ]]' _ "$store" "$(jq -r 'select(.request == "i4.md" and .action == "mail") | .id' "$s/comms/record")"
@@ -2748,9 +2751,45 @@ t_store_lock() {
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
   carriers=("$!")
   check "[C57] 5.162 point 1: recovery finds the delivery's commit by its subject, after another floor's, and answers it ok" answered ida x.md "ok recovered-x"
-  check "[C57] and names its readers, the commit's" test "$(jq -c 'select(.id == "recovered-x" and .action == "mail") | .target' "$s/comms/record")" = '["Harbor Keeper"]'
+  check "[C57] and names its readers, the commit's" eventually test "$(jq -c 'select(.id == "recovered-x" and .action == "mail") | .target' "$s/comms/record")" = '["Harbor Keeper"]'
   rm -rf -- "$run/lodge/carrier"
   wait "${carriers[@]}"
+  # A fresh store: the first delivery starts from no head, and another floor's commit follows it.
+  rm -rf -- "$run"
+  check "unbuild" exit_is 0 wp unbuild
+  rm -rf -- "$store"
+  check "build again, which makes the store afresh" exit_is 0 wp build
+  check "the store has no commit" test "$(store_commits)" = 0
+  for f in "Lodge Ida/sent" "Harbor Keeper/in"; do printf '%s\n' x > "$store/$f/first-x.md"; done
+  sgit add -- "Lodge Ida/sent/first-x.md" "Harbor Keeper/in/first-x.md"
+  sgit -c user.name=t -c user.email=t@t commit -q -m "deliver first-x"
+  printf '%s\n' y > "$store/Harbor Pilot/in/other-y.md"
+  sgit add -- "Harbor Pilot/in/other-y.md"
+  sgit -c user.name=t -c user.email=t@t commit -q -m "deliver other-y"
+  jq -n -c '{id: "first-x", box: "Lodge Ida", request: "f.md", action: "mail", seat: "Lodge Ida", base: ""}' > "$s/floors/lodge/comms/serving"
+  mkdir -p -- "$run/lodge/carrier"
+  printf '%s\n' '{"slots": {}}' > "$run/lodge/state.json"
+  "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
+  carriers=("$!")
+  check "[C57] review of 4a: recovery finds the store's first delivery, whose journal noted no head, though another floor committed after it" \
+    answered ida f.md "ok first-x"
+  rm -rf -- "$run/lodge/carrier"
+  wait "${carriers[@]}"
+  # A stopped delivery's copies that only the index holds, where the index is locked and the reset cannot run.
+  for f in "Lodge Ida/sent" "Harbor Keeper/in"; do printf '%s\n' z > "$store/$f/half-z.md"; done
+  sgit add -- "Lodge Ida/sent/half-z.md" "Harbor Keeper/in/half-z.md"
+  : > "$store/.git/index.lock"
+  jq -n -c --arg b "$(sgit rev-parse HEAD)" '{id: "half-z", box: "Lodge Ida", request: "z.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving"
+  mkdir -p -- "$run/lodge/carrier"
+  "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
+  carriers=("$!")
+  check "[C57] a delivery whose commit does not stand is answered as gone to none" \
+    answered ida z.md "refused the carrier stopped while it served this, and it went to none; leave it in out again"
+  check "[C57] review of 4a: and its copies are removed, though the index still holds them, since HEAD does not" \
+    bash -c '[[ ! -e $1/Lodge\ Ida/sent/half-z.md && ! -e $1/Harbor\ Keeper/in/half-z.md ]]' _ "$store"
+  rm -rf -- "$run/lodge/carrier"
+  wait "${carriers[@]}"
+  rm -f -- "$store/.git/index.lock"
 }
 
 # A pointer settles exactly what it counted (5.162 point 1): mail that another floor's carrier delivers to its reader
@@ -2795,13 +2834,15 @@ t_wake_floors() {
   sleep 2
   check "[C94] 5.162 point 1: while the lock is held the pointer is not settled: its ids stay in wake.json" \
     test "$(jq -c '.seats["Lodge Ida"].ids' "$s/comms/wake.json")" = "[\"$k1\"]"
+  check "[C57] review of 4a: and its line is not written without the lock: it waits for the carrier's next hold" \
+    bash -c '[[ -z $(jq -c "select(.action == \"wake\" and has(\"length\"))" "$1") ]]' _ "$s/comms/record"
   jq --arg x "$x" '.seats["Lodge Ida"] |= (.ids += [$x] | .times[$x] = "2026-11-14T23:59:59Z" | .count = (.ids | length))' \
     "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
   pkill -P "$holder" sleep 2> /dev/null
   wait "$holder" 2> /dev/null
   check "[C94] 5.162 point 1: once it settles, the mail it counted is no longer to be pointed out, and the mail delivered meanwhile stays" \
     eventually bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.count, .ids, .since, (.last > 0)]" "$1") == "[1,[\"$2\"],\"2026-11-14T23:59:59Z\",true]" ]]' _ "$s/comms/wake.json" "$x"
-  check "[C96] the pointer's line covers the mail it counted alone" \
+  check "[C96] the pointer's line covers the mail it counted alone, written once the lock is free" \
     test "$(jq -c --arg k "$k1" 'select(.action == "wake" and has("length")) | [.target, .covers, .outcome]' "$s/comms/record")" = "[[\"Lodge Ida\"],[\"$k1\"],\"ok\"]"
   rm -rf -- "$run/deck/carrier"
   wait "$deck"

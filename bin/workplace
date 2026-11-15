@@ -2796,6 +2796,7 @@ carrier_hold() {
   (( hold_left > 0 )) || hold_left=0
   carrier_held=1
   carrier_holder ""
+  carrier_flush
   return 0
 }
 
@@ -2815,23 +2816,34 @@ carrier_release() {
 
 # One line of the record, written under the store's lock after a torn last line is ended (5.153), so that it parses by
 # itself whichever floor's carrier stopped while it wrote. A line decided while no lock is held, a grab's, a write's or
-# a pointer's, takes a hold of its own for its mend and its write, and waits for it at most a second; where it gets
-# none, the line is written in one write of its own without the mend (a limit). It runs in a pipeline's subshell, so
-# that hold ends with it.
+# a pointer's, takes a hold of its own, within the pass's budget; where it gets none it waits in the carrier's queue,
+# which the next hold writes first, in its order. Only at the carrier's end, where its last hold gets none within a
+# second, are the lines that wait written without the lock, so that none is lost (a limit).
 carrier_append() {
-  local line
-  IFS= read -r line || [[ -n $line ]] || return 1
+  local line=$1
+  [[ -n $line ]] || return 1
   if (( carrier_held )); then
     carrier_record_mend
-  elif [[ -n $store ]] && exec 8< "$store" && flock -w 1 8; then
-    carrier_held=1
-    carrier_holder ""
+  elif [[ -n $store ]]; then
+    if ! carrier_hold; then
+      pend_lines+=("$line")
+      return 0
+    fi
     carrier_record_mend
     printf '%s\n' "$line" >> "$comms/record"
     carrier_release
     return 0
   fi
   printf '%s\n' "$line" >> "$comms/record"
+}
+
+# The lines that wait for a hold, written under one, first, in their order.
+carrier_flush() {
+  local line
+  (( ${#pend_lines[@]} )) || return 0
+  carrier_record_mend
+  for line in "${pend_lines[@]}"; do printf '%s\n' "$line" >> "$comms/record"; done
+  pend_lines=()
 }
 
 carrier_answer() {
@@ -2842,11 +2854,11 @@ carrier_answer() {
 
 carrier_record() {
   local seat=$1 name=$2 action=$3 targets=$4 outcome=$5 reason=$6 written=${7-}
-  jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg id "$carrier_id" --arg seat "$seat" --arg request "$name" \
+  carrier_append "$(jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg id "$carrier_id" --arg seat "$seat" --arg request "$name" \
     --arg action "$action" --argjson target "$targets" --arg outcome "$outcome" --arg reason "$reason" --arg written "$written" '
     {at: $at, id: $id, seat: $seat, request: $request, action: $action, target: $target, outcome: $outcome}
     + (if $reason == "" then {} else {reason: $reason} end)
-    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)' | carrier_append
+    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)')"
 }
 
 carrier_refuse() {
@@ -2938,7 +2950,7 @@ carrier_seat_of() {
 
 carrier_journal() {
   jq -n -c --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" --arg base "${5-}" \
-    '{id: $id, box: $box, request: $request, action: $action, seat: $seat} + (if $base == "" then {} else {base: $base} end)' \
+    '{id: $id, box: $box, request: $request, action: $action, seat: $seat} + (if $action == "mail" then {base: $base} else {} end)' \
     > "$fcomms/serving.new" && mv -f -- "$fcomms/serving.new" "$fcomms/serving"
 }
 
@@ -2969,13 +2981,15 @@ carrier_serve() {
   name=${entry##*/}
   # A dead carrier's add that no commit took is unstaged, so that it rides into no other delivery's commit.
   [[ $name == *.md ]] && { carrier_git diff --cached --quiet > /dev/null 2>&1 || carrier_git reset -q > /dev/null 2>&1; }
-  carrier_next_id || { carrier_release; warn "cannot count the carrier's requests in $comms/next"; return 1; }
-  carrier_holder "$carrier_id"
-  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || { carrier_release; return 0; }
+  # The action and the head the delivery starts from are read before the rename, so that nothing but the journal's
+  # write stands between the rename and the journal.
   action=unknown
   [[ $name =~ ^[A-Za-z0-9._-]+\.(md|grab|write)$ ]] && action=${BASH_REMATCH[1]/md/mail}
   base=""
   [[ $action == mail ]] && { base=$(carrier_git rev-parse -q --verify HEAD 2> /dev/null) || base=""; }
+  carrier_next_id || { carrier_release; warn "cannot count the carrier's requests in $comms/next"; return 1; }
+  carrier_holder "$carrier_id"
+  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || { carrier_release; return 0; }
   carrier_journal "${seat_boxes[i]}" "$name" "$action" "${seat_names[i]}" "$base" || { carrier_release; warn "cannot write $fcomms/serving"; return 1; }
   carrier_at=""
   kind=$(stat -c %F -- "$taken/$carrier_id" 2> /dev/null) || kind=unknown
@@ -3097,8 +3111,8 @@ carrier_wake_put() {
 }
 
 carrier_wake_decision() {
-  jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg target "$1" --arg id "$carrier_id" --arg outcome "$2" --arg reason "$3" '
-    {at: $at, seat: "the frame", action: "wake", target: [$target], covers: [$id], outcome: $outcome, reason: $reason}' | carrier_append
+  carrier_append "$(jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg target "$1" --arg id "$carrier_id" --arg outcome "$2" --arg reason "$3" '
+    {at: $at, seat: "the frame", action: "wake", target: [$target], covers: [$id], outcome: $outcome, reason: $reason}')"
 }
 
 carrier_cleared_more() {
@@ -3179,7 +3193,7 @@ carrier_wake() {
       *) outcome=refused reason="tmux did not take the line" ;;
     esac
     pend_box=${seat_boxes[i]} pend_ids=$ids pend_outcome=$outcome pend_last=$EPOCHSECONDS
-    carrier_wake_record "${seat_names[i]}" "$ids" "$outcome" "$reason" "${#text} ${sum%% *}" | carrier_append
+    carrier_append "$(carrier_wake_record "${seat_names[i]}" "$ids" "$outcome" "$reason" "${#text} ${sum%% *}")"
     carrier_settle || return 0
   done
 }
@@ -3226,12 +3240,17 @@ carrier_recover() {
   action=$(jq -r '.action' <<< "$journal") seat=$(jq -r '.seat' <<< "$journal") base=$(jq -r '.base // ""' <<< "$journal")
   answers=$comms/$box/answers
   # The delivery's commit, by its subject: among the commits since the head the journal noted, since another floor's
-  # carrier may have committed after it, or the head alone for a journal that noted none.
+  # carrier may have committed after it; among all of them where the journal noted an empty head, the store's first
+  # delivery; or the head alone for a journal from before 4a, which notes none.
   if [[ $action == mail ]]; then
-    if [[ $base =~ ^[0-9a-f]{40,64}$ ]]; then
+    local range=""
+    if [[ $base =~ ^[0-9a-f]{40,64}$ ]]; then range=$base..HEAD
+    elif jq -e 'has("base") and .base == ""' <<< "$journal" > /dev/null 2>&1; then range=HEAD
+    fi
+    if [[ -n $range ]]; then
       while IFS=$'\t' read -r line reason; do
         [[ $reason == "deliver $carrier_id" ]] && { commit=$line; break; }
-      done < <(carrier_git log --format='%H%x09%s' "$base..HEAD" 2> /dev/null)
+      done < <(carrier_git log --format='%H%x09%s' "$range" 2> /dev/null)
     else
       line=$(carrier_git log -1 --format='%H%x09%s' 2> /dev/null) && [[ ${line#*$'\t'} == "deliver $carrier_id" ]] && commit=${line%%$'\t'*}
     fi
@@ -3270,12 +3289,13 @@ carrier_recover() {
   else
     if [[ $action == mail ]]; then
       # The copies that no commit took are removed by their exact paths, the journal's id's: another floor's untracked
-      # copies, and any other file, stay (5.162 point 1).
+      # copies, and any other file, stay (5.162 point 1). Whether a commit took one is read in HEAD, not in the index,
+      # which a stopped carrier's add may still hold where the reset cannot run.
       carrier_git reset -q > /dev/null 2>&1
       if [[ $carrier_id =~ ^[A-Za-z0-9._-]+$ ]]; then
         for line in "$store"/*/in/"$carrier_id".md "$store"/*/sent/"$carrier_id".md; do
           [[ -f $line && ! -L $line ]] || continue
-          carrier_git ls-files --error-unmatch -- "${line#"$store"/}" > /dev/null 2>&1 || rm -f -- "$line"
+          carrier_git cat-file -e "HEAD:${line#"$store"/}" > /dev/null 2>&1 || rm -f -- "$line"
         done
       fi
       reason="the carrier stopped while it served this, and it went to none; leave it in out again"
@@ -3397,6 +3417,7 @@ cmd_carry() {
     flock -n 9 || die "another carrier serves the workplace whose state is $state_dir; this one ends" 2
   fi
   carrier_stop=0 carrier_held=0 hold_left=1000000 hold_over=0 pend_box="" store="" store_holder=$state_dir/store.holder
+  pend_lines=()
   trap 'carrier_stop=1' TERM INT
   trap '' HUP
   exec {pause_fd}<> <(:)
@@ -3451,6 +3472,15 @@ cmd_carry() {
     chain_sink=$(jq -r '.chain // empty' "$records") chain_workplace=$(jq -r '.workplace' "$records") chain_mark=$(jq -r '.mark // ""' "$records")
     [[ -n $chain_sink ]] && chain_load
   fi
+  # A journal that a stopped carrier left is answered before the carrier says that it is ready, under a hold of its
+  # own, as before the store's lock; where that hold is not had within a second, the loop's passes try again.
+  if [[ -n $store && -f $fcomms/serving ]]; then
+    carrier_pass_begin
+    if carrier_hold; then
+      carrier_recover
+      carrier_release
+    fi
+  fi
   : > "$run_dir/carrier/ready"
   while (( ! carrier_stop )) && [[ ! -f $run_dir/state.json && -d $run_dir/carrier ]]; do carrier_pause 0.2; done
   if [[ ! -f $run_dir/state.json ]]; then
@@ -3488,6 +3518,14 @@ cmd_carry() {
     (( carrier_stop )) || carrier_pause 1
   done
   [[ -n $pend_box ]] && carrier_settle final
+  if (( ${#pend_lines[@]} )); then
+    if carrier_hold final; then
+      carrier_release
+    else
+      printf '%s\n' "${pend_lines[@]}" >> "$comms/record"
+      pend_lines=()
+    fi
+  fi
   if (( ${#record_names[@]} )); then
     carrier_chain 1
     carrier_pause 0.5

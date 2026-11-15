@@ -4372,6 +4372,19 @@ answered_ok() {
   got=$(answer_of "$1" "$2" | head -n 1)
   [[ $got =~ ^ok\ [0-9]{8}T[0-9]{6}Z-[0-9]{6}$ ]] || { note "    the answer to $2 is: $got"; return 1; }
 }
+# The carrier answers a request first and writes its line of the record after it, so a check that reads that line
+# waits here first for a line of the record for the request $2 of the seat $1, whatever its outcome, a torn line
+# passed over. It is no check: where no line comes within a minute it says so, and the check fails as it would.
+line_recorded() {
+  local file seat i
+  file=$(state_of)/comms/record seat=$(box_of "$1")
+  for (( i = 0; i < 1200; i++ )); do
+    jq -R -e --arg s "$seat" --arg r "$2" 'fromjson? | objects | select(.seat == $s and .request == $r)' "$file" > /dev/null 2>&1 && return 0
+    sleep 0.05
+  done
+  note "    the record holds no line for $2 of $seat within a minute"
+  return 1
+}
 mail_of() { find "$(state_of)/mail/$(box_of "$1")/$2" -type f -name '*.md' | LC_ALL=C sort; }
 store_commits() { env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$(state_of)/mail" rev-list --count HEAD 2> /dev/null || printf '%s\n' 0; }
 # The record's lines but the frame's decisions at delivery that type nothing (5.146): requests and pointers typed.
@@ -4776,6 +4789,7 @@ t_comms_mail() {
     "$s/mail/Harbor Pilot/sent/$id.md" "$s/mail/Harbor Watch/in/$id.md" "$s/mail/Orchard Grower/in/$id.md"
   check "[C59] the delivery is one commit of those four files" \
     test "$(store_commits) $(env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" show --name-only --format=%s HEAD | grep -c .)" = "1 5"
+  line_recorded pilot m1.md
   check "[C66] the record holds one line for it, with no body" \
     test "$(jq -c 'select(.request == "m1.md") | [.seat, .action, .target, .outcome, .id]' "$s/comms/record")" = "[\"Harbor Pilot\",\"mail\",[\"Harbor Keeper\",\"Harbor Watch\",\"Orchard Grower\"],\"ok\",\"$id\"]"
 
@@ -4892,6 +4906,7 @@ t_comms_mail() {
   request keeper w17.write "seat: Orchard Grower" --- "in a mode"
   check "[C60] a write to a pane that is in a mode is refused, naming the mode, and nothing is typed" \
     answered keeper w17.write "refused the pane of Orchard Grower is in copy-mode, so its program would not read what is typed"
+  line_recorded keeper w17.write
   check "[C66] and recorded so, with no length" \
     test "$(jq -c 'select(.request == "w17.write") | [.outcome, has("length")]' "$s/comms/record")" = '["refused",false]'
   T copy-mode -q -t "$pane"
@@ -4901,6 +4916,7 @@ t_comms_mail() {
       "-l -t %0 kill-server" "ends;" ";" 'a\;' $'x\t')"
   request keeper w15.write "seat: Orchard Grower" --- "$(head -c 4096 /dev/zero | tr '\0' y)"
   check "[C60] a text of 4,096 bytes is taken" answered_ok keeper w15.write
+  line_recorded keeper w15.write
   check "[C66] and recorded with its length" test "$(jq -c 'select(.request == "w15.write") | [.outcome, .length]' "$s/comms/record")" = '["ok",4096]'
   request keeper wz.write "seat: Orchard Grower" "key: C-c" --- "c"
   check "[C60] the key C-c is sent" answered_ok keeper wz.write
@@ -4912,11 +4928,13 @@ t_comms_mail() {
     test "$(jq -c 'select(.request == "w01.write") | [.action, .target, .outcome, .length, .sha256]' "$s/comms/record")" = "[\"write\",[\"Orchard Grower\"],\"ok\",5,\"${sum%% *}\"]"
   check "[C66] and the refused one of 4,097 bytes is recorded with no length" \
     test "$(jq -c 'select(.request == "w11.write") | [.outcome, has("length")]' "$s/comms/record")" = '["refused",false]'
+  line_recorded keeper wz.write
   check "[C66] one line for each request, served or refused, a name with a line break included" \
     test "$(records)" = 45
   T set-option -u -t "$(T display -p -t "$(pane_by_title 'Harbor Pilot')" '#{session_id}')" @workplace
   request picker g10.grab "seat: Harbor Pilot"
   check "[C60] a grab of a pane whose session has lost the run's mark is refused" answered picker g10.grab "refused the pane of Harbor Pilot does not carry this run's mark, or is gone"
+  line_recorded picker g10.grab
   check "[C66] no line holds a body, a capture or a text" \
     bash -c '! grep -qE "line one|probe pilot|hello|world|kill-server|yyyy|body" "$1"' _ "$s/comms/record"
   local page=$tool/share/seat-page.md parts firsts words suffixes word sfx x f n=0 head=() answers=()
@@ -5043,6 +5061,8 @@ t_comms_from_a_pane() {
   check "[C61] every one it took was served as the file or refused as a link: $(jq -r 'select(.request == "r.md") | .outcome' "$s/comms/record" | sort | uniq -c | tr -s ' ' | sed 's/^ //' | paste -sd, -)" \
     bash -c '[[ -n $1 ]] && ! grep -vxF -e "ok " -e "refused it is a symbolic link, and the carrier takes a regular file alone; it is removed" <<< "$1"' _ \
     "$(jq -r 'select(.request == "r.md") | .outcome + " " + (.reason // "")' "$s/comms/record")"
+  line_recorded pilot l.md
+  line_recorded watch t2.write
   check "[C61] [C62] no letter from the ledger reached any seat, and the record holds none of it" \
     bash -c '! grep -rqF "the ledger" "$1" --exclude-dir=.git && ! grep -qF "ledger" "$2"' _ "$s/mail" "$s/comms/record"
   if grep -qx "lease l.md: lease=held answered=yes" "$report"; then
@@ -5293,6 +5313,7 @@ t_typing_apart() {
   check "[C60] a pane whose program ends between the text and its key gets no key, and the answer says that the text was typed" \
     answered keeper w2.write "refused $why"
   check "[C60] its program had read the text" file_is "$a/quit" "ended at its first byte"
+  line_recorded keeper w2.write
   check "[C66] the record holds the refusal, with the length and the SHA-256 of the text typed" \
     test "$(jq -c 'select(.request == "w2.write") | [.outcome, .reason, .length, .sha256]' "$s/comms/record")" = \
     "[\"refused\",\"$why\",8,\"$(printf '%s' "the last" | sha256sum | cut -d' ' -f1)\"]"

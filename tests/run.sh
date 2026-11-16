@@ -2044,26 +2044,48 @@ t_closed_names() {
     check "plan with a searchable-only row written at the runtime directory itself" exit_is 0 wplan
     rm -rf -- "$clone/BUILD"
     check "[C31] [C84] 5.177: build takes a row written at the runtime directory, where its mask lies, as before" exit_is 0 wp build
+    if [[ -d $runtime/systemd ]]; then
+      statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$runtime"'/systemd"; "scratch"; 10)]'
+      check "plan with a scratch row written beneath the runtime directory" exit_is 0 wplan
+      rm -rf -- "$clone/BUILD"
+      check "[C31] [C84] 5.177: build takes a row written beneath the runtime directory, where its mask lies, as before" exit_is 0 wp build
+    else
+      skip "[C31] [C84] this machine has no $runtime/systemd, so a row written beneath the runtime directory is not tried; tried where it stands"
+    fi
   else
     skip "[C31] [C84] this machine has no runtime directory at $runtime, so rows that lead into it are not tried; tried where one stands"
   fi
 
-  # A mask lies at its path as the views write it, so a row is passed over only where it is written at that path or
-  # beneath it (5.177 point 6): with XDG_STATE_HOME written through a link, given to these builds alone, R's mask lies
-  # at R's written path, and a row at its physical path lies under no mask.
+  # The frame takes R by its physical path, as it takes the clone, so R's mask lies there whatever of a link a view
+  # shows; a row is passed over only where it is written at that path or beneath it, and a row that reaches R by
+  # another spelling, the link's among them, is refused (5.177 point 6). XDG_STATE_HOME is written through the link
+  # xlink, given to these builds alone.
   mkdir -p -- "$scratch/xreal/workplace/sub"
   ln -s -- xreal "$scratch/xlink"
-  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/xreal/workplace/sub"; "read-only"; 10)]'
-  check "plan with a read-only row beneath R's physical path, where XDG_STATE_HOME is written through the link xlink" exit_is 0 wplan
-  rm -rf -- "$clone/BUILD"
-  check "[C31] [C39] 5.177: build refuses a row at R's physical path, under no mask where R is written through a link, with exit 1" \
-    exit_is 1 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
-  check "[C31] [C39] 5.177: naming R's mask" \
-    said "$grower: its row $scratch/xreal/workplace/sub (read-only, from programs/policy.typify:10) is the directory $scratch/xreal/workplace/sub, at or beneath $scratch/xreal/workplace, the workplaces' state R, which every view masks (C39)"
+  local rmask="the workplaces' state R, which every view masks (C39)"
   statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/xlink/workplace/sub"; "read-only"; 10)]'
-  check "plan with the same row written beneath R's written path" exit_is 0 wplan
+  check "plan with a read-only row beneath R written through the link xlink, as XDG_STATE_HOME is written" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
-  check "[C31] [C39] 5.177: build takes a row written beneath R's written path, where R's mask lies" \
+  check "[C31] [C39] 5.177: build refuses a row beneath R written through the link that XDG_STATE_HOME names, since R is taken by its physical path, with exit 1" \
+    exit_is 1 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
+  check "[C31] [C39] 5.177: naming R's mask by its physical path" \
+    said "$grower: its row $scratch/xlink/workplace/sub (read-only, from programs/policy.typify:10) is the directory $scratch/xreal/workplace/sub, at or beneath $scratch/xreal/workplace, $rmask"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/xreal/workplace/sub"; "read-only"; 10)]'
+  check "plan with the same row written beneath R's physical path" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] [C39] 5.177: build takes a row written beneath R's physical path, where R's mask lies" \
+    exit_is 0 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/xlink"; "read-only"; 10)]'
+  check "plan with a read-only row at the link xlink, which holds R" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] [C39] 5.177: build refuses a row that holds R under the link's name, where R's mask at its physical path does not lie, with exit 1" \
+    exit_is 1 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
+  check "[C31] [C39] 5.177: naming the row and where it would show R" \
+    said "$grower: its row $scratch/xlink (read-only, from programs/policy.typify:10) is the directory $scratch/xreal, which holds $scratch/xreal/workplace, $rmask, and would show it at $scratch/xlink/workplace"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/xreal"; "read-only"; 10)]'
+  check "plan with the same row at R's physical parent" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] [C39] 5.177: build takes a row that holds R at its physical path, where R's mask lies over it, and each seat's read-only / with it" \
     exit_is 0 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
 
   # A read-only row whose real path is / holds every closed directory, and the rule refuses it (5.177 point 6).
@@ -3641,6 +3663,21 @@ t_the_folded_view_in_the_panes() {
   check "[C31] with the rule's line" said "the plan folds, and no folded view is given"
   mv -- "$scratch/plan-view.kept" "$clone/BUILD/plan-view.json"
   cp -- "$scratch/MANIFEST.kept" "$clone/BUILD/MANIFEST"
+  # The plan's root, compared at up, restart and exec, is the same directory however it is written; one that cannot be
+  # read as an absolute path is refused (5.177 point 6).
+  cp -- "$clone/BUILD/plan-manifest.json" "$scratch/plan-manifest.kept"
+  ln -sfn -- "$root" "$scratch/rootlink"
+  jq --arg r "$scratch/rootlink" '.root = $r' "$scratch/plan-manifest.kept" > "$clone/BUILD/plan-manifest.json"
+  restamp plan-manifest.json
+  check "[C31] 5.177: a pane's exec takes a plan whose root is the same directory written through a link" \
+    exit_is 0 "$BASH" "$clone/BUILD/bin/workplace" exec --print -- "Harbor Keeper"
+  jq '.root = "harbor"' "$scratch/plan-manifest.kept" > "$clone/BUILD/plan-manifest.json"
+  restamp plan-manifest.json
+  check "[C31] 5.177: a pane's exec refuses a plan whose root it cannot read as an absolute path, with exit 2" \
+    exit_is 2 "$BASH" "$clone/BUILD/bin/workplace" exec --print -- "Harbor Keeper"
+  check "[C31] naming the plan's manifest" said "exec refuses: cannot read the plan's root in $clone/BUILD/plan-manifest.json"
+  cp -- "$scratch/plan-manifest.kept" "$clone/BUILD/plan-manifest.json"
+  cp -- "$scratch/MANIFEST.kept" "$clone/BUILD/MANIFEST"
   check "[C33] down" exit_is 0 wp down
   rm -rf -- "$clone/BUILD"
   rm -- "$clone/PLAN/view.json"
@@ -5110,6 +5147,7 @@ carrier_pid() { jq -r 'select(.what | startswith("the carrier, pid ")) | .what |
 blocked_in_flock() {
   local ino pid parent
   local -a f
+  [[ -n $1 ]] || return 1
   ino=$(stat -c %i -- "$2") || return 1
   while read -r -a f; do
     [[ ${f[1]-} == '->' && ${f[2]-} == FLOCK && ${f[6]-} == *":$ino" ]] || continue
@@ -5819,10 +5857,11 @@ t_comms_from_a_pane() {
     bash -c 'for n in 3 4 5 6 7 8; do test ! -e "$1/pwned$n" || exit 1; done; test ! -e "$2/carrier/pwned3" && test ! -e "$3/pwned3" && "${@:4}" list-sessions > /dev/null' _ \
     "$root" "$run" "$s" setpriv --no-new-privs tmux -S "$run/$label" -u
   # The carrier removes the request that it took before it answers. After the answer come the request's line, the
-  # removal of the carrier's own copies, the removal of its journal and, where the serve still holds the store's lock,
-  # the release. So once the journal is gone nothing of the last request stands in taken, which is what is read here.
+  # removal of the carrier's own copies that still stand, the removal of its journal and, where the serve still holds
+  # the store's lock, the release. Where the request could not be read at once, its copy goes with it before the
+  # answer. So once the journal is gone nothing of the last request stands in taken, which is what is read here.
   eventually_long test ! -e "$s/comms/serving" || note "    the carrier's journal $s/comms/serving still stands after a minute"
-  check "[C62] [C63] the carrier removes the request it took before it answers, and after the answer come the line, the removal of its own copies, the removal of its journal and the release where the serve still holds the lock: once a request's journal is gone, nothing of it stands in taken" test -z "$(find "$s/comms/taken" -mindepth 1 -print -quit)"
+  check "[C62] [C63] the carrier removes the request it took before it answers, and after the answer come the line, the removal of its own copies that still stand, the removal of its journal and the release where the serve still holds the lock: once a request's journal is gone, nothing of it stands in taken" test -z "$(find "$s/comms/taken" -mindepth 1 -print -quit)"
   check "[C65] the store runs no hook: not its own, not the user's hooksPath, fsmonitor or filter; the user's signing is not asked" \
     bash -c 'test ! -e "$1/hook-ran" && test "$(jq -r "select(.request == \"h2.md\") | .outcome" "$2")" = ok' _ "$scratch" "$s/comms/record"
   check "down" exit_is 0 wp down

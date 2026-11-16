@@ -610,6 +610,8 @@ real_of() {
 # names nothing, or a file that is no directory), and 2 where the rule cannot tell, as where a directory on its way
 # cannot be searched, with stat's reason in the global unread. A link that leads nowhere does not stand.
 presence_of() {
+  # It reads stat's reason, which the frame's LC_ALL=C keeps in English, from the stat on PATH; under another reason
+  # a path that does not stand is one of which the rule cannot tell, and the rule refuses it.
   local err
   unread=""
   [[ -e $1 ]] && return 0
@@ -629,12 +631,12 @@ mask_stands() { [[ -d $1 ]] || { presence_of "$1"; (( $? == 2 )); }; }
 # beneath). Each is the path at which the views lay it, as written. A directory that does not stand is passed over,
 # and one of which the rule cannot tell whether it stands is given, for the rule to refuse.
 frame_masks() {
-  local chain=${1-} r t j
+  local chain=${1-} r t d j
   [[ -n ${clone-} ]] && mask_stands "$clone" && printf '%s\0%s\0%s\0' "$clone" closed "the clone, which every view masks (C52)"
   r=$(state_root 2> /dev/null) && mask_stands "$r" && printf '%s\0%s\0%s\0' "$r" closed "the workplaces' state R, which every view masks (C39)"
-  t=${TMUX_TMPDIR:-/tmp}/tmux-$EUID
+  t=$(physical_spelling "${TMUX_TMPDIR:-/tmp}/tmux-$EUID") d=$(physical_spelling "/tmp/tmux-$EUID")
   mask_stands "$t" && printf '%s\0%s\0%s\0' "$t" closed "the user's tmux socket directory, which every view masks (C68)"
-  [[ /tmp/tmux-$EUID != "$t" ]] && mask_stands "/tmp/tmux-$EUID" && printf '%s\0%s\0%s\0' "/tmp/tmux-$EUID" closed "the user's tmux socket directory, which every view masks (C68)"
+  [[ $d != "$t" ]] && mask_stands "$d" && printf '%s\0%s\0%s\0' "$d" closed "the user's tmux socket directory, which every view masks (C68)"
   if [[ -n $chain ]]; then
     for j in /var/log/journal /run/log/journal /run/systemd/journal; do
       mask_stands "$j" && printf '%s\0%s\0%s\0' "$j" closed "the journal's directory, which a view masks where a chain is kept (C73)"
@@ -650,8 +652,10 @@ frame_masks() {
 #   link leads, and a label whose last part is a link gets none, since bubblewrap mounts nothing on a link (5.162
 #   point 6). So a label's tmpfs, where it has one, lies at its written path, which is its physical one.
 # - A row that is not hidden may not be, by its real path, at or beneath a closed directory's, nor at or beneath a
-#   mask's under a name that the mask does not cover. A mask lies at its path as the views write it, after every row,
-#   so a row written at that path or beneath it lies under the mask and is passed over, the runtime directory's too,
+#   mask's under a name that the mask does not cover. A mask lies at its path as the views write it, after every row:
+#   the frame writes R and the tmux socket directories by their physical paths, as it writes the clone, so the mask
+#   lies there whatever of a link a seat's view shows (5.177 point 6). A row written at that path or beneath it lies
+#   under the mask and is passed over, the runtime directory's too,
 #   beneath which a seat's rows are mounted again after its mask; a row that leads there by any other name, the
 #   mask's physical path among them, is refused (5.177 point 6).
 # - A read-only or read-write row whose real path holds a closed directory shows it at the row's written path
@@ -783,7 +787,7 @@ refuse_closed_names() {
         # scratch or searchable-only, so the loop finds that cover first. It decides where the rule reads a label at
         # another place than the fold did, which, with up, restart and exec held to the plan's root, is a view that is
         # not the fold's, such as a build changed by hand (5.177 point 6).
-        if [[ $kind != label ]] && [[ $target == "$cphys" || $target == "$cphys"/* || $target == "$label" || $target == "$label"/* ]]; then covered=1; fi
+        if [[ $kind != label ]] && [[ $target == "$label" || $target == "$label"/* ]]; then covered=1; fi
         for (( p = 0; ! covered && p + 3 < ${#rows[@]}; p += 4 )); do
           [[ ${rows[p + 2]} == "$seat" ]] || continue
           case ${rows[p + 1]} in hidden | scratch | searchable-only) ;; *) continue ;; esac
@@ -808,7 +812,7 @@ held_by_nobody() {
   # The listing walks physical paths, the rows' and the labels' read the same way, and judges each directory once,
   # however many searchable-only rows lie above it and whatever names lead to it, so it names a directory once
   # (5.160 point 9). Paths are read NUL-separated.
-  local view=$1 plan=$2 path child verdict c open physical rview
+  local view=$1 plan=$2 path child verdict c open physical resolved rview
   local -a queue=() closed=() rows=() starts=()
   local -A seen=()
   mapfile -d '' -t rows < <(jq --raw-output0 '[.rows[].key[3]] | unique[]' "$view")
@@ -974,7 +978,18 @@ state_root() {
   else
     return 1
   fi
-  printf '%s\n' "$base/workplace"
+  # R is taken by its physical path, as the clone is, so that its mask in every view lies where the rule on closed
+  # names reads it, whatever of a link in XDG_STATE_HOME or HOME a seat's view shows (5.177 point 6). A part that does
+  # not stand yet is kept as written beneath the physical part that does.
+  physical_spelling "$base/workplace"
+}
+
+# The physical spelling of an absolute path: every link in the part that stands resolved, the rest as written. Where
+# readlink cannot give it, the path as written.
+physical_spelling() {
+  local p
+  p=$(readlink -m -- "$1" 2> /dev/null) && [[ $p == /* ]] || p=$1
+  printf '%s\n' "$p"
 }
 
 ssh_fingerprint() {
@@ -2605,7 +2620,9 @@ cmd_up() {
       die "up refuses the floor $run_floor: it stands on the default socket, and a floor there, with its server without the bar, its seats' mailboxes on the machine and the frame's set after its own file, comes with S2's stop 4a2 (5.167)"
     fi
   fi
-  local socket=$run_dir/$(jq -r '.name // "default"' <<< "$report") tmux_dir=${TMUX_TMPDIR:-/tmp}/tmux-$EUID tmux_default=/tmp/tmux-$EUID
+  # The socket directories are masked at their physical paths, where the rule on closed names reads them (5.177 point 6).
+  local socket=$run_dir/$(jq -r '.name // "default"' <<< "$report") tmux_dir tmux_default
+  tmux_dir=$(physical_spelling "${TMUX_TMPDIR:-/tmp}/tmux-$EUID") tmux_default=$(physical_spelling "/tmp/tmux-$EUID")
   (( ${#socket} <= 107 )) \
     || die "the server's socket would be $socket, ${#socket} bytes, and a socket's path holds at most 107; give the clone a shorter path" 2
   [[ -d $tmux_dir ]] || tmux_dir=""
@@ -3837,7 +3854,7 @@ cmd_why() {
     fi
   fi
   jq -r -L "$lib" --arg root "$root" --arg seat "$seat" --arg path "$path" --arg stateroot "$state_dir" --arg runtime "$runtime" \
-    --arg keyview "$key_view" --argjson tmuxdirs "$(json_list "${TMUX_TMPDIR:-/tmp}/tmux-$EUID" "/tmp/tmux-$EUID")" --argjson chainmasks "$(json_list $(chain_masks))" --arg workplace "$workplace" --argjson supplied "$supplied" --arg valuesnote "$values_note" --arg values "$file" --arg clone "$clone" \
+    --arg keyview "$key_view" --argjson tmuxdirs "$(json_list "$(physical_spelling "${TMUX_TMPDIR:-/tmp}/tmux-$EUID")" "$(physical_spelling "/tmp/tmux-$EUID")")" --argjson chainmasks "$(json_list $(chain_masks))" --arg workplace "$workplace" --argjson supplied "$supplied" --arg valuesnote "$values_note" --arg values "$file" --arg clone "$clone" \
     --slurpfile b "$binding" --slurpfile folded "$view" -f /dev/stdin "$plan" <<'JQ'
     include "table";
     . as $raw

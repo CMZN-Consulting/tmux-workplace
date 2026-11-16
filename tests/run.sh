@@ -1121,8 +1121,28 @@ tidy_reference() {
     [[ ${path##*/} == probe-* && -f $path && ! -L $path ]] && rm -f -- "$path"
   done < <(comm -13 <(printf '%s\n' "$reference_paths") <(find "$reference_root" -path "$reference_root/config/BUILD" -prune -o -print | sort))
 }
+gone_pid() { [[ ! -e /proc/$1 || $(awk '/^State:/ { print $2 }' "/proc/$1/status" 2> /dev/null) == Z ]]; }
+left_without_server() { [[ $1 =~ ^[1-9][0-9]*$ ]] && gone_pid "$1" && [[ ! -e $2 ]]; }
+# The fixture's servers are ended while its BUILD stands, since their sockets lie in BUILD/RUN, and their argvs name
+# the fixture and not the scratch, which cleanup's sweep reads. Each server's pid is read from the server itself.
+end_reference_servers() {
+  local sock pid i
+  for sock in "$reference_root/config/BUILD/RUN"/* "$reference_root/config/BUILD/RUN"/*/*; do
+    [[ -S $sock ]] || continue
+    pid=""
+    { read -r pid < <(tmux -S "$sock" list-sessions -F '#{pid}'); } 2> /dev/null
+    tmux -S "$sock" kill-server 2> /dev/null
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
+    for (( i = 0; i < 100; i++ )); do
+      gone_pid "$pid" && break
+      sleep 0.05
+    done
+    gone_pid "$pid" || kill -KILL "$pid" 2> /dev/null
+  done
+}
 leave_reference() {
   [[ -n ${reference_root-} && -n ${reference_paths-} ]] || return 0
+  end_reference_servers
   tidy_reference
   rm -rf -- "$reference_root/config/BUILD"
   if [[ -n ${reference_plan-} && -d $reference_plan ]]; then
@@ -3864,6 +3884,22 @@ t_plan_end_to_end() {
   check "[C33] a row a label made" said "made by a label"
   check "[C18] down" exit_is 0 wp down
   check "[C18] nothing of the workplace is left" no_server
+  # The exit trap leaves the fixture as the next lines do, and a signal can come while the fixture's server stands. So
+  # the fixture comes up again, and is left with its server up.
+  local server
+  local -a argv
+  check "[C28] 5.177: up again, so that the fixture is left while its server stands" exit_is 0 wp up
+  server=""
+  { read -r server < <(T list-sessions -F '#{pid}'); } 2> /dev/null
+  leave_reference
+  check "[C28] 5.177: leaving the fixture while its server stands ends that server before it removes BUILD, which holds the server's socket: the server's pid, read from the server, is gone, and so is BUILD" \
+    left_without_server "$server" "$clone/BUILD"
+  # Where the server outlives that, cleanup can no longer reach it by its socket: it is ended here by its pid, while
+  # its argv names the fixture.
+  if [[ $server =~ ^[1-9][0-9]*$ ]] && ! gone_pid "$server" && { mapfile -d '' -t argv < "/proc/$server/cmdline"; } 2> /dev/null \
+    && [[ ${argv[*]-} == *"$reference/"* ]]; then
+    kill -TERM "$server" 2> /dev/null
+  fi
   leave_reference
   check "[C28] the clone's PLAN/ is restored as the test found it" diff -r "$reference_plan" "$clone/PLAN"
   check "[C28] and the root is left as the test found it: every entry's type, mode and size" test "$(shape_of "$reference")" = "$shape"

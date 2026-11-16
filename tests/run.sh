@@ -2087,6 +2087,17 @@ t_closed_names() {
   rm -rf -- "$clone/BUILD"
   check "[C31] [C39] 5.177: build takes a row that holds R at its physical path, where R's mask lies over it, and each seat's read-only / with it" \
     exit_is 0 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
+  # The same for the tmux socket directory, with TMUX_TMPDIR written through the link tlink, given to these builds alone;
+  # the directory is the test's own, made at mode 0700, and nothing is brought up.
+  mkdir -p -m 0700 -- "$scratch/treal/tmux-$EUID/sub"
+  ln -s -- treal "$scratch/tlink"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/tlink/tmux-'"$EUID"'/sub"; "read-only"; 10)]'
+  check "plan with a read-only row beneath the tmux socket directory written through the link tlink, as TMUX_TMPDIR is written" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] [C68] 5.177: build refuses a row beneath the socket directory written through the link that TMUX_TMPDIR names, since that directory is taken by its physical path, with exit 1" \
+    exit_is 1 env TMUX_TMPDIR="$scratch/tlink" "$BASH" "$loop" build
+  check "[C31] [C68] 5.177: naming the socket directory's mask by its physical path" \
+    said "$grower: its row $scratch/tlink/tmux-$EUID/sub (read-only, from programs/policy.typify:10) is the directory $scratch/treal/tmux-$EUID/sub, at or beneath $scratch/treal/tmux-$EUID, the user's tmux socket directory, which every view masks (C68)"
 
   # A read-only row whose real path is / holds every closed directory, and the rule refuses it (5.177 point 6).
   ln -s -- / "$root/rootlink"

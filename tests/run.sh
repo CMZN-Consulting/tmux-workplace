@@ -3353,6 +3353,9 @@ t_carrier_floors() {
   holder=$!
   check "the test holds the store's lock" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
   request ida i1.md "to: Harbor Keeper" "subject: waits" --- "body"
+  lodge_carrier=$(carrier_pid lodge)
+  check "[C57] 5.177: before the request is taken back, the lodge's carrier tries for the store's lock: a flock that it started is blocked on the store, as /proc/locks reads it" \
+    eventually_long blocked_in_flock "$lodge_carrier" "$s/mail"
   sleep 3
   check "[C57] follow-up of 4a: while the test holds the store's lock, the lodge's carrier does not take its writer's request: it waits in out, with no answer" \
     bash -c '[[ -f $1/out/i1.md && ! -e $1/answers/i1.md ]]' _ "$s/comms/Lodge Ida"
@@ -5065,6 +5068,21 @@ record_lines_reach() {
   return 1
 }
 carrier_pid() { jq -r 'select(.what | startswith("the carrier, pid ")) | .what | ltrimstr("the carrier, pid ")' "$run${1:+/$1}/ledger"; }
+# Whether a child of the process $1 is blocked in a flock of the file $2. /proc/locks writes a blocked request as
+# "N: -> FLOCK ADVISORY WRITE PID MAJ:MIN:INODE 0 EOF", PID being the flock process. Its device is the superblock's,
+# which differs from stat's on btrfs, so the file is matched by its inode, and the waiter by its parent.
+blocked_in_flock() {
+  local ino pid parent
+  local -a f
+  ino=$(stat -c %i -- "$2") || return 1
+  while read -r -a f; do
+    [[ ${f[1]-} == '->' && ${f[2]-} == FLOCK && ${f[6]-} == *":$ino" ]] || continue
+    pid=${f[5]} parent=""
+    { read -r _ parent < <(grep '^PPid:' "/proc/$pid/status"); } 2> /dev/null
+    [[ $parent == "$1" ]] && return 0
+  done < /proc/locks
+  return 1
+}
 
 t_comms_fold() {
   scoped_clone

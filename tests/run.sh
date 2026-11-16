@@ -1021,6 +1021,11 @@ t_without_bubblewrap() {
   check "[C6] down with the same programs" exit_is 0 env PATH="$bin" "$BASH" "$loop" down
   rm -rf -- "$clone/BUILD"
   make_plan
+  check "[C6] [C31] 5.177: the plan with views does not build without readlink, with which the rule on closed names reads the rows' real paths, with exit 1" \
+    exit_is 1 env PATH="$bin" "$BASH" "$loop" build
+  check "[C6] [C31] 5.177: naming readlink" said "the rule on closed names reads the rows' real paths with readlink and stat, and readlink is not on PATH"
+  rm -rf -- "$clone/BUILD"
+  ln -s -- "$(command -v readlink)" "$bin/readlink"
   check "the plan with views builds" exit_is 0 env PATH="$bin" "$BASH" "$loop" build
   check "[C6] but does not come up without bubblewrap" exit_is 2 env PATH="$bin" "$BASH" "$loop" up
   check "[C6] the refusal names bwrap" said "this plan needs bwrap"
@@ -5362,6 +5367,8 @@ t_comms_store() {
   for program in bash env tmux jq mkdir cp rm sha256sum stat setpriv chmod flock dd mv tail date; do
     ln -s -- "$(command -v "$program")" "$bin/$program"
   done
+  # The rule on closed names reads the rows' real paths with readlink (5.177 point 6).
+  ln -s -- "$(command -v readlink)" "$bin/readlink"
   check "[C56] build without git refuses a plan that holds mail, with exit 2" exit_is 2 env PATH="$bin" "$BASH" "$loop" build
   check "[C56] naming it" said "a plan that holds mail needs git, and git is not on PATH"
   check "[C56] and leaves no BUILD" test ! -e "$clone/BUILD"

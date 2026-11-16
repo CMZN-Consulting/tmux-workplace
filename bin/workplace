@@ -701,6 +701,16 @@ refuse_closed_names() {
   wait "$!" || { warn "cannot read the views in $view"; return 1; }
   chain=${rows[0]}
   rows=("${rows[@]:1}")
+  # The rows' real paths are read with readlink and stat; where either is missing the rule can read no row, and says
+  # so once (5.177 point 6).
+  local tool
+  if (( ${#rows[@]} )); then
+    for tool in readlink stat; do
+      command -v "$tool" > /dev/null && continue
+      warn "the rule on closed names reads the rows' real paths with readlink and stat, and $tool is not on PATH"
+      return 1
+    done
+  fi
   mapfile -d '' -t masks < <(frame_masks "$chain")
   # Each closed thing: its written path, its physical path, its kind (label, closed, beneath), and its name.
   local -a things=()

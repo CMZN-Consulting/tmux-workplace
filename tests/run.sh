@@ -3605,11 +3605,36 @@ t_the_folded_view_in_the_panes() {
   check "[C31] naming the row" said "its row $root/harbor/berth (read-write, from "
   rm -f -- "$root/harbor/berth"
   mv -- "$root/harbor/berth.real" "$root/harbor/berth"
+  # A build changed by hand: its folded view taken away, and its MANIFEST's line for it with it. A pane's exec runs no
+  # report of the plan first, so the rule's own line is the refusal there.
+  cp -- "$clone/BUILD/MANIFEST" "$scratch/MANIFEST.kept"
+  mv -- "$clone/BUILD/plan-view.json" "$scratch/plan-view.kept"
+  restamp plan-view.json
+  check "[C31] 5.177: a pane's exec of a build changed by hand, whose plan folds and which holds no folded view, refuses with exit 2" \
+    exit_is 2 "$BASH" "$clone/BUILD/bin/workplace" exec --print -- "Harbor Keeper"
+  check "[C31] with the rule's line" said "the plan folds, and no folded view is given"
+  mv -- "$scratch/plan-view.kept" "$clone/BUILD/plan-view.json"
+  cp -- "$scratch/MANIFEST.kept" "$clone/BUILD/MANIFEST"
   check "[C33] down" exit_is 0 wp down
   rm -rf -- "$clone/BUILD"
   rm -- "$clone/PLAN/view.json"
   check "[C33] a plan that holds statements and has lost its view.json does not build" exit_is 1 wp build
   check "[C33] naming the file" said "PLAN/view.json is missing"
+}
+
+# A build changed by hand: the line of BUILD's MANIFEST for the file NAME written again, or dropped where the file is
+# gone, so that the build verifies, as no plan and verified build would give it.
+restamp() {
+  local name=$1 line sum out=""
+  while IFS= read -r line; do
+    [[ ${line#*  } == "$name" ]] && continue
+    out+=$line$'\n'
+  done < "$clone/BUILD/MANIFEST"
+  if [[ -f $clone/BUILD/$name ]]; then
+    sum=$(sha256sum < "$clone/BUILD/$name") || return 1
+    out+="${sum%% *}  $name"$'\n'
+  fi
+  printf '%s' "$out" > "$clone/BUILD/MANIFEST"
 }
 
 # A copy of the frame of the test's own, at $scratch/frame, which a test may change after a build without editing the
@@ -3690,7 +3715,39 @@ t_closed_names_up() {
   check "[C31] follow-up of 4a: with the link back, restart from that frame reads the build's binding and library, and starts grower again" \
     exit_is 0 frame_wp restart "Orchard Grower"
   check "grower runs again" eventually_long live_pane "Orchard Grower"
+  # A fault in grower's view, and another seat, picker.
+  check "picker ran" wait_for_probe "Orchard Picker" picker
+  ln -sfn -- orchard/cellar "$root/lnk"
+  check "[C31] 5.177: with grower's link swapped into the cellar, a pane's exec of grower still refuses, with exit 2" \
+    exit_is 2 "$BASH" "$clone/BUILD/bin/workplace" exec --print -- "Orchard Grower"
+  check "[C31] 5.177: and a pane's exec of picker reads picker's view alone and is not refused for grower's: exit 0" \
+    exit_is 0 "$BASH" "$clone/BUILD/bin/workplace" exec --print -- "Orchard Picker"
+  T send-keys -t "$(pane_by_title "Orchard Picker")" C-c
+  check "picker's program ends" eventually_long dead_pane "Orchard Picker"
+  check "[C31] 5.177: restart of picker, whose own view holds no fault, refuses for the fault in grower's view, with exit 1" \
+    exit_is 1 wp restart "Orchard Picker"
+  check "[C31] saying so" said "restart refuses: a seat's view would hold a closed directory under another name"
+  check "[C31] naming grower's row" said "$refusal"
+  check "[C31] and picker's pane stays dead" dead_pane "Orchard Picker"
+  ln -sfn -- harbor/charts "$root/lnk"
+  # The root: up, restart and exec act at the plan's own root alone. The root's parent holds the clone, and the closed
+  # label, written relative to the root, would be read beneath the parent.
+  check "[C31] 5.177: a pane's exec at the root's parent, which holds the clone, refuses a root that is not the plan's, with exit 2" \
+    exit_is 2 env WORKPLACE_ROOT="$scratch" "$BASH" "$clone/BUILD/bin/workplace" exec --print -- "Orchard Grower"
+  check "[C31] saying so" said "exec refuses: the plan belongs to the root $root, not to $scratch"
+  check "[C31] 5.177: restart at the root's parent refuses a root that is not the plan's, with exit 1" \
+    exit_is 1 env WORKPLACE_ROOT="$scratch" "$BASH" "$loop" restart "Orchard Picker"
+  check "[C31] saying so, before it reads a seat" said "restart refuses: the plan belongs to the root $root, not to $scratch"
+  check "[C31] and picker's pane stays dead" dead_pane "Orchard Picker"
+  check "restart of picker at the plan's root" exit_is 0 wp restart "Orchard Picker"
   check "down" exit_is 0 frame_wp down
+  ln -sfn -- orchard/cellar "$root/lnk"
+  check "[C31] 5.177: with the link swapped into the cellar, up at the root's parent, where the rule would not find the cellar, refuses a root that is not the plan's, with exit 1" \
+    exit_is 1 env WORKPLACE_ROOT="$scratch" "$BASH" "$loop" up
+  check "[C31] saying so" said "up refuses: the plan belongs to the root $root, not to $scratch"
+  check "[C31] and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  check "[C31] and started no server" no_server
+  ln -sfn -- harbor/charts "$root/lnk"
   # A read that the rule cannot make is a refusal at up too (5.177 point 6). The same plan, built again from the test's
   # own tree with the link back; then the link is swapped into the closed cellar, first with its inner directory shut,
   # which the rule resolves without entering it, and then with the cellar itself shut, so that the row leads through a
@@ -3717,6 +3774,39 @@ t_closed_names_up() {
   check "[C31] 5.177: by the rule's line, before its test that what a view grants exists" said "$through"
   reopen "$root/orchard/cellar"
   rm -rf -- "$clone/BUILD"
+}
+
+# Two lines of the rule that no plan and verified build reach, on a build that the test changes by hand (5.177 point 6).
+t_closed_names_on_a_build_changed_by_hand() {
+  scoped_clone
+  statements_plan '.programs[-1].recorded += [lb($root + "/orchard/cellar"; "closed"; 30), sc(31)]'
+  check "plan with the closed label orchard/cellar, beneath each seat's read-only /" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "the build's view holds the label's own row, hidden, for each seat" \
+    test "$(jq -c --arg p "$root/orchard/cellar" '[.rows[] | select(.key[3] == $p) | .value[0]] | unique' "$clone/BUILD/plan-view.json")" = '["hidden"]'
+  jq --arg p "$root/orchard/cellar" 'del(.rows[] | select(.key[3] == $p))' "$clone/BUILD/plan-view.json" > "$scratch/view" \
+    && mv -- "$scratch/view" "$clone/BUILD/plan-view.json"
+  restamp plan-view.json
+  check "the view changed by hand holds no row at the label" \
+    test "$(jq --arg p "$root/orchard/cellar" '[.rows[] | select(.key[3] == $p)] | length' "$clone/BUILD/plan-view.json")" = 0
+  check "[C31] 5.177: up refuses a view without the label's own row, where each seat's read-only / would show the closed cellar, with exit 1" \
+    exit_is 1 wp up
+  check "[C31] naming the place, since a label's term mounts nothing and only a row of the view lies over a place" \
+    said "is the directory /, which holds $root/orchard/cellar, closed by the label at programs/policy.typify:30 as $root/orchard/cellar, and would show it at $root/orchard/cellar, where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it"
+  check "[C31] and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  [[ ! -d $run ]] || wp down > /dev/null 2>&1
+  rm -rf -- "$clone/BUILD"
+  statements_plan '.programs[-1].recorded += [lb("orchard/cellar"; "closed"; 30), sc(31)]'
+  check "plan with the closed label written relative to the root" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  jq 'del(.paths.recorded.label)' "$clone/BUILD/binding.json" > "$scratch/binding" && mv -- "$scratch/binding" "$clone/BUILD/binding.json"
+  restamp binding.json
+  check "the build's binding, changed by hand, does not join a label's path" test "$(jq -c '.paths.recorded.label' "$clone/BUILD/binding.json")" = null
+  check "[C31] 5.177: up refuses a label that is no absolute path once the build's binding joins it, with exit 1" exit_is 1 wp up
+  check "[C31] with the rule's line" \
+    said "programs/policy.typify:30: the label of closed names orchard/cellar, which is no absolute path once the binding joins it, so the rule cannot find it on the machine"
+  check "[C31] and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  [[ ! -d $run ]] || wp down > /dev/null 2>&1
 }
 
 t_plan_end_to_end() {
@@ -6710,6 +6800,7 @@ tests=(
   t_floors_assembly
   t_the_folded_view_in_the_panes
   t_closed_names_up
+  t_closed_names_on_a_build_changed_by_hand
   t_plan_end_to_end
   t_identity_selection
   t_identity

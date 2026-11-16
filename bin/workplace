@@ -777,6 +777,12 @@ refuse_closed_names() {
         rest=${cphys#"${rphys%/}"/}
         target=${row%/}/$rest
         covered=0
+        # A label does not cover itself: a label's term mounts nothing, and what lies over a place is a row of the view,
+        # which the loop below reads (a label's own tmpfs is the view's row at its path). On a view that is the fold's,
+        # at the plan's own root, this never decides: the fold leaves the nearest row at or above a closed label hidden,
+        # scratch or searchable-only, so the loop finds that cover first. It decides where the rule reads a label at
+        # another place than the fold did, which, with up, restart and exec held to the plan's root, is a view that is
+        # not the fold's, such as a build changed by hand (5.177 point 6).
         if [[ $kind != label ]] && [[ $target == "$cphys" || $target == "$cphys"/* || $target == "$label" || $target == "$label"/* ]]; then covered=1; fi
         for (( p = 0; ! covered && p + 3 < ${#rows[@]}; p += 4 )); do
           [[ ${rows[p + 2]} == "$seat" ]] || continue
@@ -1786,6 +1792,22 @@ build_resolve() {
   b_plan=$at/plan.json b_pmanifest=$at/plan-manifest.json b_facts=$at/plan-facts.json b_view=$at/plan-view.json b_mail=$at/mail.json
 }
 
+# up, restart and exec act at the plan's own root, the one that BUILD's copy of the plan's manifest names, which build
+# compared with its own (C2) and BUILD's MANIFEST verifies: the rule on closed names joins the plan's labels to the
+# command's root, so at another root it would read them at other places than the fold did (5.177 point 6). A root is
+# the plan's where it is the same directory, however it is written. The fault, if any, is left in root_fault.
+plan_root_fault() {
+  local declared at
+  root_fault=""
+  declared=$(jq -r '.root | if type == "string" and startswith("/") then . else error("no root") end' "$b_pmanifest" 2> /dev/null && printf .) \
+    || { root_fault="cannot read the plan's root in $b_pmanifest"; return 1; }
+  declared=${declared%$'\n.'}
+  [[ $declared == "$root" ]] && return 0
+  at=$(cd -P -- "$declared" 2> /dev/null && pwd -P && printf .) && [[ ${at%$'\n.'} == "$root" ]] && return 0
+  root_fault="the plan belongs to the root $declared, not to $root"
+  return 1
+}
+
 # Verify the build against its MANIFEST. With floors and a floor named, only the top, the frame, the shared generation
 # and that floor's own tree are read; with none named, all of BUILD is walked (5.160 point 3).
 verify_build() {
@@ -2565,6 +2587,7 @@ cmd_up() {
     (( $# == 0 )) || die "up takes no arguments" 2
   fi
   verify_build ${run_floor:+"$run_floor"} || die "up starts only a verified build, and never builds"
+  plan_root_fault || die "up refuses: $root_fault"
   local view_file=/dev/null
   [[ -f $b_view ]] && view_file=$b_view
   plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"
@@ -2717,6 +2740,7 @@ cmd_exec() {
     [[ -d $run_dir/seats ]] || die "nothing is up under $clone; exec starts a seat of a running workplace" 2
     verify_build || die "exec starts a seat only from a verified build" 2
   fi
+  plan_root_fault || die "exec refuses: $root_fault" 2
   local record file
   file=$(seat_file "$seat") || die "cannot name the seat's record"
   [[ -f $file ]] || die "no seat is named $seat in this workplace" 2
@@ -4410,6 +4434,7 @@ cmd_restart() {
   [[ -d $run_dir ]] || die "nothing is up ${run_floor:+on the floor $run_floor }under $clone; restart starts again a seat of a running workplace" 2
   [[ -f $run_dir/state.json ]] || die "the run under $run_dir did not finish up; restart refuses it" 2
   verify_build ${run_floor:+"$run_floor"} || die "restart starts a seat only from a verified build, as up does"
+  plan_root_fault || die "restart refuses: $root_fault"
   local view_file=/dev/null
   [[ -f $b_view ]] && view_file=$b_view
   plan_report "$b_plan" "$build_dir/binding.json" "$build_dir/libexec/check.jq" "$view_file"

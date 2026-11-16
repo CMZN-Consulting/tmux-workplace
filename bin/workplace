@@ -577,8 +577,9 @@ print_fold_report() {
 
 # The physical path of PATH, in the global physical: a directory's own, another file's under its parent's, and the
 # path as written where neither resolves. A final newline is kept. A directory that cannot be entered is resolved
-# without entering it, by readlink -e, which needs no search permission on the directory itself; where neither
-# resolves a directory that stands, the global resolved is 0, and 1 otherwise.
+# without entering it, by readlink -e, which needs no search permission on the directory itself; where a directory
+# that stands resolves neither way, the global resolved is 0, and 1 otherwise. (A file that stands lies in a directory
+# that can be entered, so its parent's cd -P does not fail.)
 physical_of() {
   local p=$1 r parent
   physical=$p resolved=1
@@ -590,10 +591,7 @@ physical_of() {
     parent=${p%/*}
     [[ -z $parent ]] && parent=/
     if [[ $p == */* && -d $parent ]]; then
-      r=$(cd -P -- "$parent" 2> /dev/null && pwd -P && printf .) || r=$(readlink -e -- "$parent" && printf .) \
-        || { resolved=0; return 0; }
-      r=${r%$'\n.'}
-      physical=${r%/}/${p##*/}
+      r=$(cd -P -- "$parent" 2> /dev/null && pwd -P && printf .) && { r=${r%$'\n.'}; physical=${r%/}/${p##*/}; }
     fi
   fi
 }

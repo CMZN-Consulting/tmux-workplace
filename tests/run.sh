@@ -3044,6 +3044,9 @@ t_floors_up() {
   check "[C22] review of 4a: and that the floor on the default socket is not stood up in 4a" said "lacks   the floor bridge stands on the default socket, which 4a does not stand up: up refuses it, and it comes with 4a2 (5.167)"
   check "[C22] with no conf line for it, nor the unenforced run floor's lacks lines" \
     bash -c '! grep -A1 -x "floor   bridge: generation [0-9]*" "$1" | grep -q "^conf " && ! grep -q "^lacks   the floor bridge is unenforced" "$1"' _ "$scratch/out"
+  # g2.grab's line took a hold of its own, and the carrier removes the holder as it lets that hold go, after the line;
+  # the status that the check of no holder below reads is taken once the store's lock is free.
+  eventually_long flock -n "$s/mail" true || note "    the store's lock $s/mail is still held after a minute"
   check "[C22] status of one floor" exit_is 0 wp status deck
   check "[C22] reports that floor alone" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && ! grep -q "floor lodge" "$1"' _ "$scratch/out"
   check "[C22] 5.160: with the shared generation and the floor's, as the top names them" \
@@ -5032,7 +5035,9 @@ answered_ok() {
 }
 # The carrier answers a request first and writes its line of the record after it, so a check that reads that line
 # waits here first for a line of the record for the request $2 of the seat $1, whatever its outcome, a torn line
-# passed over. It is no check: where no line comes within a minute it says so, and the check fails as it would.
+# passed over. It is no check of its own, but where no line comes within a minute it fails the test that waited, in a
+# FAIL line that names the seat and the request: a check that asserts an absence would pass on a record that lacks
+# the line, so the missing line itself fails the test.
 line_recorded() {
   local file seat i
   file=$(state_of)/comms/record seat=$(box_of "$1")
@@ -5040,7 +5045,7 @@ line_recorded() {
     jq -R -e --arg s "$seat" --arg r "$2" 'fromjson? | objects | select(.seat == $s and .request == $r)' "$file" > /dev/null 2>&1 && return 0
     sleep 0.05
   done
-  note "    the record holds no line for $2 of $seat within a minute"
+  fail "the record holds no line for the request $2 of the seat $seat ($1) within a minute"
   return 1
 }
 mail_of() { find "$(state_of)/mail/$(box_of "$1")/$2" -type f -name '*.md' | LC_ALL=C sort; }
@@ -5759,9 +5764,11 @@ t_comms_from_a_pane() {
   check "[C64] nothing a request named ran: no file was made, and the server stands" \
     bash -c 'for n in 3 4 5 6 7 8; do test ! -e "$1/pwned$n" || exit 1; done; test ! -e "$2/carrier/pwned3" && test ! -e "$3/pwned3" && "${@:4}" list-sessions > /dev/null' _ \
     "$root" "$run" "$s" setpriv --no-new-privs tmux -S "$run/$label" -u
-  # The carrier removes what it took after the request's line, and its journal after that.
+  # The carrier removes the request that it took before it answers. After the answer come the request's line, the
+  # removal of the carrier's own copies, the removal of its journal and, where the serve still holds the store's lock,
+  # the release. So once the journal is gone nothing of the last request stands in taken, which is what is read here.
   eventually_long test ! -e "$s/comms/serving" || note "    the carrier's journal $s/comms/serving still stands after a minute"
-  check "[C62] [C63] what the carrier took, and its own copies, are removed once each request is answered" test -z "$(find "$s/comms/taken" -mindepth 1 -print -quit)"
+  check "[C62] [C63] the carrier removes the request it took before it answers, and after the answer come the line, the removal of its own copies, the removal of its journal and the release where the serve still holds the lock: once a request's journal is gone, nothing of it stands in taken" test -z "$(find "$s/comms/taken" -mindepth 1 -print -quit)"
   check "[C65] the store runs no hook: not its own, not the user's hooksPath, fsmonitor or filter; the user's signing is not asked" \
     bash -c 'test ! -e "$1/hook-ran" && test "$(jq -r "select(.request == \"h2.md\") | .outcome" "$2")" = ok' _ "$scratch" "$s/comms/record"
   check "down" exit_is 0 wp down

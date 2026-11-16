@@ -206,6 +206,20 @@ end_processes_naming() {
   return 1
 }
 
+# A directory that a test shuts, at mode 000, is named in the scratch's list before it is shut, and cleanup opens each
+# again, the last shut first, before it removes the scratch, whatever path the test ends by; the test opens it again
+# itself once its checks are done.
+shut() { printf '%s\0' "$1" >> "$scratch/shut-directories" && chmod 000 -- "$1"; }
+reopen() { chmod 0700 -- "$1"; }
+reopen_shut() {
+  local i
+  local -a shut=()
+  [[ -f $scratch/shut-directories ]] || return 0
+  mapfile -d '' -t shut < "$scratch/shut-directories"
+  for (( i = ${#shut[@]} - 1; i >= 0; i-- )); do chmod 0700 -- "${shut[i]}" 2> /dev/null; done
+  return 0
+}
+
 cleanup() {
   local home status=0
   [[ -n ${scratch-} && -d $scratch ]] || return 0
@@ -231,6 +245,7 @@ cleanup() {
     done
   fi
   end_processes_naming "$scratch" || status=1
+  reopen_shut
   rm -rf -- "$scratch"
   return "$status"
 }
@@ -1914,6 +1929,134 @@ t_closed_names() {
     exit_is 1 env PATH="$scratch/jq-view:$PATH" "$BASH" "$loop" build
   check "[C31] saying that it cannot read the views" said "workplace: cannot read the views in $clone/PLAN/view.json"
   rm -rf -- "$clone/BUILD"
+
+  # A read that the rule cannot make is a refusal (5.177 point 6). A directory is resolved without being entered: a
+  # row that is a link to a directory of mode 000 beneath the closed label is judged where the link leads.
+  mkdir -p -- "$root/orchard/cellar/shut"
+  ln -s -- orchard/cellar/shut "$root/shutlink"
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/shutlink"; "read-only"; 10)]'
+  check "plan with a read-only row that is a link to orchard/cellar/shut, beneath the closed orchard/cellar, which the test then shuts" exit_is 0 wplan
+  shut "$root/orchard/cellar/shut"
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.177: build refuses a row that is a link to a directory of mode 000 beneath a closed label, with exit 1" exit_is 1 wp build
+  check "[C31] 5.177: naming the row and the directory it leads to by its real path, read without entering it" \
+    said "$grower: its row $root/shutlink (read-only, from programs/policy.typify:10) is the directory $root/orchard/cellar/shut, at or beneath $root/orchard/cellar, $by"
+  reopen "$root/orchard/cellar/shut"
+  # A closed label of mode 000 written through the link zz: its physical path is read without entering it.
+  mkdir -p -- "$root/orchard/press"
+  statements_plan '.programs[-1].recorded += [lb($root + "/zz/orchard/press"; "closed"; 11), sc(12)]'
+  check "plan with a closed label written through the link zz, at orchard/press, which the test then shuts" exit_is 0 wplan
+  shut "$root/orchard/press"
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.177: build refuses a closed label of mode 000 written through a link, with exit 1" exit_is 1 wp build
+  check "[C31] 5.177: naming the label and its physical path, read without entering it" \
+    said "workplace: programs/policy.typify:11: the label of closed names $root/zz/orchard/press, which is written through a link to $root/orchard/press"
+  reopen "$root/orchard/press"
+  # A label and a mask of which the rule cannot tell whether they stand, since a directory on their way cannot be
+  # searched: the label beneath the shut directory gate, and the tmux socket directory under a TMUX_TMPDIR beneath the
+  # shut directory shutt, given to this build alone.
+  mkdir -p -- "$root/gate/cask" "$scratch/shutt/t/tmux-$EUID"
+  statements_plan '.programs[-1].recorded += [lb($root + "/gate/cask"; "closed"; 11), sc(12)]'
+  check "plan with a closed label at gate/cask, whose directory gate the test then shuts" exit_is 0 wplan
+  shut "$root/gate"
+  shut "$scratch/shutt"
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.177: build refuses a label and a mask of which the rule cannot tell whether they stand, with exit 1" \
+    exit_is 1 env TMUX_TMPDIR="$scratch/shutt/t" "$BASH" "$loop" build
+  check "[C31] 5.177: naming the label, where it once passed it over as one that does not exist" \
+    said "workplace: programs/policy.typify:11: the label of closed names $root/gate/cask, of which the rule cannot tell whether it stands (Permission denied), and a read that the rule cannot make is a refusal (5.177 point 6)"
+  check "[C31] 5.177: and naming the mask, where it once passed it over as one that does not stand" \
+    said "workplace: the frame's mask $scratch/shutt/t/tmux-$EUID, the user's tmux socket directory, which every view masks (C68): the rule cannot tell whether it stands (Permission denied)"
+  reopen "$scratch/shutt"
+  reopen "$root/gate"
+  # Where readlink cannot resolve what stands, the rule refuses: a readlink of the test's own fails on every path whose
+  # last part begins with unreadable, for a label and a mask that cannot be entered and for a row.
+  local real_readlink
+  real_readlink=$(command -v readlink)
+  mkdir -p -- "$scratch/readlink" "$root/unreadable-label" "$root/unreadable-row" "$scratch/unreadable-t/tmux-$EUID"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    '[[ ${!#} == */unreadable* ]] && { printf "%s\n" "the test fails this readlink" >&2; exit 1; }' \
+    "exec ${real_readlink@Q} \"\$@\"" > "$scratch/readlink/readlink"
+  chmod +x -- "$scratch/readlink/readlink"
+  statements_plan '.programs[-1].recorded += [lb($root + "/unreadable-label"; "closed"; 11), sc(12),
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/unreadable-row"; "read-only"; 10)]'
+  check "plan with a closed label at unreadable-label and grower's read-only row unreadable-row" exit_is 0 wplan
+  shut "$root/unreadable-label"
+  shut "$scratch/unreadable-t/tmux-$EUID"
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.177: where readlink cannot resolve a label, a mask and a row that stand, build refuses, with exit 1" \
+    exit_is 1 env PATH="$scratch/readlink:$PATH" TMUX_TMPDIR="$scratch/unreadable-t" "$BASH" "$loop" build
+  check "[C31] 5.177: naming the label whose physical path it cannot tell" \
+    said "workplace: programs/policy.typify:11: the label of closed names $root/unreadable-label, whose physical path the rule cannot tell"
+  check "[C31] 5.177: naming the mask whose physical path it cannot tell" \
+    said "workplace: the frame's mask $scratch/unreadable-t/tmux-$EUID, the user's tmux socket directory, which every view masks (C68): the rule cannot tell its physical path"
+  check "[C31] 5.177: naming the row whose real path it cannot tell" \
+    said "workplace: $grower: its row $root/unreadable-row (read-only, from programs/policy.typify:10) stands, and the rule cannot tell its real path"
+  reopen "$scratch/unreadable-t/tmux-$EUID"
+  reopen "$root/unreadable-label"
+
+  # The runtime directory is held under another name as the other masks are, and a row written at it or beneath it is
+  # passed over as before (5.177 point 6). These plans are built alone and never brought up: under a fault of the rule
+  # such an up would bind the session's runtime directory into a pane.
+  local runtime=/run/user/$EUID rtphys
+  if [[ -d $runtime ]]; then
+    rtphys=$(cd -P -- "$runtime" && pwd -P)
+    ln -s -- "$runtime" "$root/rtlink"
+    statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/rtlink"; "read-only"; 10)]'
+    check "plan with a read-only row that is a link to the runtime directory" exit_is 0 wplan
+    rm -rf -- "$clone/BUILD"
+    check "[C31] [C84] 5.177: build refuses a row that is a link to the runtime directory, held under another name as the other masks are, with exit 1" \
+      exit_is 1 wp build
+    check "[C31] [C84] 5.177: naming the runtime directory's mask" \
+      said "$grower: its row $root/rtlink (read-only, from programs/policy.typify:10) is the directory $rtphys, at or beneath $rtphys, the runtime directory, which a view masks where its rows would show it (C84)"
+    if [[ -S $runtime/bus ]]; then
+      ln -s -- "$runtime/bus" "$root/buslink"
+      statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/buslink"; "read-only"; 10)]'
+      check "plan with a read-only row that is a link to the session's bus socket in the runtime directory" exit_is 0 wplan
+      rm -rf -- "$clone/BUILD"
+      check "[C31] [C84] 5.177: build refuses a row that is a link to a socket in the runtime directory, with exit 1" exit_is 1 wp build
+      check "[C31] [C84] 5.177: naming the socket by its real path and the runtime directory's mask" \
+        said "$grower: its row $root/buslink (read-only, from programs/policy.typify:10) is the file $rtphys/bus, at or beneath $rtphys, the runtime directory, which a view masks where its rows would show it (C84)"
+    else
+      skip "[C31] [C84] this machine has no session bus socket at $runtime/bus, so a row that is a link to it is not tried; tried where one stands"
+    fi
+    statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$runtime"'"; "searchable-only"; 10)]'
+    check "plan with a searchable-only row written at the runtime directory itself" exit_is 0 wplan
+    rm -rf -- "$clone/BUILD"
+    check "[C31] [C84] 5.177: build takes a row written at the runtime directory, where its mask lies, as before" exit_is 0 wp build
+  else
+    skip "[C31] [C84] this machine has no runtime directory at $runtime, so rows that lead into it are not tried; tried where one stands"
+  fi
+
+  # A mask lies at its path as the views write it, so a row is passed over only where it is written at that path or
+  # beneath it (5.177 point 6): with XDG_STATE_HOME written through a link, given to these builds alone, R's mask lies
+  # at R's written path, and a row at its physical path lies under no mask.
+  mkdir -p -- "$scratch/xreal/workplace/sub"
+  ln -s -- xreal "$scratch/xlink"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/xreal/workplace/sub"; "read-only"; 10)]'
+  check "plan with a read-only row beneath R's physical path, where XDG_STATE_HOME is written through the link xlink" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] [C39] 5.177: build refuses a row at R's physical path, under no mask where R is written through a link, with exit 1" \
+    exit_is 1 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
+  check "[C31] [C39] 5.177: naming R's mask" \
+    said "$grower: its row $scratch/xreal/workplace/sub (read-only, from programs/policy.typify:10) is the directory $scratch/xreal/workplace/sub, at or beneath $scratch/xreal/workplace, the workplaces' state R, which every view masks (C39)"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; "'"$scratch"'/xlink/workplace/sub"; "read-only"; 10)]'
+  check "plan with the same row written beneath R's written path" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] [C39] 5.177: build takes a row written beneath R's written path, where R's mask lies" \
+    exit_is 0 env XDG_STATE_HOME="$scratch/xlink" "$BASH" "$loop" build
+
+  # A read-only row whose real path is / holds every closed directory, and the rule refuses it (5.177 point 6).
+  ln -s -- / "$root/rootlink"
+  statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/rootlink"; "read-only"; 10)]'
+  check "plan with a read-only row that is a link to /" exit_is 0 wplan
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.177: build refuses a read-only row that is a link to /, with exit 1" exit_is 1 wp build
+  check "[C31] 5.177: naming where it would show the closed label" \
+    said "$grower: its row $root/rootlink (read-only, from programs/policy.typify:10) is the directory /, which holds $root/orchard/cellar, $by, and would show it at $root/rootlink$root/orchard/cellar, $none"
+  check "[C31] 5.177: and where it would show the clone" \
+    said "$grower: its row $root/rootlink (read-only, from programs/policy.typify:10) is the directory /, which holds $clone, the clone, which every view masks (C52), and would show it at $root/rootlink$clone, $none"
+  rm -rf -- "$clone/BUILD"
 }
 
 t_closed_names_unfolded() {
@@ -3548,6 +3691,32 @@ t_closed_names_up() {
     exit_is 0 frame_wp restart "Orchard Grower"
   check "grower runs again" eventually_long live_pane "Orchard Grower"
   check "down" exit_is 0 frame_wp down
+  # A read that the rule cannot make is a refusal at up too (5.177 point 6). The same plan, built again from the test's
+  # own tree with the link back; then the link is swapped into the closed cellar, first with its inner directory shut,
+  # which the rule resolves without entering it, and then with the cellar itself shut, so that the row leads through a
+  # directory that cannot be searched, and the rule cannot tell whether the row stands.
+  rm -rf -- "$clone/BUILD"
+  ln -sfn -- harbor/charts "$root/lnk"
+  check "build of the same plan from the test's own tree, with the link back" exit_is 0 wp build
+  ln -sfn -- orchard/cellar "$root/lnk"
+  shut "$root/orchard/cellar/inner"
+  check "[C31] 5.177: a link swapped after the build into a closed directory of mode 000 makes up exit 1" exit_is 1 wp up
+  check "[C31] 5.177: naming the row and the directory it now leads to, read without entering it" said "$refusal"
+  check "[C31] 5.177: and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  check "[C31] 5.177: and started no server" no_server
+  reopen "$root/orchard/cellar/inner"
+  shut "$root/orchard/cellar"
+  local through="seat Orchard Grower (orchard/barn/grower): its row $root/lnk/inner (read-only, from programs/policy.typify:32): the rule cannot tell whether it stands (Permission denied), and a read that the rule cannot make is a refusal (5.177 point 6)"
+  check "[C31] 5.177: with the cellar shut, a row that leads through it makes up exit 1, where up once passed it over as one that does not exist" \
+    exit_is 1 wp up
+  check "[C31] 5.177: naming the row and the reason that the rule cannot tell" said "$through"
+  check "[C31] 5.177: and up left no run directory" test ! -e "$clone/BUILD/RUN"
+  check "[C31] 5.177: and started no server" no_server
+  rm -rf -- "$clone/BUILD"
+  check "[C31] 5.177: build refuses the same row, with exit 1" exit_is 1 wp build
+  check "[C31] 5.177: by the rule's line, before its test that what a view grants exists" said "$through"
+  reopen "$root/orchard/cellar"
+  rm -rf -- "$clone/BUILD"
 }
 
 t_plan_end_to_end() {

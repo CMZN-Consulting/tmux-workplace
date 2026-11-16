@@ -576,47 +576,73 @@ print_fold_report() {
 }
 
 # The physical path of PATH, in the global physical: a directory's own, another file's under its parent's, and the
-# path as written where neither resolves. A final newline is kept.
+# path as written where neither resolves. A final newline is kept. A directory that cannot be entered is resolved
+# without entering it, by readlink -e, which needs no search permission on the directory itself; where neither
+# resolves a directory that stands, the global resolved is 0, and 1 otherwise.
 physical_of() {
   local p=$1 r parent
-  physical=$p
+  physical=$p resolved=1
   if [[ -d $p ]]; then
-    r=$(cd -P -- "$p" 2> /dev/null && pwd -P && printf .) && physical=${r%$'\n.'}
+    r=$(cd -P -- "$p" 2> /dev/null && pwd -P && printf .) || r=$(readlink -e -- "$p" && printf .) \
+      || { resolved=0; return 0; }
+    physical=${r%$'\n.'}
   else
     parent=${p%/*}
     [[ -z $parent ]] && parent=/
     if [[ $p == */* && -d $parent ]]; then
-      r=$(cd -P -- "$parent" 2> /dev/null && pwd -P && printf .) && { r=${r%$'\n.'}; physical=${r%/}/${p##*/}; }
+      r=$(cd -P -- "$parent" 2> /dev/null && pwd -P && printf .) || r=$(readlink -e -- "$parent" && printf .) \
+        || { resolved=0; return 0; }
+      r=${r%$'\n.'}
+      physical=${r%/}/${p##*/}
     fi
   fi
 }
 
 # The real path of PATH, in the global physical: every link in it resolved, its last part too, a file's as well as a
-# directory's (5.176 point 7). A bind written through a link to a file lies on the file it leads to.
+# directory's (5.176 point 7), read without entering the directory it names. A bind written through a link to a file
+# lies on the file it leads to. Where readlink cannot resolve it, the status is 1.
 real_of() {
   local r
-  physical_of "$1"
-  [[ -d $1 || ! -L $1 ]] && return 0
-  r=$(readlink -e -- "$1" && printf .) && physical=${r%$'\n.'}
+  physical=$1
+  r=$(readlink -e -- "$1" && printf .) || return 1
+  physical=${r%$'\n.'}
 }
+
+# Whether PATH stands, read without entering a directory: status 0 where it does, 1 where it does not (a part of it
+# names nothing, or a file that is no directory), and 2 where the rule cannot tell, as where a directory on its way
+# cannot be searched, with stat's reason in the global unread. A link that leads nowhere does not stand.
+presence_of() {
+  local err
+  unread=""
+  [[ -e $1 ]] && return 0
+  err=$(stat -L -- "$1" 2>&1 > /dev/null) && return 0
+  [[ $err == *': No such file or directory' || $err == *': Not a directory' ]] && return 1
+  unread=${err##*: }
+  [[ -n $unread ]] || unread="stat gives no reason"
+  return 2
+}
+
+# Whether a mask is to be read: a directory that stands, or a path of which the rule cannot tell whether it stands.
+mask_stands() { [[ -d $1 ]] || { presence_of "$1"; (( $? == 2 )); }; }
 
 # The frame's own masks, which a view lays over its rows (C39, C52, C68, C73, C84), each as a path, its kind and its
 # name in a refusal, NUL-separated: the clone, R, the user's tmux socket directories, the journal's directories where a
 # chain is kept, and the runtime directory, beneath which a seat's rows are mounted again after its mask (kind
-# beneath). A directory that does not stand is passed over.
+# beneath). Each is the path at which the views lay it, as written. A directory that does not stand is passed over,
+# and one of which the rule cannot tell whether it stands is given, for the rule to refuse.
 frame_masks() {
   local chain=${1-} r t j
-  [[ -n ${clone-} && -d $clone ]] && printf '%s\0%s\0%s\0' "$clone" closed "the clone, which every view masks (C52)"
-  r=$(state_root 2> /dev/null) && [[ -d $r ]] && printf '%s\0%s\0%s\0' "$r" closed "the workplaces' state R, which every view masks (C39)"
+  [[ -n ${clone-} ]] && mask_stands "$clone" && printf '%s\0%s\0%s\0' "$clone" closed "the clone, which every view masks (C52)"
+  r=$(state_root 2> /dev/null) && mask_stands "$r" && printf '%s\0%s\0%s\0' "$r" closed "the workplaces' state R, which every view masks (C39)"
   t=${TMUX_TMPDIR:-/tmp}/tmux-$EUID
-  [[ -d $t ]] && printf '%s\0%s\0%s\0' "$t" closed "the user's tmux socket directory, which every view masks (C68)"
-  [[ /tmp/tmux-$EUID != "$t" && -d /tmp/tmux-$EUID ]] && printf '%s\0%s\0%s\0' "/tmp/tmux-$EUID" closed "the user's tmux socket directory, which every view masks (C68)"
+  mask_stands "$t" && printf '%s\0%s\0%s\0' "$t" closed "the user's tmux socket directory, which every view masks (C68)"
+  [[ /tmp/tmux-$EUID != "$t" ]] && mask_stands "/tmp/tmux-$EUID" && printf '%s\0%s\0%s\0' "/tmp/tmux-$EUID" closed "the user's tmux socket directory, which every view masks (C68)"
   if [[ -n $chain ]]; then
     for j in /var/log/journal /run/log/journal /run/systemd/journal; do
-      [[ -d $j ]] && printf '%s\0%s\0%s\0' "$j" closed "the journal's directory, which a view masks where a chain is kept (C73)"
+      mask_stands "$j" && printf '%s\0%s\0%s\0' "$j" closed "the journal's directory, which a view masks where a chain is kept (C73)"
     done
   fi
-  [[ -d /run/user/$EUID ]] && printf '%s\0%s\0%s\0' "/run/user/$EUID" beneath "the runtime directory, which a view masks where its rows would show it (C84)"
+  mask_stands "/run/user/$EUID" && printf '%s\0%s\0%s\0' "/run/user/$EUID" beneath "the runtime directory, which a view masks where its rows would show it (C84)"
   return 0
 }
 
@@ -625,9 +651,11 @@ frame_masks() {
 # - A closed label is written by its physical path, with no link in it: a tmpfs written through a link lies where the
 #   link leads, and a label whose last part is a link gets none, since bubblewrap mounts nothing on a link (5.162
 #   point 6). So a label's tmpfs, where it has one, lies at its written path, which is its physical one.
-# - A row that is not hidden may not be, by its real path, at or beneath a closed directory's, nor beneath a mask's
-#   under a name that the mask does not cover. Beneath the runtime directory's mask a seat's rows are mounted
-#   again, so that one is passed over.
+# - A row that is not hidden may not be, by its real path, at or beneath a closed directory's, nor at or beneath a
+#   mask's under a name that the mask does not cover. A mask lies at its path as the views write it, after every row,
+#   so a row written at that path or beneath it lies under the mask and is passed over, the runtime directory's too,
+#   beneath which a seat's rows are mounted again after its mask; a row that leads there by any other name, the
+#   mask's physical path among them, is refused (5.177 point 6).
 # - A read-only or read-write row whose real path holds a closed directory shows it at the row's written path
 #   joined with the rest of the closed directory's physical path. Something must lie over that path after the row's
 #   bind: a hidden, scratch or searchable-only row of the view written at it or at an ancestor of it beneath the row
@@ -635,16 +663,19 @@ frame_masks() {
 #   mounted after every row, at its path. A label beneath a hidden, scratch or searchable-only row has no tmpfs of
 #   its own, and that row is what lies over it.
 # - A row is judged by its real path, where every link in it leads, its last part too, a file as well as a directory
-#   (5.176 point 7).
+#   (5.176 point 7), and a label and a mask by their physical paths. A directory is resolved without being entered.
+#   A read that the rule cannot make is a refusal (5.177 point 6): a row, a label or a mask of which it cannot tell
+#   whether it stands, since a directory on its way cannot be searched, and one whose real path it cannot tell.
 # - The rows are the views' as a pane gets them: the folded view's where the plan folds, and the plan's own view cell
 #   where it does not (C33), so the masks hold in an unfolded view too. A plan that folds with no view given is
 #   refused, as is a label that is not an absolute path once the binding joins it.
-# A path that does not exist is passed over. With a seat named, only that seat's rows are read. The binding and the
-# library are those the views were made with: the tool's own at build, and BUILD's own at up, restart and a pane's
-# exec (5.176 point 11). Where the plan or the views cannot be read, the rule refuses.
+# A path that does not exist, as stat tells it, is passed over. With a seat named, only that seat's rows are read. The
+# binding and the library are those the views were made with: the tool's own at build, and BUILD's own at up, restart
+# and a pane's exec (5.176 point 11). Where the plan or the views cannot be read, the rule refuses.
 refuse_closed_names() {
   local view=$1 plan=$2 binding=$3 lib=$4 only=${5-} c r p row state seat origins label lorigin cphys rphys kind name target rest covered chain what
-  local -a closed=() rows=() masks=() faults=() covers=()
+  local physical resolved unread
+  local -a closed=() rows=() masks=() faults=() covers=() reals=()
   mapfile -d '' -t closed < <(jq --raw-output0 -L "$lib" --arg root "$root" --slurpfile b "$binding" '
     include "table";
     def at: "\(.path // "?"):\(.line // "?")";
@@ -681,8 +712,19 @@ refuse_closed_names() {
       faults+=("$lorigin: the label of closed names $label, whose last part is a link, and bubblewrap mounts nothing on a link (5.162 point 6)")
       continue
     fi
-    [[ -e $label ]] || continue
+    presence_of "$label"
+    case $? in
+      1) continue ;;
+      2)
+        faults+=("$lorigin: the label of closed names $label, of which the rule cannot tell whether it stands ($unread), and a read that the rule cannot make is a refusal (5.177 point 6)")
+        continue
+        ;;
+    esac
     physical_of "$label"
+    if (( ! resolved )); then
+      faults+=("$lorigin: the label of closed names $label, whose physical path the rule cannot tell, and a read that the rule cannot make is a refusal (5.177 point 6)")
+      continue
+    fi
     if [[ $physical != "$label" ]]; then
       faults+=("$lorigin: the label of closed names $label, which is written through a link to $physical: a closed label is written by its physical path, so that the tmpfs over it lies where it is read (5.159 point 6, 5.162 point 6)")
       continue
@@ -690,22 +732,48 @@ refuse_closed_names() {
     things+=("$label" "$physical" label "closed by the label at $lorigin as $label")
   done
   for (( c = 0; c + 2 < ${#masks[@]}; c += 3 )); do
+    presence_of "${masks[c]}"
+    if (( $? == 2 )); then
+      faults+=("the frame's mask ${masks[c]}, ${masks[c + 2]}: the rule cannot tell whether it stands ($unread), and a read that the rule cannot make is a refusal (5.177 point 6)")
+      continue
+    fi
     physical_of "${masks[c]}"
+    if (( ! resolved )); then
+      faults+=("the frame's mask ${masks[c]}, ${masks[c + 2]}: the rule cannot tell its physical path, and a read that the rule cannot make is a refusal (5.177 point 6)")
+      continue
+    fi
     things+=("${masks[c]}" "$physical" "${masks[c + 1]}" "${masks[c + 2]}")
   done
-  (( ${#things[@]} )) || return 0
+  # Each row that is not hidden, read once: its real path where it stands, nothing where it does not, and a refusal
+  # where the rule cannot tell whether it stands or where it leads.
+  for (( r = 0; r + 3 < ${#rows[@]}; r += 4 )); do
+    row=${rows[r]} state=${rows[r + 1]} seat=${rows[r + 2]} origins=${rows[r + 3]}
+    reals[r]=""
+    [[ $state != hidden ]] || continue
+    presence_of "$row"
+    case $? in
+      1) continue ;;
+      2)
+        faults+=("seat $seat: its row $row ($state, from $origins): the rule cannot tell whether it stands ($unread), and a read that the rule cannot make is a refusal (5.177 point 6)")
+        continue
+        ;;
+    esac
+    if ! real_of "$row"; then
+      faults+=("seat $seat: its row $row ($state, from $origins) stands, and the rule cannot tell its real path, and a read that the rule cannot make is a refusal (5.177 point 6)")
+      continue
+    fi
+    reals[r]=$physical
+  done
   for (( c = 0; c + 3 < ${#things[@]}; c += 4 )); do
     label=${things[c]} cphys=${things[c + 1]} kind=${things[c + 2]} name=${things[c + 3]}
     for (( r = 0; r + 3 < ${#rows[@]}; r += 4 )); do
       row=${rows[r]} state=${rows[r + 1]} seat=${rows[r + 2]} origins=${rows[r + 3]}
-      [[ $state != hidden && -e $row ]] || continue
-      real_of "$row"
-      rphys=$physical
+      [[ -n ${reals[r]} ]] || continue
+      rphys=${reals[r]}
       what=directory
       [[ -d $row ]] || what=file
       if [[ $rphys == "$cphys" || $rphys == "$cphys"/* || ( $cphys == / && $rphys != / ) ]]; then
-        [[ $kind == beneath ]] && continue
-        if [[ $kind == closed ]] && [[ $row == "$label" || $row == "$label"/* || $row == "$cphys" || $row == "$cphys"/* ]]; then continue; fi
+        if [[ $kind != label ]] && [[ $row == "$label" || $row == "$label"/* ]]; then continue; fi
         faults+=("seat $seat: its row $row ($state, from $origins) is the $what $rphys, at or beneath $cphys, $name: no view holds a closed directory under another name (5.159 point 6)")
       elif [[ ( $state == read-only || $state == read-write ) && ( $cphys == "$rphys"/* || ( $rphys == / && $cphys != / ) ) ]]; then
         rest=${cphys#"${rphys%/}"/}

@@ -6793,12 +6793,12 @@ t_records_verify() {
   check "up, with the file sink as it should be" exit_is 0 wp up
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   local stood
-  stood=$(jq -r '.files["comms/record"].offset' "$(state_of)/records/chain.state")
   check "[C75] the restored file sink has taken an entry before the next fault is injected" \
     eventually_long test -f "$(state_of)/records/chain"
   [[ -f $(state_of)/records/chain ]] || return 1
   check "[C75] make the second sink fault while its writer is stopped" inject_chain_sink_fault "$scratch/chain"
   [[ -d $(state_of)/records/chain ]] || return 1
+  stood=$chain_fault_offset
   request pilot refused.md "to: Harbor Keeper" "subject: while the sink refuses" --- "body"
   check "a mail is served while the sink refuses" answered_ok pilot refused.md
   check "[C75] while the run is up and the sink's last entry was refused, status exits 1" status_comes_to 1
@@ -6823,7 +6823,8 @@ inject_chain_sink_fault() {
   [[ $carrier =~ ^[1-9][0-9]*$ ]] || return 1
   kill -STOP "$carrier" || return 1
   if eventually grep -Eq '^State:[[:space:]]+T' "/proc/$carrier/status"; then
-    mv -- "$(state_of)/records/chain" "$backup" && mkdir -- "$(state_of)/records/chain" || status=1
+    chain_fault_offset=$(jq -s -r '[.[] | select(.file == "comms/record") | .offset + .length] | max // 0' "$(state_of)/records/chain") \
+      && mv -- "$(state_of)/records/chain" "$backup" && mkdir -- "$(state_of)/records/chain" || status=1
   else
     status=1
   fi

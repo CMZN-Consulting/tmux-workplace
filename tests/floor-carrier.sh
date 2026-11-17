@@ -238,7 +238,8 @@ t_carrier_cross_floor() {
     m(["reach","orchard","-","-","office","write","harbor","-","-","office","allowed"];3),
     m(["reach","orchard","barn","picker","seat","write","harbor","-","-","office","banned"];4),
     m(["record","-","-","-","workplace","pane","kept"];5),
-    m(["record-path","records"];6),m(["record-chain","file"];7)]
+    m(["record-path","records"];6),m(["record-chain","file"];7),
+    st("harbor";"tower";"-";"room";$root+"/harbor/charts";"read-write";8)]
     | (.programs[] | select(.path=="harbor/tower/watch/seat.typify") | .plan[1].term[5]) |=
       (fromjson + ["typed="+$root+"/harbor/charts/cross-typed"] | tojson)'
   check "[C110] Administration-to-enforced-floor fixture plans" exit_is 0 wplan
@@ -247,7 +248,7 @@ t_carrier_cross_floor() {
   check "[C110] destination starts on its own socket" exit_is 0 wp up deck
   local s pane holder pid before
   s=$(state_of)
-  pane=$(on deck pane_of "Harbor Watch")
+  pane=$(on deck pane_by_title "Harbor Watch")
   check "[C110] destination program is running" eventually_long on deck screen_has "Harbor Watch" "probe watch done"
   request grower cross.grab "seat: Harbor Watch"
   check "[C110] authorized grab is answered by the destination floor" answered_ok grower cross.grab
@@ -291,4 +292,35 @@ t_carrier_cross_floor() {
   check "[C110] verify destination's own request chain" exit_is 0 wp record verify --requests deck
   check "[C110] request verification requires a floor" exit_is 2 wp record verify --requests
   check "[C110] request verification refuses an unknown floor" exit_is 2 wp record verify --requests missing
+}
+
+t_carrier_closed_wakes() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"
+  check "[C111] fixture without any wake pattern plans" exit_is 0 wplan
+  check "[C111] fixture builds" exit_is 0 wp build
+  local s c record rec
+  s=$(state_of) c=$s/floors/deck/comms record=$c/record
+  jq -nc '{seats:{"Gone Seat":{name:"Gone Seat",ids:["gone-1"],count:1,since:"2026-11-18T00:00:00Z",last:0},"Harbor Pilot":{name:"Harbor Pilot",ids:["kind-1"],count:1,since:"2026-11-18T00:00:00Z",last:0}}}' > "$s/comms/wake.json"
+  chmod 0600 -- "$s/comms/wake.json"
+  check "[C111] start the only carrier" exit_is 0 wp up deck
+  check "[C111] impossible entries close without a typing attempt" eventually_long bash -c '[[ $(jq -s "[.[] | select(.action==\"wake\" and .outcome==\"closed\")] | length" "$1") == 2 ]]' _ "$record"
+  check "[C111] closing lines retain covered IDs and omit text lengths" jq -se 'all(.[] | select(.outcome=="closed"); (.covers|length)==1 and (has("length")|not) and (has("sha256")|not))' "$record"
+  check "[C111] removed seat has an explicit reason" jq -se 'any(.[]; .target==["Gone Seat"] and .reason=="no build makes the seat Gone Seat")' "$record"
+  check "[C111] removed pattern has an explicit kind reason" jq -se 'any(.[]; .target==["Harbor Pilot"] and .reason=="the kind none of Harbor Pilot has no wake now")' "$record"
+  check "[C111] no impossible entry remains due" eventually_long bash -c '[[ $(jq ".seats | length" "$1") == 0 ]]' _ "$s/comms/wake.json"
+  check "[C111] stop to plant the claim-before-delete window" exit_is 0 wp down deck
+  jq -c '.seats["Gone Again"]={name:"Gone Again",ids:["gone-2"],count:1,since:"2026-11-18T00:00:00Z",last:0}' "$s/comms/wake.json" > "$scratch/wake-new"
+  cp -- "$scratch/wake-new" "$s/comms/wake.json"
+  rec=$(stat -c %s -- "$record")
+  jq -nc --argjson rec "$rec" '{box:"Gone Again",target:"Gone Again",ids:["gone-2"],start:0,rec:$rec,outcome:"closed",reason:"no build makes the seat Gone Again"}' > "$c/.pointing/Gone Again"
+  check "[C111] recover a closure already claimed in the local journal" exit_is 0 wp up deck
+  check "[C111] recovery both records and removes the claimed entry" eventually_long bash -c '[[ $(jq ".seats | length" "$1") == 0 && ! -e $2 ]] && jq -e "select(.covers==[\"gone-2\"] and .outcome==\"closed\")" "$3" >/dev/null' _ "$s/comms/wake.json" "$c/.pointing/Gone Again" "$record"
+  check "[C111] stop after recovered closure" exit_is 0 wp down deck
+  check "[C111] restart without any waiting request" exit_is 0 wp up deck
+  sleep 2
+  check "[C111] no closing line is duplicated across another restart" test "$(jq -s '[.[] | select(.outcome=="closed")] | length' "$record")" = 3
+  check "[C111] stop fixture" exit_is 0 wp down deck
 }

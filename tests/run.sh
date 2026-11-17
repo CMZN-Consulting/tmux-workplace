@@ -7759,6 +7759,7 @@ tests=(
   t_carrier_request_recovery
   t_carrier_pointer_recovery
   t_carrier_cross_floor
+  t_carrier_closed_wakes
   t_wake_floors
   t_carrier_floors
   t_floors_readers

@@ -3671,7 +3671,7 @@ carrier_wake_record() {
   jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg target "$1" --arg ids "$2" --arg outcome "$3" --arg reason "$4" --arg written "$5" '
     {at: $at, seat: "the frame", action: "wake", target: [$target], covers: ($ids | split(" ")), outcome: $outcome}
     + (if $reason == "" then {} else {reason: $reason} end)
-    + ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]})'
+    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)'
 }
 
 carrier_wake() {
@@ -3745,9 +3745,9 @@ carrier_pointer_record() {
     jq -c --arg reason "$reason" '.outcome="unknown" | .reason=$reason' <<< "$journal" > "$fcomms/.pointing.new" \
       && mv -fT -- "$fcomms/.pointing.new" "$file" || return 1
   fi
-  written=$(jq -r '"\(.length) \(.sha256)"' <<< "$journal")
+  written=$(jq -r 'if has("length") then "\(.length) \(.sha256)" else "" end' <<< "$journal")
   found=$(tail -c "+$(( rec + 1 ))" -- "$comms_record" | jq -R -s -c --arg target "$target" --arg ids "$ids" --arg outcome "$outcome" --arg written "$written" \
-    '[split("\n")[] | fromjson? | objects | select(.action == "wake" and .target == [$target] and .covers == ($ids | split(" ")) and .outcome == $outcome and "\(.length) \(.sha256)" == $written)][0] // empty')
+    '[split("\n")[] | fromjson? | objects | select(.action == "wake" and .target == [$target] and .covers == ($ids | split(" ")) and .outcome == $outcome and (if $written == "" then has("length") | not else "\(.length) \(.sha256)" == $written end))][0] // empty')
   [[ -z $found ]] || return 0
   line=$(carrier_wake_record "$target" "$ids" "$outcome" "$reason" "$written") || return 1
   carrier_append "$line"
@@ -3768,7 +3768,8 @@ carrier_settle() {
     pend_last=$(jq -r .start <<< "$journal")
     if ! carrier_wake_put "" "" '
     $ARGS.positional as [$b, $last, $outcome, $typed]
-    | if .seats[$b] == null then .
+    | if $outcome == "closed" then del(.seats[$b])
+      elif .seats[$b] == null then .
       else .seats[$b] |= (.last = ($last | tonumber)
         | if $outcome == "ok" then
             ($typed | split(" ")) as $t
@@ -3781,6 +3782,36 @@ carrier_settle() {
   done
   carrier_release
   return "$failed"
+}
+
+carrier_close_wakes() {
+  [[ -n $comms && -f $comms/wake.json ]] || return 0
+  local box entry j reason target kind
+  local -a boxes
+  mapfile -d '' -t boxes < <(jq --raw-output0 '.seats | to_entries[] | select((.value.ids // [] | length) > 0) | .key' "$comms/wake.json")
+  for box in "${boxes[@]}"; do
+    [[ $box != */* && $box != .* && -n $box ]] || continue
+    j=""
+    for target in "${!seat_boxes[@]}"; do [[ ${seat_boxes[target]} == "$box" ]] && { j=$target; break; }; done
+    if [[ -z $j ]]; then
+      reason="no build makes the seat $box"
+    elif [[ -n $run_floor && ${seat_fl[j]} != "$run_floor" ]]; then
+      continue
+    elif [[ -z ${seat_wake[j]} ]]; then
+      kind=$(jq -r --argjson key "${seat_keys[j]}" '.seats[] | select(.seat == $key) | .kind // "none"' "$b_view") || kind=none
+      reason="the kind $kind of ${seat_names[j]} has no wake now"
+    else continue; fi
+    carrier_hold || return 1
+    entry=$(jq -c --arg box "$box" '.seats[$box] // empty' "$comms/wake.json") || { carrier_release; return 1; }
+    if [[ -z $entry || -e $fcomms/.pointing/$box ]]; then carrier_release; continue; fi
+    jq -nc --arg box "$box" --arg reason "$reason" --argjson entry "$entry" --argjson start "$EPOCHSECONDS" --argjson rec "$(stat -c %s -- "$comms_record")" \
+      '{box:$box,target:($entry.name // $box),ids:($entry.ids // []),start:$start,rec:$rec,outcome:"closed",reason:$reason}' \
+      > "$fcomms/.pointing.new" && mv -fT -- "$fcomms/.pointing.new" "$fcomms/.pointing/$box" || { carrier_release; return 1; }
+    carrier_wake_put "" "" 'del(.seats[$ARGS.positional[0]])' "$box" || { carrier_release; return 1; }
+    carrier_release
+    carrier_pointer_record "$fcomms/.pointing/$box" || return 1
+  done
+  carrier_settle
 }
 
 carrier_record_mend() {
@@ -4160,6 +4191,7 @@ cmd_carry() {
       done
     fi
     (( carrier_stop || hold_over )) || carrier_wake
+    (( carrier_stop || hold_over )) || carrier_close_wakes
     (( ${#record_names[@]} )) && { carrier_watch; carrier_chain; }
     (( carrier_stop )) || carrier_pause 1
   done

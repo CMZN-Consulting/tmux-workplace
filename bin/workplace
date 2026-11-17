@@ -2680,7 +2680,7 @@ set_records() {
     [[ -n $path ]] || continue
     state=$(jq -c --argjson k "$(jq -c '.seat' <<< "$entry")" --arg b "$binds" '.slots[(["record-binds"] + $k | tojson)] = $b' <<< "$state")
     if [[ -n $run_floor && $(jq -r '.slots[(["unenforced"] | tojson)] // ""' <<< "$state") == 1 ]]; then
-      floor_record_links "$path" "$entry" "$binds" || return 1
+      floor_record_links "$path" "$entry" "$binds" make || return 1
     fi
   done < <(jq -c '.seats[]' "$records")
   if [[ -n $run_floor && $(jq -r '.slots[(["unenforced"] | tojson)] // ""' <<< "$state") == 1 && -n $path ]]; then
@@ -3626,7 +3626,8 @@ carrier_wake_put() {
   shift 3
   [[ -f $comms/wake.json ]] && current=$(< "$comms/wake.json")
   jq -c --arg at "$at" --arg id "$id" --arg floor "$run_floor" --argjson order "$box_order" \
-    --argjson noted "${carrier_note_readers:-null}" --argjson recovering "${carrier_noting_recovery:-0}" "$program"'
+    --argjson noted "${carrier_note_readers:-null}" --argjson recovering "${carrier_noting_recovery:-0}" \
+    --argjson floors "${carrier_box_floors:-null}" "$program"'
     | .seats as $s
     | .seats = (([$order[] | select($s[.] != null) | {key: ., value: $s[.]}]
                 + [$s | to_entries[] | select(.key as $k | ($order | index($k)) == null)]) | from_entries)' --args "$@" <<< "$current" \
@@ -3670,6 +3671,7 @@ carrier_wake_note() {
     reduce $ARGS.positional[] as $b (.;
       .seats[$b] = ((.seats[$b] // {name: $b, count: 0, ids: [], since: null, last: 0})
         | (if (.ids | length) == 0 then .since = $at else . end)
+        | (if ($floors[$b] // "") != "" then .floor=$floors[$b] else . end)
         | .ids += [$id] | .times = ((.times // {}) + {($id): $at}) | .count = (.ids | length)))
     | reduce $noted[] as $reader (.; .decided[$id][$reader] = true)
     | if $recovering == 0 then .delivered[$id] = $floor else . end' "${due[@]}" || return 1
@@ -3800,7 +3802,7 @@ carrier_settle() {
 
 carrier_close_wakes() {
   [[ -n $comms && -f $comms/wake.json ]] || return 0
-  local box entry j reason target kind
+  local box entry j reason target kind old_floor
   local -a boxes
   mapfile -d '' -t boxes < <(jq --raw-output0 '.seats | to_entries[] | select((.value.ids // [] | length) > 0) | .key' "$comms/wake.json")
   for box in "${boxes[@]}"; do
@@ -3818,6 +3820,8 @@ carrier_close_wakes() {
     carrier_hold || return 1
     entry=$(jq -c --arg box "$box" '.seats[$box] // empty' "$comms/wake.json") || { carrier_release; return 1; }
     if [[ -z $entry || -e $fcomms/.pointing/$box ]]; then carrier_release; continue; fi
+    old_floor=$(jq -r '.floor // ""' <<< "$entry")
+    if [[ -n $old_floor && -z ${b_floor[$old_floor]+x} ]]; then reason="no build makes the floor $old_floor"; fi
     jq -nc --arg box "$box" --arg reason "$reason" --argjson entry "$entry" --argjson start "$EPOCHSECONDS" --argjson rec "$(stat -c %s -- "$comms_record")" \
       '{box:$box,target:($entry.name // $box),ids:($entry.ids // []),start:$start,rec:$rec,outcome:"closed",reason:$reason}' \
       > "$fcomms/.pointing.new" && mv -fT -- "$fcomms/.pointing.new" "$fcomms/.pointing/$box" || { carrier_release; return 1; }
@@ -4186,6 +4190,7 @@ cmd_carry() {
       seat_fl+=("$(jq -r '.floor // ""' <<< "$entry")")
     done < <(jq -c '.seats[]' "$mail")
     carrier_names=$(jq -c '[.seats[].name]' "$mail")
+    carrier_box_floors=$(jq -c '[.seats[] | {key:.box,value:(.floor // "")}] | from_entries' "$mail")
     box_order=$(jq -c '[.seats[].box]' "$mail")
     comms=$(jq -r '.comms' "$mail") store=$(jq -r '.store' "$mail") mail_path=$(jq -r '.path' "$mail")
     # With floors what the carrier takes and its journal stand in its floor's state (5.162 point 1).

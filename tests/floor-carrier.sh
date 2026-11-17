@@ -426,4 +426,7 @@ PY
   check "[C112] down removes the managed link and its stamp" bash -c '[[ ! -e $1 && ! -L $1 && ! -e $2 ]]' _ "$link" "$stamp"
   check "[C112] down preserves the recorded data" grep -qxF retained "$s/floors/deck/records/Harbor Watch/retained"
   check "[C112] down preserves the unowned view file" grep -qxF local "$sentinel"
+  check "[C112] the same built floor starts again without rebuilding" exit_is 0 wp up bridge
+  check "[C112] its declared record link is recreated at up" test -L "$link"
+  check "[C112] stop the restarted Administration floor" exit_is 0 wp down bridge
 }

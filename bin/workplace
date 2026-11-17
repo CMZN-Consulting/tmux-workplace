@@ -25,7 +25,7 @@ run_floor="" f_gen=""
 report_floors=()
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git timeout mktemp cat flock dd mv tail date)
-LOG_PROGRAMS=(dd date tail head)
+LOG_PROGRAMS=(dd date tail head timeout mktemp cat)
 JOURNAL_PROGRAMS=(systemd-run systemctl journalctl)
 CHAIN_PERIOD=10
 WAKE_PERIOD=60
@@ -1549,6 +1549,11 @@ make_mail() {
     for taken_floor in "${floor_keys[@]}"; do
       make_dirs "$state_dir" "floors/$taken_floor/comms/taken" \
         || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
+      if [[ ! -e $state_dir/floors/$taken_floor/type.lock && ! -L $state_dir/floors/$taken_floor/type.lock ]]; then
+        ( umask 077 && : > "$state_dir/floors/$taken_floor/type.lock" ) || die "cannot make the floor's typing lock" 2
+      fi
+      [[ -f $state_dir/floors/$taken_floor/type.lock && ! -L $state_dir/floors/$taken_floor/type.lock && $(stat -c %a -- "$state_dir/floors/$taken_floor/type.lock") == 600 ]] \
+        || die "the floor's typing lock is not a regular file with mode 600" 2
     done
   else
     make_dirs "$state_dir" comms/taken || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
@@ -3115,9 +3120,19 @@ carrier_git_locks() {
 }
 
 carrier_tmux() {
-  local -a prefix=()
-  [[ -z $run_floor ]] || prefix=(floor_capture timeout --foreground --kill-after=1 10)
-  "${prefix[@]}" "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 6>&- 8>&- 9>&-
+  (( ${carrier_stop-0} == 0 )) || return 125
+  floor_capture timeout --foreground --kill-after=1 3 "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 5>&- 6>&- 8>&- 9>&-
+}
+
+carrier_type_hold() {
+  local floor=$1 wait=${2:-0} file
+  [[ -n $floor ]] || return 0
+  file=$state_dir/floors/$floor/type.lock
+  [[ -f $file && ! -L $file && $(stat -c %a -- "$file") == 600 && $(stat -c %u -- "$file") == "$EUID" ]] || return 1
+  exec 5>> "$file" || return 1
+  if flock -w "$wait" 5; then return 0; fi
+  exec 5>&-
+  return 1
 }
 
 carrier_look() {
@@ -3144,7 +3159,9 @@ carrier_type() {
   pid=$carrier_pid
   if [[ -n $text ]]; then
     [[ $text == *';' ]] && text=${text%;}'\;'
-    carrier_tmux send-keys -t "$pane" -l -- "$text" > /dev/null 2>&1 || return 3
+    local sent=0
+    carrier_tmux send-keys -t "$pane" -l -- "$text" > /dev/null 2>&1 || sent=$?
+    if (( sent != 0 )); then (( sent == 124 || sent == 137 || sent == 125 )) && return 9; return 3; fi
     [[ $key == none ]] && return 0
     carrier_rest "$KEY_REST"
     carrier_look "$pane"
@@ -3154,7 +3171,15 @@ carrier_type() {
       *) return 5 ;;
     esac
   fi
-  [[ $key == none ]] || carrier_tmux send-keys -t "$pane" "$key" > /dev/null 2>&1 || { [[ -n $text ]] && return 8; return 3; }
+  if [[ $key != none ]]; then
+    local sent_key=0
+    carrier_tmux send-keys -t "$pane" "$key" > /dev/null 2>&1 || sent_key=$?
+    if (( sent_key != 0 )); then
+      (( sent_key == 124 || sent_key == 137 || sent_key == 125 )) && return 9
+      [[ -n $text ]] && return 8
+      return 3
+    fi
+  fi
   return 0
 }
 
@@ -3595,12 +3620,15 @@ carrier_wake() {
   (( wake_any )) || return 0
   [[ -f $comms/wake.json ]] || return 0
   for i in "${own[@]}"; do
+    exec 5>&-
     (( carrier_stop )) && break
     [[ -n ${seat_wake[i]} && -n ${seat_pane[i]-} ]] || continue
     entry=$(jq -c --arg b "${seat_boxes[i]}" '.seats[$b] // empty' "$comms/wake.json" 2> /dev/null) || continue
     [[ -n $entry ]] || continue
     count=$(jq -r '.count // 0' <<< "$entry") last=$(jq -r '.last // 0' <<< "$entry") ids=$(jq -r '(.ids // []) | join(" ")' <<< "$entry")
     [[ $count =~ ^[0-9]+$ && $last =~ ^[0-9]+$ && -n $ids ]] && (( count > 0 && EPOCHSECONDS - last >= WAKE_PERIOD )) || continue
+    [[ ! -e $fcomms/.pointing/${seat_boxes[i]} ]] || continue
+    carrier_type_hold "$run_floor" 0 || continue
     out=$(carrier_tmux display-message -p -t "${seat_pane[i]}" '#{pane_in_mode}#{pane_dead}:#{@workplace}' \; capture-pane -p -t "${seat_pane[i]}" 2> /dev/null) || continue
     mark=${out%%$'\n'*}
     [[ ${mark#*:} == "$carrier_run" && ${mark%%:*} == 00 ]] || continue
@@ -3617,6 +3645,10 @@ carrier_wake() {
     [[ -n $run_floor && ${floor_unenforced-0} == 1 ]] && visible_mail=$mail_path/${seat_names[i]}
     text="mail: $count new, newest ${ids##* }.md, in $visible_mail/in, and the page $visible_mail/README.md says what this line is"
     sum=$(printf '%s' "$text" | sha256sum)
+    jq -nc --arg box "${seat_boxes[i]}" --arg target "${seat_names[i]}" --arg ids "$ids" \
+      --argjson start "$EPOCHSECONDS" --argjson rec "$(stat -c %s -- "$comms_record")" --argjson length "${#text}" --arg sha "${sum%% *}" \
+      '{box:$box,target:$target,ids:($ids | split(" ")),start:$start,rec:$rec,length:$length,sha256:$sha}' \
+      > "$fcomms/.pointing.new" && mv -fT -- "$fcomms/.pointing.new" "$fcomms/.pointing/${seat_boxes[i]}" || continue
     carrier_type "${seat_pane[i]}" "$text" Enter
     typed=$?
     case $typed in
@@ -3624,23 +3656,56 @@ carrier_wake() {
       1) outcome=refused reason="the pane of ${seat_names[i]} does not answer" ;;
       2) outcome=refused reason="the pane of ${seat_names[i]} does not carry this run's mark, or is gone" ;;
       4) outcome=refused reason="the pane of ${seat_names[i]} is in ${carrier_mode:-a mode}, so its program would not read what is typed" ;;
+      9) outcome=unknown reason="the server did not answer within three seconds; whether the pointer was typed is not known" ;;
       5 | 6 | 7 | 8) outcome=refused reason=$(carrier_apart "$typed" "${seat_names[i]}") ;;
       *) outcome=refused reason="tmux did not take the line" ;;
     esac
-    pend_box=${seat_boxes[i]} pend_ids=$ids pend_outcome=$outcome pend_last=$EPOCHSECONDS
-    carrier_append "$(carrier_wake_record "${seat_names[i]}" "$ids" "$outcome" "$reason" "${#text} ${sum%% *}")"
-    carrier_settle || return 0
+    exec 5>&-
+    jq -c --arg outcome "$outcome" --arg reason "$reason" '.outcome=$outcome | .reason=$reason' \
+      "$fcomms/.pointing/${seat_boxes[i]}" > "$fcomms/.pointing.new" \
+      && mv -fT -- "$fcomms/.pointing.new" "$fcomms/.pointing/${seat_boxes[i]}" || continue
+    carrier_pointer_record "$fcomms/.pointing/${seat_boxes[i]}"
   done
+  exec 5>&-
+  carrier_settle
 }
 
-# A pointer's line is written once it is typed, in one write; its entry is then settled under the store's lock: its time
-# in last, and on ok exactly the ids it named taken out, so that ids delivered meanwhile by another floor stay due. Until
-# it is settled, no other pointer is typed and no request is taken; at the carrier's end it is settled with a hold of
-# its own.
+
+carrier_pointer_record() {
+  local file=$1 journal target ids outcome reason rec written line found
+  journal=$(jq -ce 'select(.ids | type == "array")' "$file") || return 1
+  target=$(jq -r .target <<< "$journal")
+  ids=$(jq -r '.ids | join(" ")' <<< "$journal")
+  outcome=$(jq -r '.outcome // "unknown"' <<< "$journal")
+  reason=$(jq -r '.reason // "the carrier stopped while it typed this pointer, and whether it was typed is not known"' <<< "$journal")
+  rec=$(jq -r .rec <<< "$journal")
+  [[ $rec =~ ^[0-9]+$ ]] || return 1
+  if ! jq -e 'has("outcome")' <<< "$journal" > /dev/null; then
+    jq -c --arg reason "$reason" '.outcome="unknown" | .reason=$reason' <<< "$journal" > "$fcomms/.pointing.new" \
+      && mv -fT -- "$fcomms/.pointing.new" "$file" || return 1
+  fi
+  written=$(jq -r '"\(.length) \(.sha256)"' <<< "$journal")
+  found=$(tail -c "+$(( rec + 1 ))" -- "$comms_record" | jq -R -s -c --arg target "$target" --arg ids "$ids" --arg outcome "$outcome" --arg written "$written" \
+    '[split("\n")[] | fromjson? | objects | select(.action == "wake" and .target == [$target] and .covers == ($ids | split(" ")) and .outcome == $outcome and "\(.length) \(.sha256)" == $written)][0] // empty')
+  [[ -z $found ]] || return 0
+  line=$(carrier_wake_record "$target" "$ids" "$outcome" "$reason" "$written") || return 1
+  carrier_append "$line"
+}
+
 carrier_settle() {
-  [[ -n $pend_box ]] || return 0
+  [[ -n $fcomms && -d $fcomms/.pointing ]] || return 0
+  local file journal pend_box pend_ids pend_outcome pend_last failed=0
+  local -a journals=("$fcomms"/.pointing/*)
+  (( ${#journals[@]} )) || return 0
+  for file in "${journals[@]}"; do carrier_pointer_record "$file" || return 1; done
   carrier_hold ${1-} || return 1
-  carrier_wake_put "" "" '
+  for file in "${journals[@]}"; do
+    journal=$(jq -c . "$file") || { failed=1; break; }
+    pend_box=$(jq -r .box <<< "$journal")
+    pend_ids=$(jq -r '.ids | join(" ")' <<< "$journal")
+    pend_outcome=$(jq -r '.outcome // "unknown"' <<< "$journal")
+    pend_last=$(jq -r .start <<< "$journal")
+    if ! carrier_wake_put "" "" '
     $ARGS.positional as [$b, $last, $outcome, $typed]
     | if .seats[$b] == null then .
       else .seats[$b] |= (.last = ($last | tonumber)
@@ -3650,9 +3715,11 @@ carrier_settle() {
             | .count = (.ids | length)
             | .since = (if .count == 0 then null else (([.times[]?] | min) // .since) end)
           else . end)
-      end' "$pend_box" "$pend_last" "$pend_outcome" "$pend_ids"
-  pend_box=""
+      end' "$pend_box" "$pend_last" "$pend_outcome" "$pend_ids"; then failed=1; break; fi
+    rm -f -- "$file" || { failed=1; break; }
+  done
   carrier_release
+  return "$failed"
 }
 
 carrier_record_mend() {
@@ -3746,7 +3813,7 @@ carrier_recover() {
       attempts=$(jq -r '.lookupFailures // 0' <<< "$journal")
       carrier_progress --argjson n "$(( attempts + 1 ))" '.lookupFailures = $n' || return 1
       (( attempts >= 2 )) || return 1
-      reason="the carrier could not tell whether this was delivered; look in the store for deliver $carrier_id before you send it again"
+      reason="the carrier could not tell whether this was delivered; look in the store for deliver $carrier_id before resubmitting this request"
       [[ -d $answers ]] && carrier_answer "$answers" "$request" "refused $reason"
       carrier_record "$seat" "$request" mail '[]' refused "$reason" || return 1
       rm -f -- "$fcomms/serving"
@@ -3949,6 +4016,7 @@ cmd_carry() {
     # With floors what the carrier takes and its journal stand in its floor's state (5.162 point 1).
     fcomms=$comms
     [[ -n $run_floor ]] && fcomms=$floor_state/comms
+    mkdir -m 0700 -p -- "$fcomms/.pointing" || die "cannot make the pointer journal directory" 2
     taken=$fcomms/taken
     [[ -d $taken && ! -L $taken && $(stat -c %a -- "$taken") == 700 ]] || die "$taken is not the carrier's directory of what it takes, mode 700; build again" 2
     comms_record=$fcomms/record
@@ -4015,7 +4083,7 @@ cmd_carry() {
     else
       floor_fault_recorded=0
     fi
-    [[ -n $pend_box ]] && carrier_settle
+    carrier_settle
     if [[ -n $store && -z $pend_box && -f $fcomms/serving ]] && carrier_hold; then
       carrier_recover
       carrier_release
@@ -4030,7 +4098,7 @@ cmd_carry() {
     (( ${#record_names[@]} )) && { carrier_watch; carrier_chain; }
     (( carrier_stop )) || carrier_pause 1
   done
-  [[ -n $pend_box ]] && carrier_settle final
+  carrier_settle final
   if (( ${#pend_lines[@]} )); then
     if carrier_hold final; then
       carrier_release
@@ -4579,7 +4647,18 @@ seats_report() {
     [[ $b_layout == generations ]] && store_status "$(jq -r '.store' "$b_mail")"
     file=$(jq -r '.comms' "$b_mail")/wake.json
     if [[ -f $file ]]; then
-      jq -r --slurpfile w "$file" '.seats[] | select(.wake != null) | . as $s | ($w[0].seats[$s.box] // null) as $p
+      local pointed='[]' state_path
+      local -a pointer_files=()
+      state_path=$(jq -r '.state' "$b_mail")
+      if [[ $b_layout == generations ]]; then pointer_files=("$state_path"/floors/*/comms/.pointing/*)
+      else pointer_files=("$state_path"/comms/.pointing/*); fi
+      if (( ${#pointer_files[@]} )); then pointed=$(jq -s '[.[] | select(.outcome == "ok")]' "${pointer_files[@]}") || pointed='[]'; fi
+      jq -r --argjson pointed "$pointed" --slurpfile w "$file" '
+        (reduce $pointed[] as $p ($w[0];
+          if .seats[$p.box] == null then . else
+            .seats[$p.box] |= (.ids -= $p.ids | .count=(.ids | length)
+              | .since=(if .count == 0 then null else ([.ids[] as $id | .times[$id] // .since] | min) end)) end)) as $pending
+        | .seats[] | select(.wake != null) | . as $s | ($pending.seats[$s.box] // null) as $p
         | select($p != null and ($p.count // 0) > 0)
         | "wake    \($s.name) (\($s.seat | join("/"))): \($p.count) delivered and not yet pointed out, the first at \($p.since)"' "$b_mail" 2> /dev/null
     fi

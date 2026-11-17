@@ -144,10 +144,72 @@ t_carrier_request_recovery() {
   jq -nc --argjson rec "$rec" '{id:"invalid-base",box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.md",action:"mail",stage:"delivering",rec:$rec,base:"ffffffffffffffffffffffffffffffffffffffff"}' > "$c/serving"
   printf '%s\n' preserve > "$s/mail/Lodge Ida/in/invalid-base.md"
   check "[C108] invalid base is handled by bounded recovery retries" exit_is 0 wp up deck
-  check "[C108] no delivery verdict is invented for an unreadable commit range" answered keeper uncertain.md "refused the carrier could not tell whether this was delivered; look in the store for deliver invalid-base before you send it again"
+  check "[C108] no delivery verdict is invented for an unreadable commit range" answered keeper uncertain.md "refused the carrier could not tell whether this was delivered; look in the store for deliver invalid-base before resubmitting this request"
   check "[C108] uncertain recipient data is retained for inspection" test -f "$s/mail/Lodge Ida/in/invalid-base.md"
   request keeper after.md "to: Lodge Ida" "subject: after recovery" --- body
   check "[C108] failed lookup recovery does not block later mail" answered_ok keeper after.md
   check "[C108] stop source" exit_is 0 wp down deck
   check "[C108] stop other floor" exit_is 0 wp down lodge
+}
+
+t_carrier_pointer_recovery() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/screens" "$scratch/tmux-wrapper"
+  printf '%s\n' busy > "$root/screens/screen"
+  statements_plan "$floors_terms | $comms_terms"' | kinds([
+    ["harbor","dock","keeper","clerk"],["harbor","dock","pilot","clerk"],["harbor","tower","watch","clerk"],
+    ["orchard","barn","grower","clerk"],["orchard","barn","picker","clerk"],["lodge","east","ida","clerk"]])
+    | .programs[-1].recorded += [m(["reach","harbor","-","-","office","mail","lodge","-","-","floor","allowed"];2),
+      m(["wake","clerk","^waiting>$"];3), st("lodge";"east";"-";"room";$root+"/screens";"read-write";20)]
+    | (.programs[] | select(.path == "lodge/east/ida/seat.typify") | .plan[1].term[5]) |=
+      (fromjson + ["screen="+$root+"/screens/screen","typed="+$root+"/screens/typed"] | tojson)'
+  check "[C109] pointer recovery fixture plans" exit_is 0 wplan
+  check "[C109] fixture builds" exit_is 0 wp build
+  local s c record real_tmux pid id other start holder rec
+  s=$(state_of) c=$s/floors/lodge/comms record=$c/record
+  real_tmux=$(command -v tmux)
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'typing=0; for a in "$@"; do [[ $a == send-keys ]] && typing=1; done' \
+    "if (( typing )) && [[ -f '$scratch/pointer-stop' ]]; then" \
+    "  '$real_tmux' \"\$@\" || exit" \
+    "  printf '%s\\n' stopped > '$scratch/pointer-entered'" \
+    "  kill -STOP \"\$(cat '$scratch/pointer-pid')\"; exit 0" \
+    'fi' \
+    "exec '$real_tmux' \"\$@\"" > "$scratch/tmux-wrapper/tmux"
+  chmod +x -- "$scratch/tmux-wrapper/tmux"
+  check "[C109] start source floor" exit_is 0 wp up deck
+  check "[C109] start destination with the typing-only gate" exit_is 0 env PATH="$scratch/tmux-wrapper:$PATH" "$BASH" "$loop" up lodge
+  pid=$(carrier_pid lodge); printf '%s\n' "$pid" > "$scratch/pointer-pid"
+  request keeper one.md "to: Lodge Ida" "subject: one" --- body
+  check "[C109] first mail delivers while the reader is busy" answered_ok keeper one.md
+  id=$(answer_of keeper one.md); id=${id#ok }
+  : > "$scratch/pointer-stop"
+  printf '%s\n' ready > "$root/screens/screen"
+  check "[C109] actual tmux typing reaches the gate" eventually_long test -s "$scratch/pointer-entered"
+  check "[C109] carrier stopped after typing, before recording the outcome" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
+  check "[C109] pointer evidence was journalled before the effect" jq -e --arg id "$id" '.ids==[$id] and (.length>0) and (.sha256|length)==64 and (has("outcome")|not)' "$c/.pointing/Lodge Ida"
+  check "[C109] kill only the stopped carrier" kill -KILL "$pid"
+  rm -f -- "$scratch/pointer-stop"
+  printf '%s\n' busy > "$root/screens/screen"
+  check "[C109] close the dead reader run" exit_is 0 wp down lodge
+  check "[C109] restart a fresh reader carrier" exit_is 0 wp up lodge
+  check "[C109] recovery records uncertainty without any new request" eventually_long bash -c 'jq -e --arg id "$2" "select(.action==\"wake\" and .covers==[\$id] and .outcome==\"unknown\" and .length>0)" "$1" >/dev/null' _ "$record" "$id"
+  check "[C109] uncertain pointer IDs remain due with a retry timestamp" eventually_long bash -c 'jq -e --arg id "$2" ".seats[\"Lodge Ida\"] | .ids==[\$id] and .last>0" "$1" >/dev/null' _ "$s/comms/wake.json" "$id"
+  request keeper two.md "to: Lodge Ida" "subject: two" --- body
+  check "[C109] later mail delivers independently" answered_ok keeper two.md
+  other=$(answer_of keeper two.md); other=${other#ok }
+  check "[C109] stop the reader for the successful-record window" exit_is 0 wp down lodge
+  rec=$(stat -c %s -- "$record") start=$EPOCHSECONDS
+  jq -nc --arg id "$id" --argjson rec "$rec" --argjson start "$start" '{box:"Lodge Ida",target:"Lodge Ida",ids:[$id],start:$start,rec:$rec,length:3,sha256:"abc",outcome:"ok",reason:""}' > "$c/.pointing/Lodge Ida"
+  flock -o "$s/mail" sleep 60 & holder=$!
+  check "[C109] hold the shared store while the local pointer record is recovered" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
+  check "[C109] reader starts despite the store holder" exit_is 0 wp up lodge
+  check "[C109] successful outcome is recorded even before settlement can take the lock" eventually_long bash -c 'jq -e --arg id "$2" "select(.action==\"wake\" and .covers==[\$id] and .outcome==\"ok\")" "$1" >/dev/null' _ "$record" "$id"
+  wp status lodge > "$scratch/pointer-status" 2>&1
+  check "[C109] status excludes already-pointed IDs while settlement waits" grep -qF 'Lodge Ida (lodge/east/ida): 1 delivered and not yet pointed out' "$scratch/pointer-status"
+  pkill -P "$holder" sleep 2> /dev/null; wait "$holder" 2> /dev/null
+  check "[C109] settle removes only the pointed ID and preserves later delivery" eventually_long bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.ids,.count]" "$1") == "[[\"$2\"],1]" ]] && [[ ! -e $3 ]]' _ "$s/comms/wake.json" "$other" "$c/.pointing/Lodge Ida"
+  check "[C109] stop reader" exit_is 0 wp down lodge
+  check "[C109] stop source" exit_is 0 wp down deck
 }

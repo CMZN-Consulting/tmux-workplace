@@ -3809,13 +3809,13 @@ t_store_lock() {
   check "[C57] one commit for each delivery, and ids that no two floors share, counted once" \
     bash -c '[[ $1 == 9 && $2 == 9 && $(printf "%s\n" "${@:4}" | sort -u | wc -l) == 9 && $3 == 9 ]]' _ "$(store_commits)" "${#ids[@]}" "$(< "$s/comms/next")" "${ids[@]}"
   check "[C57] each commit holds its own mail alone: its readers' in and its writer's sent" bash -c '
-    s=$1; shift
+    s=$1; record=$2; shift 2
     for id in "$@"; do
-      want=$(jq -r --arg id "$id" "select(.id == \$id and .action == \"mail\") | ([.target[] | \"\(.)/in/\(\$id).md\"] + [\"\(.seat)/sent/\(\$id).md\"]) | sort[]" "$scratch/requests-joined")
+      want=$(jq -r --arg id "$id" "select(.id == \$id and .action == \"mail\") | ([.target[] | \"\(.)/in/\(\$id).md\"] + [\"\(.seat)/sent/\(\$id).md\"]) | sort[]" "$record")
       commit=$(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" log --format=%H --grep="^deliver $id\$")
       got=$(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" show --name-only --format= "$commit" | sort)
       [[ -n $commit && $want == "$got" ]] || exit 1
-    done' _ "$s" "${ids[@]}"
+    done' _ "$s" "$scratch/requests-joined" "${ids[@]}"
   check "[C96] each mail's decision lines stand together, just before its line, though two floors write the record" \
     bash -c 'for id in "${@:2}"; do jq -R -s -e --arg id "$id" "[split(\"\n\")[] | fromjson? | objects] | (to_entries | map(select(.value.seat == \"the frame\" and .value.covers == [\$id] and (.value | has(\"length\") | not)) | .key)) as \$k
       | (to_entries | map(select(.value.id == \$id and .value.action == \"mail\") | .key)) as \$m
@@ -3952,8 +3952,8 @@ t_wake_floors() {
   sleep 2
   check "[C94] 5.162 point 1: while the lock is held the pointer is not settled: its ids stay in wake.json" \
     test "$(jq -c '.seats["Lodge Ida"].ids' "$s/comms/wake.json")" = "[\"$k1\"]"
-  check "[C57] review of 4a: and its line is not written without the lock: it waits for the carrier's next hold" \
-    bash -c '[[ -z $(jq -c "select(.action == \"wake\" and has(\"length\"))" "$1") ]]' _ "$s/floors/lodge/comms/record"
+  check "[C57] 4b: its line is recorded immediately in the floor record while the store lock is held" \
+    bash -c '[[ -n $(jq -c "select(.action == \"wake\" and has(\"length\"))" "$1") ]]' _ "$s/floors/lodge/comms/record"
   jq --arg x "$x" '.seats["Lodge Ida"] |= (.ids += [$x] | .times[$x] = "2026-11-14T23:59:59Z" | .count = (.ids | length))' \
     "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
   pkill -P "$holder" sleep 2> /dev/null
@@ -5685,7 +5685,7 @@ export LC_ALL=C'
     bash -c '[[ $(grep -oE "The fold'"'"'s version is \`[^\`]+\`" "$1/CONTRACT.md" | grep -c .) == 1 && $(grep -oE "The fold'"'"'s version is \`[^\`]+\`" "$1/CONTRACT.md" | cut -d"\`" -f2) == "$(sed -n "s/^FOLD_DERIVATION=//p" "$1/bin/workplace")" ]]' _ "$tool"
   local n missing=""
   for n in $(grep -oE '\*\*C[0-9]+\.\*\*' "$tool/CONTRACT.md" | tr -d '*.'); do
-    grep -qE "^[[:space:]]*check \"\\[$n\\]" "$here/run.sh" || missing+=" $n"
+    grep -qE "^[[:space:]]*check \"\\[$n\\]" "$here/run.sh" "$here/floor-carrier.sh" || missing+=" $n"
   done
   check "every sentence of the contract is shown by a check that carries its number${missing:+ (missing:$missing)}" test -z "$missing"
 }
@@ -7757,6 +7757,7 @@ tests=(
   t_store_lock
   t_carrier_git_deadlines
   t_carrier_request_recovery
+  t_carrier_pointer_recovery
   t_wake_floors
   t_carrier_floors
   t_floors_readers

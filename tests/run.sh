@@ -3321,6 +3321,22 @@ t_floor_default_refusals() {
     tmux -S "$socket" -f /dev/null new-session -d -s foreign
   tmux -S "$socket" set-option -g @foreign unchanged \; set-environment -g FOREIGN harmless
   before=$(floor_server_digest "$socket")
+  local stopped_pid
+  stopped_pid=$(tmux -S "$socket" display-message -p '#{pid}')
+  [[ $stopped_pid =~ ^[1-9][0-9]*$ ]] || { fail "[C105] floor default: the synthetic server has no pid"; return 1; }
+  trap 'kill -CONT "$stopped_pid" 2>/dev/null || :; exit 1' HUP INT TERM
+  kill -STOP "$stopped_pid" || return 1
+  check "[C105] floor default: the synthetic default server is stopped" \
+    grep -q '^State:.*T' "/proc/$stopped_pid/status"
+  check "[C105] floor default: up refuses the stopped server before the outer deadline" \
+    exit_is 1 timeout --foreground --kill-after=1 10 "$BASH" "$loop" up bridge
+  check "[C105] floor default: the refusal comes from the two-second probe" said "did not answer within two seconds"
+  check "[C102] floor default: the stopped-server refusal releases the floor lock" \
+    flock -n "$HOME/.local/state/workplace/$label/floors/bridge/up.lock" true
+  check "[C105] floor default: the stopped-server refusal creates no run" test ! -d "$run/bridge"
+  kill -CONT "$stopped_pid"
+  trap - HUP INT TERM
+  check "[C105] floor default: the resumed personal server is unchanged" test "$(floor_server_digest "$socket")" = "$before"
   check "[C101] floor default: foreign server is refused" exit_is 1 wp up bridge
   check "[C101] floor default: refusal names its socket" said "the server at $socket does not carry this clone's mark"
   check "[C101] floor default: foreign sessions, options, hooks and environment remain unchanged" test "$(floor_server_digest "$socket")" = "$before"

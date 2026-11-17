@@ -37,7 +37,7 @@ floor_prepare() {
   if [[ $floor_socket_kind == tmux-default ]]; then
     floor_socket=$(physical_spelling "${TMUX_TMPDIR:-/tmp}/tmux-$EUID")/default
     local found rc=0 pid mark nnp config_hash
-    found=$(timeout --foreground --kill-after=1 2 "$(command -v tmux)" -N -S "$floor_socket" -u \
+    found=$(floor_capture timeout --foreground --kill-after=1 2 "$(command -v tmux)" -N -S "$floor_socket" -u \
       display-message -p '#{pid} #{@workplace-clone}' 2>/dev/null 6>&-) || rc=$?
     if (( rc == 0 )); then
       pid=${found%% *} mark=${found#* }

@@ -7212,7 +7212,7 @@ t_alias_access_review() {
     'printf "%s\n" "${alias_access_report-}"' 'exit "$rc"' >> "$runner"
   while IFS= read -r id; do
     base=$root/alias-review/$id
-    mkdir -p -- "$base/tree/vault/open" "$base/mask/sub"
+    mkdir -p -- "$base/tree/vault/open" "$base/mask/sub" "$base/data/vault" "$base/data/sub/vault"
     data=$(jq -c --arg id "$id" --arg base "$base" --arg uid "$EUID" \
       '.[] | select(.id == $id) | walk(if type == "string" then gsub("@R@"; $base) | gsub("@UID@"; $uid) else . end)' "$fixtures/alias-review-cases.json")
     mapfile -d '' -t entries < <(jq --raw-output0 '(.links // [])[] | .[]' <<< "$data")

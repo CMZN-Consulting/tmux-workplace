@@ -633,5 +633,397 @@
       ]
     ],
     "expected": "refuse"
+  },
+  {
+    "id": "F1-parent-mask-escape-hidden",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/data",
+        "read-write"
+      ],
+      [
+        "@R@/data/vault",
+        "hidden"
+      ],
+      [
+        "@R@/mask/escape",
+        "read-write"
+      ]
+    ],
+    "links": [
+      [
+        "mask/escape",
+        "../data"
+      ]
+    ],
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ],
+    "expected": "refuse"
+  },
+  {
+    "id": "F1-parent-mask-escape-numbered",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/data",
+        "read-write"
+      ],
+      [
+        "@R@/data/vault",
+        "hidden"
+      ],
+      [
+        "@R@/mask/escape",
+        "read-write"
+      ]
+    ],
+    "links": [
+      [
+        "mask/escape",
+        "../data"
+      ]
+    ],
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ],
+    "expected": "refuse",
+    "labels": [
+      [
+        "@R@/data/vault",
+        "0"
+      ]
+    ]
+  },
+  {
+    "id": "F1-parent-mask-escape-key",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/data",
+        "read-write"
+      ],
+      [
+        "@R@/data/vault",
+        "hidden"
+      ],
+      [
+        "@R@/mask/escape",
+        "read-write"
+      ]
+    ],
+    "links": [
+      [
+        "mask/escape",
+        "../data"
+      ]
+    ],
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ],
+    "expected": "refuse",
+    "keys": [
+      [
+        "synthetic",
+        "@R@/data/vault"
+      ]
+    ]
+  },
+  {
+    "id": "F1-middle-mask-escape",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/data/sub",
+        "read-write"
+      ],
+      [
+        "@R@/data/sub/vault",
+        "hidden"
+      ],
+      [
+        "@R@/mask/escape/sub",
+        "read-write"
+      ]
+    ],
+    "links": [
+      [
+        "mask/escape",
+        "../data"
+      ]
+    ],
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ],
+    "expected": "refuse"
+  },
+  {
+    "id": "F1-control-explicit-projected-cover",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/data",
+        "read-write"
+      ],
+      [
+        "@R@/data/vault",
+        "hidden"
+      ],
+      [
+        "@R@/mask/escape",
+        "read-write"
+      ],
+      [
+        "@R@/mask/escape/vault",
+        "hidden"
+      ]
+    ],
+    "links": [
+      [
+        "mask/escape",
+        "../data"
+      ]
+    ],
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ],
+    "expected": "accept"
+  },
+  {
+    "id": "F2-ro-alias-missing-hidden",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "hidden"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ]
+    ],
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ],
+    "expected": "refuse"
+  },
+  {
+    "id": "F2-control-covered-ro-hidden",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "hidden"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ],
+      [
+        "@R@/alias/future",
+        "hidden"
+      ]
+    ],
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ],
+    "expected": "accept"
+  },
+  {
+    "id": "F2-ro-alias-missing-scratch",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "scratch"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ]
+    ],
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ],
+    "expected": "refuse"
+  },
+  {
+    "id": "F2-control-covered-ro-scratch",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "scratch"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ],
+      [
+        "@R@/alias/future",
+        "scratch"
+      ]
+    ],
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ],
+    "expected": "accept"
+  },
+  {
+    "id": "F2-ro-alias-missing-searchable-only",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "searchable-only"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ]
+    ],
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ],
+    "expected": "refuse"
+  },
+  {
+    "id": "F2-control-covered-ro-searchable-only",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "searchable-only"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ],
+      [
+        "@R@/alias/future",
+        "searchable-only"
+      ]
+    ],
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ],
+    "expected": "accept"
+  },
+  {
+    "id": "M-beneath-mask-not-terminal",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/mask/sub",
+        "read-only"
+      ]
+    ],
+    "masks": [
+      [
+        "@R@/mask",
+        "beneath",
+        "synthetic runtime mask"
+      ]
+    ],
+    "expected": "refuse"
   }
 ]

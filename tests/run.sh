@@ -59,7 +59,14 @@ setup() {
   scratch=$(cd -P -- "$scratch" && pwd -P)
   export HOME=$scratch/home
   export TMUX_TMPDIR=$scratch/t
-  mkdir -p -- "$HOME" "$TMUX_TMPDIR"
+  mkdir -p -- "$HOME"
+  mkdir -m 0700 -- "$TMUX_TMPDIR"
+  local socket_base
+  socket_base=$(cd -P -- "$TMUX_TMPDIR" && pwd -P) || return 1
+  [[ $socket_base != /tmp && $socket_base/tmux-$EUID/default != /tmp/tmux-$EUID/* ]] \
+    || { fail "the test would reach the machine's tmux socket directory"; return 1; }
+  [[ $(stat -c %a -- "$TMUX_TMPDIR") == 700 ]] \
+    || { fail "the test's TMUX_TMPDIR is not private"; return 1; }
   root=$scratch/root
   mkdir -p -- "$root/tools" \
     "$root/harbor/ledger" "$root/harbor/charts" "$root/harbor/berth" "$root/harbor/vault/shelf" \
@@ -3145,6 +3152,53 @@ t_floors_up() {
   check "down lodge" exit_is 0 wp down lodge
   check "[C99] unbuild, with every floor down" exit_is 0 wp unbuild
   check "[C99] removes the empty RUN with the build" test ! -e "$clone/BUILD"
+}
+
+t_floor_command_exclusion() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "floor exclusion: plan" exit_is 0 wplan
+  check "floor exclusion: build" exit_is 0 wp build
+  local s=$HOME/.local/state/workplace/$label
+  ( umask 077; : > "$s/floors/deck/up.lock"; : > "$s/floors/deck/up.holder" )
+  printf '%s\n' '{"command":"up deck","pid":4242,"at":"2026-11-17T00:00:00Z"}' > "$s/floors/deck/up.holder"
+  exec {held}>> "$s/floors/deck/up.lock"
+  flock "$held"
+  local verb before=$SECONDS
+  for verb in up restart down; do
+    if [[ $verb == restart ]]; then
+      mkdir -p -- "$run/deck"
+      printf '%s\n' '{}' > "$run/deck/state.json"
+    fi
+    check "floor exclusion: $verb refuses the held floor" exit_is 1 wp "$verb" deck
+    check "floor exclusion: $verb names the holder" said "up deck holds the floor deck, process 4242"
+  done
+  check "floor exclusion: no command waits for the holder" test "$(( SECONDS - before ))" -lt 10
+  exec {held}>&-
+  rm -rf -- "$run/deck"
+  mkdir -- "$scratch/gate-bin"
+  local real_tmux
+  real_tmux=$(command -v tmux)
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'for arg in "$@"; do if [[ $arg == start-server ]]; then' \
+    '  : > "$WP_GATE/entered"' \
+    '  while [[ ! -e $WP_GATE/release ]]; do read -r -t 0.05 _ <> <(:) || :; done' \
+    'fi; done' \
+    'exec "$WP_REAL_TMUX" "$@"' > "$scratch/gate-bin/tmux"
+  chmod +x -- "$scratch/gate-bin/tmux"
+  WP_GATE=$scratch WP_REAL_TMUX=$real_tmux PATH="$scratch/gate-bin:$PATH" wp up deck > "$scratch/blocked-up" 2>&1 &
+  local starter=$!
+  check "floor exclusion: actual up reaches its first tmux call" eventually test -f "$scratch/entered"
+  check "floor exclusion: its floor lock is still held through startup" bash -c '! flock -n "$1" true' _ "$s/floors/deck/up.lock"
+  before=$SECONDS
+  check "floor exclusion: down refuses during an actual up" exit_is 1 wp down deck
+  check "floor exclusion: down names that up" said "up deck holds the floor deck"
+  check "floor exclusion: down returns before startup is released" test "$(( SECONDS - before ))" -lt 5
+  : > "$scratch/release"
+  check "floor exclusion: original up completes" wait "$starter"
+  check "floor exclusion: no daemon inherits the floor lock" flock -n "$s/floors/deck/up.lock" true
+  check "floor exclusion: down after startup" exit_is 0 wp down deck
 }
 
 # The store's lock (5.162 point 1, the DA's specimen): two floors' carriers deliver at one time on one store, one hold
@@ -7052,6 +7106,7 @@ t_alias_access_key_sources() {
 
 tests=(
   t_alias_access_review
+  t_floor_command_exclusion
   t_alias_access_mask_failure
   t_alias_access_key_sources
   t_alias_access_rechecks
@@ -7147,7 +7202,7 @@ for name in "${tests[@]}"; do
     test_failed=0
     label2=""
     trap 'cleanup || exit 1' EXIT
-    setup "${name#t_}"
+    setup "${name#t_}" || exit 1
     "$name"
     exit "$test_failed"
   )

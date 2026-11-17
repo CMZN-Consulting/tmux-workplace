@@ -2075,10 +2075,15 @@ seat_floor() {
 # it, and a second up or restart of F is refused at once with exit 1, naming the holder; unbuild takes it too, and
 # writes no holder. Its descriptor, fd 6, is closed in every process the command starts.
 floor_lock() {
-  local floor=$1 command=$2 base s file
+  local floor=$1 command=$2 base s file workplace
   command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
   base=$(state_root) || die "$command needs the workplaces' state directory for the floor's lock, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
-  s=$base/$(jq -r '.name // "default"' <<< "$report")/floors/$floor
+  if [[ -n ${report-} ]]; then
+    workplace=$(jq -er '.name | strings | select(length > 0)' <<< "$report") || die "$command cannot name the workplace" 2
+  else
+    workplace=$(derive_name sha256-path-prefix12-v1) || die "$command cannot name the workplace" 2
+  fi
+  s=$base/$workplace/floors/$floor
   [[ -d $s && ! -L $s ]] || die "$command refuses: the floor $floor's state $s is missing; build again"
   for file in up.lock up.holder; do
     if [[ ! -e $s/$file && ! -L $s/$file ]]; then ( umask 077 && : >> "$s/$file" ) || die "cannot make $s/$file" 2; fi
@@ -2660,7 +2665,7 @@ start_carrier() {
     [[ -n ${HOME-} ]] && environment+=(--setenv=HOME="$HOME")
     [[ -n ${XDG_STATE_HOME-} ]] && environment+=(--setenv=XDG_STATE_HOME="$XDG_STATE_HOME")
     if ! systemd-run --user --quiet --collect --unit="$unit" -p WorkingDirectory=/ -p NoNewPrivileges=yes -p KillMode=mixed -p SyslogIdentifier=workplace-carrier "${environment[@]}" \
-      -- "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry ${run_floor:+"$run_floor"} > "$run_dir/carrier.log" 2>&1; then
+      -- "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry ${run_floor:+"$run_floor"} > "$run_dir/carrier.log" 2>&1 6>&-; then
       warn "the user manager did not start the carrier's unit $unit: $(tail -n 1 "$run_dir/carrier.log")"
       return 1
     fi
@@ -2696,7 +2701,7 @@ start_carrier() {
     say "up: the carrier, unit $unit, invocation $invocation"
     return 0
   fi
-  ( cd / && exec "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry ${run_floor:+"$run_floor"} < /dev/null > "$run_dir/carrier.log" 2>&1 ) &
+  ( cd / && exec "$setpriv_program" --no-new-privs "$BASH" "$build_dir/bin/workplace" carry ${run_floor:+"$run_floor"} < /dev/null > "$run_dir/carrier.log" 2>&1 6>&- ) &
   pid=$!
   for (( i = 0; i < 100; i++ )); do
     [[ -e $run_dir/carrier/ready ]] && break
@@ -2766,7 +2771,6 @@ cmd_up() {
     # RUN is made without -p, so that an up that finds BUILD gone stops here.
     [[ -d $build_dir/RUN ]] || mkdir -- "$build_dir/RUN" 2> /dev/null || [[ -d $build_dir/RUN ]] || die "cannot make $build_dir/RUN" 2
     mkdir -- "$run_dir" 2> /dev/null || die "the floor $run_floor is up already ($run_dir exists); run workplace down $run_floor first"
-    floor_unlock
     # In 4a a floor's server reads no file of the floor's own: it starts on this empty one, and the frame's set that
     # must follow the floor's file comes with that file in 4a2 (5.167 point 5). status says so.
     : > "$run_dir/tmux.conf" || die "cannot write $run_dir/tmux.conf" 2
@@ -4292,6 +4296,7 @@ cmd_down() {
     [[ -n $1 && $1 != */* && $1 != . && $1 != .. ]] || die "the build has no floor $1" 2
     [[ -n ${b_floor[$1]+x} || -d $build_dir/RUN/$1 ]] || die "the build has no floor $1" 2
     floor_scope "$1"
+    if [[ -n ${b_floor[$run_floor]+x} ]]; then floor_lock "$run_floor" "down $run_floor"; fi
     if [[ ! -d $run_dir ]]; then
       say "down: the floor $run_floor is not up under $clone"
       return 0

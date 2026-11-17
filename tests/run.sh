@@ -6784,7 +6784,8 @@ t_records_verify() {
   check "[C75] record verify refuses a seat the workplace does not make, with exit 2" exit_is 2 wp record verify "Ghost" "$day"
   check "up" exit_is 0 wp up
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
-  check "[C75] make the first sink fault while its writer is stopped" inject_chain_sink_fault "$scratch/first-chain" || return 1
+  check "[C75] make the first sink fault while its writer is stopped" inject_chain_sink_fault "$scratch/first-chain"
+  [[ -d $(state_of)/records/chain ]] || return 1
   check "down, with the file sink made unwritable" exit_is 0 wp down
   check "[C75] status exits 1 for a sink that did not take an entry" exit_is 1 wp status
   check "[C75] naming the sink and when" bash -c 'grep -qE "^gone    the chain'"'"'s sink, the file, did not take its last entry, at [0-9-]+T[0-9:]+Z, and has taken none since$" "$1"' _ "$scratch/out"
@@ -6796,7 +6797,8 @@ t_records_verify() {
   check "[C75] the restored file sink has taken an entry before the next fault is injected" \
     eventually_long test -f "$(state_of)/records/chain"
   [[ -f $(state_of)/records/chain ]] || return 1
-  check "[C75] make the second sink fault while its writer is stopped" inject_chain_sink_fault "$scratch/chain" || return 1
+  check "[C75] make the second sink fault while its writer is stopped" inject_chain_sink_fault "$scratch/chain"
+  [[ -d $(state_of)/records/chain ]] || return 1
   request pilot refused.md "to: Harbor Keeper" "subject: while the sink refuses" --- "body"
   check "a mail is served while the sink refuses" answered_ok pilot refused.md
   check "[C75] while the run is up and the sink's last entry was refused, status exits 1" status_comes_to 1

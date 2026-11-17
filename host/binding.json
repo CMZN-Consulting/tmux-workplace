@@ -44,12 +44,39 @@
     "tmux": {
       "argv": [
         {
-          "slot": [
-            "program",
-            "setpriv"
+          "if-slot": [
+            "floor-timeout"
+          ],
+          "args": [
+            {
+              "slot": [
+                "program",
+                "timeout"
+              ]
+            },
+            "--foreground",
+            "--kill-after=1",
+            {
+              "slot": [
+                "floor-timeout"
+              ]
+            }
           ]
         },
-        "--no-new-privs",
+        {
+          "unless-slot": [
+            "unenforced"
+          ],
+          "args": [
+            {
+              "slot": [
+                "program",
+                "setpriv"
+              ]
+            },
+            "--no-new-privs"
+          ]
+        },
         {
           "slot": [
             "program",
@@ -66,6 +93,19 @@
         {
           "slot": [
             "config"
+          ]
+        },
+        {
+          "if-slot": [
+            "frame-set"
+          ],
+          "args": [
+            "-f",
+            {
+              "slot": [
+                "frame-set"
+              ]
+            }
           ]
         },
         "-u"
@@ -947,6 +987,101 @@
             }
           ]
         }
+      ],
+      "without-view-environment": [
+        {
+          "if-slot": [
+            "frame-set"
+          ],
+          "environment": [
+            [
+              "TMUX_TMPDIR",
+              {
+                "slot": [
+                  "tmux-tmpdir"
+                ]
+              }
+            ]
+          ]
+        },
+        {
+          "if-slot": [
+            "home-environment",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "environment-pairs": {
+            "slot": [
+              "home-environment",
+              {
+                "arg": 1
+              },
+              {
+                "arg": 2
+              },
+              {
+                "arg": 3
+              }
+            ]
+          }
+        },
+        {
+          "if-slot": [
+            "key-home",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ],
+          "environment": [
+            [
+              "GNUPGHOME",
+              {
+                "slot": [
+                  "key-home",
+                  {
+                    "arg": 1
+                  },
+                  {
+                    "arg": 2
+                  },
+                  {
+                    "arg": 3
+                  }
+                ]
+              }
+            ],
+            [
+              "SSH_AUTH_SOCK",
+              {
+                "slot": [
+                  "key-ssh",
+                  {
+                    "arg": 1
+                  },
+                  {
+                    "arg": 2
+                  },
+                  {
+                    "arg": 3
+                  }
+                ]
+              }
+            ]
+          ]
+        }
       ]
     },
     "environment": {
@@ -1025,6 +1160,18 @@
       "call": [
         "tmux",
         "start-server",
+        {
+          "if-slot": [
+            "floor-bootstrap"
+          ],
+          "args": [
+            ";",
+            "set-option",
+            "-s",
+            "exit-empty",
+            "off"
+          ]
+        },
         ";",
         "show-options",
         "-gv",
@@ -1083,18 +1230,42 @@
           },
           "off"
         ],
-        [
-          "equals",
-          {
-            "slot": [
-              "option",
-              "exit-empty"
+        {
+          "unless-slot": [
+            "floor-bootstrap"
+          ],
+          "args": [
+            [
+              "equals",
+              {
+                "slot": [
+                  "option",
+                  "exit-empty"
+                ]
+              },
+              "on"
             ]
-          },
-          "on"
-        ],
+          ]
+        },
+        {
+          "if-slot": [
+            "floor-bootstrap"
+          ],
+          "args": [
+            [
+              "equals",
+              {
+                "slot": [
+                  "option",
+                  "exit-empty"
+                ]
+              },
+              "off"
+            ]
+          ]
+        },
         [
-          "no-new-privs-if-running",
+          "floor-server-privileges-if-running",
           {
             "slot": [
               "server-pid"
@@ -1271,7 +1442,7 @@
       ],
       "verify": [
         [
-          "no-new-privs",
+          "floor-server-privileges",
           {
             "slot": [
               "server-pid",
@@ -1348,6 +1519,31 @@
         {
           "slot": [
             "clone"
+          ]
+        },
+        {
+          "if-slot": [
+            "frame-set"
+          ],
+          "args": [
+            ";",
+            "set-option",
+            "-s",
+            "exit-empty",
+            "on",
+            ";",
+            "set-option",
+            "-t",
+            {
+              "slot": [
+                "session",
+                {
+                  "arg": 1
+                }
+              ]
+            },
+            "destroy-unattached",
+            "off"
           ]
         }
       ],
@@ -1491,6 +1687,27 @@
             "arg": 2
           }
         ]
+      ],
+      "then": [
+        "tmux",
+        "set-window-option",
+        "-t",
+        {
+          "slot": [
+            "window",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            }
+          ]
+        },
+        "synchronize-panes",
+        "off"
+      ],
+      "then-if-slot": [
+        "frame-set"
       ]
     },
     "pane": {
@@ -1642,6 +1859,23 @@
           "arg": 4,
           "double": "#",
           "unless-before": "["
+        },
+        ";",
+        "select-pane",
+        "-t",
+        {
+          "slot": [
+            "pane",
+            {
+              "arg": 1
+            },
+            {
+              "arg": 2
+            },
+            {
+              "arg": 3
+            }
+          ]
         }
       ]
     },
@@ -1719,6 +1953,53 @@
       },
       "call": [
         "tmux",
+        {
+          "if-slot": [
+            "enforced-floor"
+          ],
+          "args": [
+            "set-option",
+            "-p",
+            "-t",
+            {
+              "slot": [
+                "pane",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            "alternate-screen",
+            "on",
+            ";",
+            "set-option",
+            "-p",
+            "-t",
+            {
+              "slot": [
+                "pane",
+                {
+                  "arg": 1
+                },
+                {
+                  "arg": 2
+                },
+                {
+                  "arg": 3
+                }
+              ]
+            },
+            "allow-passthrough",
+            "off",
+            ";"
+          ]
+        },
         "set-option",
         "-p",
         "-t",

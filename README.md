@@ -21,11 +21,11 @@ bin/workplace doctor
 
 - `plan` assembles the clone's layers and programs, runs the reader `typify` and folds the plan's statements into each seat's view, then writes `PLAN/`. It is the only command that needs the reader.
 - `build` checks `PLAN/` in the configuration's clone against its sources and against the machine, then writes `BUILD/`.
-- `up` starts a verified build under no-new-privileges, and never builds.
+- `up` starts a verified build and never builds. Enforced floors and configurations without floors retain no-new-privileges. An unenforced floor needs a plain caller and starts its server and seats with ordinary user privileges; its agents, carrier and record keepers retain no-new-privileges.
 - A pane's command is `workplace exec SEAT`. The same command run by hand gives a seat its view and its environment in any terminal.
 - `down` removes what `up` made and nothing else. `unbuild` then removes `BUILD` and the build's key homes, and keeps the rest of the workplace's state directory.
 - A seat whose program has ended keeps its pane, dead, until `restart` starts it again in that pane, as `up` started it, or the workplace goes down.
-- The workplace's tmux server listens in the clone's `BUILD/RUN`, where no seat's view reaches, and every call names it by that path. `status` prints the line that attaches to it.
+- Each floor has its own server and configuration. Run sockets live in the clone's `BUILD/RUN`; an unenforced `tmux-default` floor uses the caller's default socket. A foreign server there is refused without changes. Every later call uses the recorded socket path. `status` prints the attach command.
 - `record verify` reads a seat's kept record of a day, or its `unstored`, `gaps` or `signed`, or the frame's record of requests, against its chain, and names the first place where they differ.
 
 What each term does is one entry of `host/binding.json`. What the loop does with any entry is `CONTRACT.md`. What a seat is told about its mailbox is `share/seat-page.md`, which every mailbox holds as `README.md`.
@@ -43,6 +43,26 @@ The check assumes stable paths and mounts between inspection and namespace
 creation. It does not identify hard links, separate host mounts of the same data
 or descriptors that another process already holds. The contract states the
 external host work on which a running view depends.
+
+Build seals each floor's configuration into its generation and publishes the
+enforced and unenforced frame settings in `BUILD/share/`. Startup reads the
+floor's configuration first and the frame's settings second. It rejects active
+hooks, malformed or blocking files, unexpected sessions, and shell expansions
+in enforced-floor options. Startup calls have a ten-second deadline. The carrier
+repairs changed transport settings and records a repair; `status` checks them
+without repairing them. Existing pane history below 5000 cannot be repaired and
+is refused. Higher history limits are preserved.
+
+Unenforced mailboxes are `MAILPATH/NAME/` links into the store; record views are
+`RECORDPATH/NAME/`. Their source files are reachable to ordinary processes of the
+same Unix user, so neither seat identity nor privacy is enforced on that floor.
+Shutdown leaves personal sessions and their default server running, removes its
+own run directory, and retains the frame's global settings and reserved marks.
+It stops a carrier unit only while the unit has the recorded invocation ID.
+Reusing that default server requires the same sealed floor configuration. If
+the file changed, `up` refuses without changing the server, since tmux would
+ignore the later client's `-f`. End that server yourself before loading the
+new configuration.
 
 ## Needs
 

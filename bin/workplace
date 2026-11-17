@@ -45,6 +45,7 @@ case $source_dir in
 esac
 tool=$(cd -P -- "$source_dir/.." && pwd -P && printf .) || die "cannot find the tool's directory" 2
 tool=${tool%$'\n.'}
+source "$tool/libexec/floor-runtime.bash" || die "cannot load the floor runtime" 2
 
 version_key() {
   [[ $1 =~ ^([0-9]+)\.([0-9]+)(\.([0-9]+))?([a-z]?)$ ]] || return 1
@@ -1571,6 +1572,10 @@ make_mail() {
     || die "cannot write ${build_out:-$build_dir}/mail.json" 2
   cp -- "$tool/share/seat-page.md" "$build_dir/seat-page.md" && [[ $(sha_of "$tool/share/seat-page.md") == "$(sha_of "$build_dir/seat-page.md")" ]] \
     || die "cannot copy the frame's page for a seat, $tool/share/seat-page.md, into $build_dir" 2
+  local run_floor state='{"slots":{"[\"unenforced\"]":"1"}}' b_mail=${build_out:-$build_dir}/mail.json
+  while IFS= read -r run_floor; do
+    floor_links make || die "cannot make the unenforced floor $run_floor's mailboxes"
+  done < <(jq -r '.view.floors[]? | select(.enforced == false) | .key' <<< "$folded")
   say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path, each with the frame's page for a seat"
 }
 
@@ -1632,10 +1637,23 @@ make_records() {
     '{workplace: $w, state: $s, dir: $d, path: (if $p == "" then null else $p end), origins: $o, limit: $limit,
       chain: (if $c == "" then null else $c end), unit: $u, mark: $m, seats: $seats}' > "${build_out:-$build_dir}/records.json" \
     || die "cannot write ${build_out:-$build_dir}/records.json" 2
+  if [[ -n $path && -n $floor_sub ]] && jq -e --arg f "${floor_sub#floors/}" \
+      'any(.view.floors[]?; .key == $f and .enforced == false)' <<< "$folded" > /dev/null; then
+    local entry binds sroot=${state_dir%/floors/*}
+    while IFS= read -r entry; do
+      binds=$(jq -nc --argjson e "$entry" --argjson v "$folded" --arg s "$sroot" --arg path "$path" '
+        $v.report.names as $names
+        | [$v.view.seats[] | {name:$names[.seat|tojson],floor}] as $seats
+        | [$e.reads[] as $n | first($seats[] | select(.name == $n)) as $owner
+           | [$s + "/floors/" + $owner.floor + "/records/" + $n, $path + "/" + $n]]') \
+        || die "cannot resolve the record links for $(jq -r '.name' <<< "$entry")"
+      floor_record_links "$path" "$entry" "$binds" make || die "cannot make the unenforced floor's record view"
+    done < <(jq -c '.[]' <<< "$entries")
+  fi
   say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
 }
 
-frame_files=(binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq)
+frame_files=(binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq libexec/floor-runtime.bash share/floor-set-enforced.conf share/floor-set-unenforced.conf)
 manifest_files=(plan.json plan-manifest.json "${frame_files[@]}")
 
 # A generation's MANIFEST: a hash and a name for each file in its directory, in the C locale's order.
@@ -1662,6 +1680,15 @@ build_floor_seats() {
   fi
   make_homes "$holders" "$(jq -r '.name // "default"' <<< "$report")"
   [[ -n $folded ]] && make_records "$(jq -r '.name // "default"' <<< "$report")"
+  if [[ -n $floor ]]; then
+    local config
+    config=$(jq -er --arg f "$floor" --arg root "$root" '
+      [.programs[].plan[]? | (if type == "object" then .term else . end)
+       | select(.[0] == "floor" and .[1] == $f) | .[6]][0]
+      | if startswith("/") then . else $root + "/" + . end' "$plan_dir/plan.json") \
+      || die "cannot name the floor $floor's configuration"
+    cp -- "$config" "${build_out:-$build_dir}/floor.conf" || die "cannot copy the floor $floor's configuration"
+  fi
   return 0
 }
 
@@ -1832,7 +1859,8 @@ cmd_build() {
   fi
   local copies=$build_dir${shared:+/$shared}
   local -a sources=("$plan_dir/plan.json" "$plan_dir/manifest.json" "$tool/host/binding.json"
-    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq")
+    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq" "$tool/libexec/floor-runtime.bash"
+    "$tool/share/floor-set-enforced.conf" "$tool/share/floor-set-unenforced.conf")
   local -a listed=("${shared:+$shared/}plan.json" "${shared:+$shared/}plan-manifest.json" "${frame_files[@]}")
   if [[ -f $plan_dir/facts.json ]]; then
     sources+=("$plan_dir/facts.json")
@@ -1846,7 +1874,7 @@ cmd_build() {
   trap 'rm -rf -- "$build_dir"' EXIT
   trap 'exit 130' INT TERM
   if ! {
-    mkdir -- "$build_dir/libexec" "$build_dir/bin" &&
+    mkdir -- "$build_dir/libexec" "$build_dir/bin" "$build_dir/share" &&
       { [[ -z $shared ]] || mkdir -p -- "$copies"; } &&
       cp -- "$plan_dir/plan.json" "$copies/plan.json" &&
       { [[ ! -f $plan_dir/facts.json ]] || cp -- "$plan_dir/facts.json" "$copies/plan-facts.json"; } &&
@@ -1854,7 +1882,8 @@ cmd_build() {
       cp -- "$plan_dir/manifest.json" "$copies/plan-manifest.json" &&
       cp -- "$tool/host/binding.json" "$build_dir/binding.json" &&
       cp -- "$tool/bin/workplace" "$build_dir/bin/workplace" &&
-      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq" "$build_dir/libexec/"
+      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq" "$tool/libexec/floor-runtime.bash" "$build_dir/libexec/" &&
+      cp -- "$tool/share/floor-set-enforced.conf" "$tool/share/floor-set-unenforced.conf" "$build_dir/share/"
   }; then
     rm -rf -- "$build_dir"
     die "build failed; $build_dir was removed"
@@ -2107,7 +2136,11 @@ caller_locale() {
 run_call() {
   local -n _out=$1
   shift
-  _out=$(caller_locale; "$@" 2> "$run_dir/call.err" 6>&-)
+  if [[ -n $run_floor ]]; then
+    _out=$(caller_locale; timeout --foreground --kill-after=1 10 "$@" 2> "$run_dir/call.err" 6>&-)
+  else
+    _out=$(caller_locale; "$@" 2> "$run_dir/call.err" 6>&-)
+  fi
 }
 
 log_call() {
@@ -2163,6 +2196,18 @@ resolve_step() {
 meets() {
   local test=$1 value=$2 what=${3:-the tmux server} status
   case $test in
+    floor-server-privileges-if-running)
+      [[ $value =~ ^[0-9]+$ ]] || return 1
+      [[ -e /proc/$value ]] || return 0
+      meets floor-server-privileges "$value" "$what"
+      ;;
+    floor-server-privileges)
+      if [[ -n $run_floor && ${floor_unenforced-0} == 1 ]]; then
+        [[ $value =~ ^[0-9]+$ && -r /proc/$value/status ]] || return 1
+        [[ $(sed -n 's/^NoNewPrivs:[[:space:]]*//p' "/proc/$value/status") == 0 ]] \
+          || { warn "$where: the unenforced floor's server carries no-new-privileges; it is refused"; return 1; }
+      else meets no-new-privs "$value" "$what"; fi
+      ;;
     directory) [[ -d $value ]] || { warn "$where: $value is not a directory"; return 1; } ;;
     file) [[ -f $value ]] || { warn "$where: $value is not a file"; return 1; } ;;
     name) [[ -n $value && $value != */* ]] || { warn "$where: '$value' is not a name: empty, or it holds a /"; return 1; } ;;
@@ -2200,7 +2245,9 @@ save_seat() {
   local record=$1 name file
   name=$(jq -r '.name' <<< "$record") || return 1
   file=$(seat_file "$name") || return 1
-  jq -c --slurpfile b "$build_dir/binding.json" '.inherit = $b[0].inherit' <<< "$record" > "$file"
+  jq -c --slurpfile b "$build_dir/binding.json" --argjson st "$state" '
+    .inherit = $b[0].inherit
+    | if $st | has("callerEnvironment") then .callerEnvironment = $st.callerEnvironment else . end' <<< "$record" > "$file"
 }
 
 apply_term() {
@@ -2263,6 +2310,7 @@ apply_term() {
       return 1
     fi
   fi
+  floor_after_term "$(jq -r '.[0]' <<< "$term")" || return 1
   return 0
 }
 
@@ -2273,6 +2321,15 @@ name_an_empty_server() {
   tmux=$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' <<< "$state")
   socket=$(jq -r '.slots[(["socket-path"] | tojson)] // ""' <<< "$state")
   [[ -n $setpriv && -n $tmux && -n $socket ]] || return 1
+  if [[ -n $run_floor ]]; then
+    if ! run_call out "$setpriv" --no-new-privs "$tmux" -N -S "$socket" -u display-message -p '#{pid} #{server_sessions}'; then
+      [[ -S $socket ]] || return 1
+      warn "the floor's server at $socket did not answer; $run_dir is kept for inspection"
+      return 0
+    fi
+    warn "the floor's server at $socket is left running ($out); $run_dir is kept while it stands. To end it: tmux -S ${socket@Q} kill-server"
+    return 0
+  fi
   run_call out "$setpriv" --no-new-privs "$tmux" -S "$socket" -u \
     list-sessions -F x \; show-options -sv exit-empty \; display-message -p '#{socket_path}' || return 1
   mapfile -t lines <<< "$out"
@@ -2600,6 +2657,9 @@ set_records() {
        | [$d, "\($p)/\($n)"]]' <<< "$entry")
     [[ -n $path ]] || continue
     state=$(jq -c --argjson k "$(jq -c '.seat' <<< "$entry")" --arg b "$binds" '.slots[(["record-binds"] + $k | tojson)] = $b' <<< "$state")
+    if [[ -n $run_floor && $(jq -r '.slots[(["unenforced"] | tojson)] // ""' <<< "$state") == 1 ]]; then
+      floor_record_links "$path" "$entry" "$binds" || return 1
+    fi
   done < <(jq -c '.seats[]' "$records")
   if [[ -n $chain ]]; then
     for place in "mask-journal-var /var/log/journal" "mask-journal-run /run/log/journal" "mask-journal-sockets /run/systemd/journal"; do
@@ -2750,17 +2810,13 @@ cmd_up() {
     need_version env --version "$ENV_FLOOR"
   fi
   if [[ -n $run_floor ]]; then
+    need_programs_for "a workplace with floors" timeout || exit $?
     floor_lock "$run_floor" "up $run_floor"
-    # A floor on the default socket, Management's, comes with 4a2 (5.167): its socket's refusals, its server without
-    # the bar, its seats' mailboxes on the machine and the frame's set after its own file.
-    if [[ $(jq -r --arg f "$run_floor" '[.programs[].plan[]? | (if type == "object" then .term else . end)
-        | select(type == "array" and .[0] == "floor" and .[1] == $f) | .[5]][0] // ""' "$b_plan") == tmux-default ]]; then
-      floor_unlock
-      die "up refuses the floor $run_floor: it stands on the default socket, and a floor there, with its server without the bar, its seats' mailboxes on the machine and the frame's set after its own file, comes with S2's stop 4a2 (5.167)"
-    fi
+    floor_prepare || die "up refuses before its first term, and starts nothing"
   fi
   # The socket directories are masked at their physical paths, where the rule on closed names reads them (5.177 point 6).
   local socket=$run_dir/$(jq -r '.name // "default"' <<< "$report") tmux_dir tmux_default
+  [[ -n $run_floor ]] && socket=$floor_socket
   tmux_dir=$(physical_spelling "${TMUX_TMPDIR:-/tmp}/tmux-$EUID") tmux_default=$(physical_spelling "/tmp/tmux-$EUID")
   (( ${#socket} <= 107 )) \
     || die "the server's socket would be $socket, ${#socket} bytes, and a socket's path holds at most 107; give the clone a shorter path" 2
@@ -2771,9 +2827,14 @@ cmd_up() {
     # RUN is made without -p, so that an up that finds BUILD gone stops here.
     [[ -d $build_dir/RUN ]] || mkdir -- "$build_dir/RUN" 2> /dev/null || [[ -d $build_dir/RUN ]] || die "cannot make $build_dir/RUN" 2
     mkdir -- "$run_dir" 2> /dev/null || die "the floor $run_floor is up already ($run_dir exists); run workplace down $run_floor first"
-    # In 4a a floor's server reads no file of the floor's own: it starts on this empty one, and the frame's set that
-    # must follow the floor's file comes with that file in 4a2 (5.167 point 5). status says so.
-    : > "$run_dir/tmux.conf" || die "cannot write $run_dir/tmux.conf" 2
+    cp -- "$f_gen/floor.conf" "$run_dir/tmux.conf" || die "cannot write $run_dir/tmux.conf" 2
+    if [[ $floor_socket_kind == tmux-default ]]; then
+      if [[ ! -d ${floor_socket%/*} ]]; then
+        mkdir -m 0700 -- "${floor_socket%/*}" || die "cannot make the floor's default socket directory" 2
+      fi
+      [[ -d ${floor_socket%/*} && $(stat -c %u -- "${floor_socket%/*}") == "$EUID" && $(stat -c %a -- "${floor_socket%/*}") == 700 ]] \
+        || die "the default socket directory is not this user's directory with mode 0700" 2
+    fi
   else
     mkdir -- "$run_dir" 2> /dev/null || die "the workplace is up already ($run_dir exists); run workplace down first"
   fi
@@ -2786,6 +2847,7 @@ cmd_up() {
     '{slots: ({(["root"] | tojson): $root, (["clone"] | tojson): $clone, (["build"] | tojson): $build,
                (["run"] | tojson): $run, (["bash"] | tojson): $bash, (["socket-path"] | tojson): $socket,
                (["tmux-dir"] | tojson): $tmuxdir, (["tmux-default-dir"] | tojson): $tmuxdefault} + $programs)}')
+  floor_state_slots || { rm -rf -- "$run_dir"; die "cannot record the floor's execution environment"; }
   : > "$run_dir/ledger"
   : > "$run_dir/checks"
   : > "$run_dir/calls.jsonl"
@@ -2793,7 +2855,7 @@ cmd_up() {
     rm -rf -- "$run_dir"
     die "up refuses before its first term, and starts nothing"
   fi
-  if ! set_homes || ! start_agents || ! set_mail || ! set_records || ! set_runtime || ! start_carrier; then
+  if ! set_homes || ! start_agents 6>&- || ! set_mail || ! floor_links || ! set_records || ! set_runtime || ! start_carrier; then
     teardown failed
     rm -rf -- "$run_dir"
     die "up stopped before its first term; every agent and carrier it started is ended"
@@ -2910,9 +2972,13 @@ cmd_exec() {
   local name directory
   directory=$(jq -r '.directory' <<< "$record")
   PWD=$directory
-  for name in "${inherit[@]}"; do
-    [[ -n ${!name+x} ]] && assignments+=("$name=${!name}")
-  done
+  if jq -e 'has("callerEnvironment")' <<< "$record" > /dev/null; then
+    mapfile -d '' -t assignments < <(jq --raw-output0 '.callerEnvironment[] | "\(.[0])=\(.[1])"' <<< "$record")
+  else
+    for name in "${inherit[@]}"; do
+      [[ -n ${!name+x} ]] && assignments+=("$name=${!name}")
+    done
+  fi
   mapfile -d '' -t pairs < <(jq --raw-output0 '.environment[] | "\(.[0])=\(.[1])"' <<< "$record")
   assignments+=("${pairs[@]}")
   mapfile -d '' -t command < <(jq --raw-output0 '.command[]' <<< "$record")
@@ -2995,7 +3061,9 @@ sh_quote() {
 
 pipe_command() {
   local word words=exec
-  for word in "$BASH" "$build_dir/bin/workplace" keep "$1" "$2"; do
+  local -a prefix=()
+  [[ -n $run_floor ]] && prefix=("$(command -v setpriv)" --no-new-privs)
+  for word in "${prefix[@]}" "$BASH" "$build_dir/bin/workplace" keep "$1" "$2"; do
     words+=" $(sh_quote "$word")"
   done
   words=${words//%/%%}
@@ -3016,6 +3084,7 @@ carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$
 
 carrier_look() {
   local mark
+  if [[ -n $run_floor ]] && [[ $(carrier_tmux display-message -p -t "$1" '#{synchronize-panes}' 2>/dev/null) != 0 ]]; then return 2; fi
   mark=$(carrier_tmux display-message -p -t "$1" '#{pane_dead}:#{pane_in_mode}:#{pane_pid}:#{pane_mode}:#{@workplace}' 2> /dev/null) || return 1
   [[ ${mark%%:*} == 0 ]] || return 2
   mark=${mark#*:}
@@ -3355,7 +3424,9 @@ carrier_serve() {
         else
           j=$(carrier_seat_of "$(jq -r '.target' <<< "$verdict")")
           pane=${seat_pane[j]-}
-          if [[ -n $run_floor && ${seat_fl[j]} != "$run_floor" ]]; then
+          if [[ -n $run_floor && ${carrier_transport_ok-1} == 0 ]]; then
+            carrier_refuse "$i" "$name" "$action" "$targets" "the floor's terminal transport settings are refused; try again after repair"
+          elif [[ -n $run_floor && ${seat_fl[j]} != "$run_floor" ]]; then
             carrier_refuse "$i" "$name" "$action" "$targets" "a grab or a write across floors comes with S2's stop 4b"
           elif [[ -z $pane ]]; then
             carrier_refuse "$i" "$name" "$action" "$targets" "the pane of ${seat_names[j]} is not one that this run made"
@@ -3467,8 +3538,9 @@ carrier_wake_record() {
 }
 
 carrier_wake() {
-  local i n seen ready out mark text sum outcome reason typed entry count ids last
+  local i n seen ready out mark text sum outcome reason typed entry count ids last visible_mail
   local -a shown
+  [[ -z $run_floor || ${carrier_transport_ok-1} == 1 ]] || return 0
   (( wake_any )) || return 0
   [[ -f $comms/wake.json ]] || return 0
   for i in "${own[@]}"; do
@@ -3490,7 +3562,9 @@ carrier_wake() {
       if [[ ${shown[n]} =~ ${seat_wake[i]} ]]; then ready=1; break; fi
     done
     (( ready )) || continue
-    text="mail: $count new, newest ${ids##* }.md, in $mail_path/in, and the page $mail_path/README.md says what this line is"
+    visible_mail=$mail_path
+    [[ -n $run_floor && ${floor_unenforced-0} == 1 ]] && visible_mail=$mail_path/${seat_names[i]}
+    text="mail: $count new, newest ${ids##* }.md, in $visible_mail/in, and the page $visible_mail/README.md says what this line is"
     sum=$(printf '%s' "$text" | sha256sum)
     carrier_type "${seat_pane[i]}" "$text" Enter
     typed=$?
@@ -3801,6 +3875,7 @@ cmd_carry() {
   carrier_tmux_program=$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' "$run_dir/state.json")
   carrier_socket=$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$run_dir/state.json")
   carrier_run=$(jq -r '.slots[(["run"] | tojson)] // ""' "$run_dir/state.json")
+  floor_resume_context || die "cannot read the floor's runtime context" 2
   for i in "${!seat_keys[@]}"; do
     seat_pane[i]=$(jq -r --argjson k "${seat_keys[i]}" '.slots[(["pane"] + $k | tojson)] // ""' "$run_dir/state.json")
   done
@@ -3812,6 +3887,13 @@ cmd_carry() {
   # fails, the pass tries no more, and its pipes and chain go on (5.162 point 1).
   while (( ! carrier_stop )) && [[ -d $run_dir/carrier ]]; do
     carrier_pass_begin
+    carrier_transport_ok=1
+    if [[ -n $run_floor ]] && ! floor_refresh; then
+      carrier_transport_ok=0
+      floor_record_fault
+    else
+      floor_fault_recorded=0
+    fi
     [[ -n $pend_box ]] && carrier_settle
     if [[ -n $store && -z $pend_box && -f $fcomms/serving ]] && carrier_hold; then
       carrier_recover
@@ -4296,7 +4378,7 @@ cmd_down() {
     [[ -n $1 && $1 != */* && $1 != . && $1 != .. ]] || die "the build has no floor $1" 2
     [[ -n ${b_floor[$1]+x} || -d $build_dir/RUN/$1 ]] || die "the build has no floor $1" 2
     floor_scope "$1"
-    if [[ -n ${b_floor[$run_floor]+x} ]]; then floor_lock "$run_floor" "down $run_floor"; fi
+    if [[ -n ${b_floor[$run_floor]+x} || -f $run_dir/state.json ]]; then floor_lock "$run_floor" "down $run_floor"; fi
     if [[ ! -d $run_dir ]]; then
       say "down: the floor $run_floor is not up under $clone"
       return 0
@@ -4321,6 +4403,12 @@ cmd_down() {
   read_server "$(jq -r '.slots[(["program", "setpriv"] | tojson)] // ""' "$run_dir/state.json")" \
     "$(jq -r '.slots[(["program", "tmux"] | tojson)] // ""' "$run_dir/state.json")" "$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$run_dir/state.json")"
   if (( server_up && server_sessions > 0 )); then
+    if [[ $(jq -r '.slots[(["floor-default"] | tojson)] // ""' "$run_dir/state.json") == 1 ]]; then
+      say "down: the server at $server_socket and its $server_sessions other sessions are left running; the frame's server settings remain"
+      rm -rf -- "$run_dir"
+      say "down: the floor $run_floor, done"
+      return 0
+    fi
     say "down: the server at $server_socket still holds sessions that this run did not make ($server_sessions); $run_dir, which holds its socket, is kept while it stands"
     return 0
   fi
@@ -4512,15 +4600,7 @@ status_run() {
     local fterm
     fterm=$(jq -c --arg f "$run_floor" '[.programs[].plan[]? | (if type == "object" then .term else . end)
         | select(type == "array" and .[0] == "floor" and .[1] == $f)][0] // []' "$b_plan" 2> /dev/null) || fterm='[]'
-    if [[ $(jq -r '.[5] // ""' <<< "$fterm") == tmux-default ]]; then
-      say "lacks   the floor $run_floor stands on the default socket, which 4a does not stand up: up refuses it, and it comes with 4a2 (5.167)"
-    else
-      say "conf    the floor's own file is not read in 4a: its server reads an empty file and stands on tmux's defaults, and the floor's file comes with the frame's set after it in 4a2 (5.167)"
-      if [[ $(jq -r '.[4] // ""' <<< "$fterm") == unenforced ]]; then
-        say "lacks   the floor $run_floor is unenforced, and in 4a its server runs under the bar on no new privileges, which 4a2 lifts (5.124 point 3, 5.167)"
-        say "lacks   its seats have no view, and their mailboxes stand on the machine at the mail path only in 4a2, so until then a seat of $run_floor reads no mail there (5.167)"
-      fi
-    fi
+    say "conf    $(jq -r '.[6] // "unknown"' <<< "$fterm"): sealed floor configuration, then the frame's set"
   fi
   if [[ ! -d $run_dir ]]; then
     say "run: ${run_floor:+floor $run_floor is }down"
@@ -4542,6 +4622,10 @@ status_run() {
   say "attach  tmux -S $(sh_quote "$(jq -r '.slots[(["socket-path"] | tojson)] // ""' "$run_dir/state.json")") attach"
   run_server || bad=1
   say "$server_verdict"
+  if [[ -n $run_floor ]] && floor_resume_context; then
+    if floor_readback 1; then say "set     the floor's frame settings agree"
+    else say "set     the floor's frame settings differ"; bad=1; fi
+  fi
   local -a records fields call
   local record what is out
   mapfile -t records < "$run_dir/checks"

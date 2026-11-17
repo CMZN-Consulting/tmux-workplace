@@ -27,9 +27,14 @@ $b[0] as $binding
   def absolute:
     if startswith("/") then . else error("\($term[0]): \(.) is not an absolute path") end;
   def beneath($p; $q): ($q == "/" and $p != "/") or ($p | startswith($q + "/"));
+  def active($e; $st):
+    (if $e | has("if-slot") then ($st.slots[key($e["if-slot"])] // "") != "" else true end)
+    and (if $e | has("unless-slot") then ($st.slots[key($e["unless-slot"])] // "") == "" else true end);
   def resolve($e; $st):
     if ($e | type) == "string" then [{v: $e, lit: true}]
     elif ($e | type) != "object" then error("the binding of \($term[0]) holds an element that is neither a string nor an object")
+    elif $e | has("args") then
+      if active($e; $st) then [$e.args[] | resolve(.; $st)[]] else [] end
     elif $e | has("arg") then [{v: (arg($e.arg) | modify($e)), lit: false}]
     elif $e | has("path") then [{v: (arg($e.path) | absolute | modify($e)), lit: false}]
     elif $e | has("slot") then
@@ -48,6 +53,8 @@ $b[0] as $binding
             else (.v | .[0:(length - ($x | length))]) + "\\" + $x end)
     else map(.v) end;
   def program($n): $binding.programs[$n] // error("the binding names no program \($n)");
+  def test_items($elems; $st):
+    $elems[] | if type == "object" and has("args") then select(active(.; $st)) | .args[] else . end;
   def call($elems; $st):
     program($elems[0]) as $p
     | (resolve_all($p.argv; $st) | map(.lit = true)) + resolve_all($elems[1:]; $st) | encode($p);
@@ -100,7 +107,10 @@ $b[0] as $binding
                         then [after_rows($vspec; $st)[]
                               | ((.environment // [])[] | [.[0], one(.[1]; $st)]),
                                 (.["environment-pairs"] // empty | one(.; $st) | fromjson[])]
-                        else [] end)),
+                        else [($vspec["without-view-environment"] // [])[]
+                              | select(active(.; $st))
+                              | ((.environment // [])[] | [.[0], one(.[1]; $st)]),
+                                (.["environment-pairs"] // empty | one(.; $st) | fromjson[])] end)),
        expects: (($st.slots[key(["expects"] + $s.key)] // "[]") | fromjson),
        values: ($st.slots[key(["values-file"])] // ""),
        view: ([($tables[$vspec.cell] // [])[] | select(.key[0:3] == $k)] | length)};
@@ -127,7 +137,7 @@ $b[0] as $binding
       else . end
     | reduce range(0; $cn | length) as $i ($st; .slots[key($cn[$i])] = $caps[$i])
     | . as $s
-    | [($e.verify // [])[]
+    | [test_items(($e.verify // []); $s)
        | if .[0] == "equals" then
            (one(.[1]; $s)) as $a | (one(.[2]; $s)) as $want
            | if $a == $want then empty else error("\($term[0]): \($a) where the binding requires \($want)") end
@@ -137,7 +147,9 @@ $b[0] as $binding
          when: (if $r | has("when") then call($r.when; $s) else null end),
          is: (if $r | has("is") then one($r.is; $s) else null end),
          call: call($r.call; $s)};
-      (if $e | has("then") then call($e.then; $s) else [] end) as $then
+      (if ($e | has("then")) and
+          (if $e | has("then-if-slot") then ($s.slots[key($e["then-if-slot"])] // "") != "" else true end)
+       then call($e.then; $s) else [] end) as $then
       | ["ok", ($s | tojson),
          (if $e | has("undo") then record($e.undo) | tojson else "" end),
          (if $e | has("check") then record($e.check) | tojson else "" end),

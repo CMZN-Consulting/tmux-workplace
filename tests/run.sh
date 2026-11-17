@@ -37,7 +37,14 @@ check() {
 
 T() { setpriv --no-new-privs tmux -S "${tsock:-$run/$label}" -u "$@"; }
 # On the floor F the helpers built on T reach that floor's own server, RUN/F/NAME, and no other (5.160 point 8).
-on() { local tsock=$run/$1/$label; shift; "$@"; }
+on() {
+  local tsock=$run/$1/$label
+  if [[ -f $run/$1/state.json ]]; then
+    tsock=$(jq -r --arg fallback "$tsock" '.slots[(["socket-path"] | tojson)] // $fallback' "$run/$1/state.json")
+  fi
+  shift
+  "$@"
+}
 B() { setpriv --no-new-privs tmux -L bystander -u "$@"; }
 wp() { "$BASH" "$loop" "$@"; }
 
@@ -228,7 +235,7 @@ reopen_shut() {
 }
 
 cleanup() {
-  local home status=0
+  local home status=0 unit pid cwd
   [[ -n ${scratch-} && -d $scratch ]] || return 0
   if command -v gpgconf > /dev/null; then
     while IFS= read -r home; do
@@ -243,7 +250,14 @@ cleanup() {
     done
   fi
   if [[ -n ${label-} ]] && command -v systemctl > /dev/null; then
-    timeout 30 systemctl --user stop -- "workplace-carrier-$label.service" "workplace-carrier-$label-*.service" > /dev/null 2>&1
+    while IFS= read -r unit; do
+      pid=$(systemctl --user show -p MainPID --value "$unit" 2>/dev/null)
+      [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
+      cwd=$(readlink -- "/proc/$pid/cwd" 2>/dev/null) || continue
+      [[ $cwd == "$scratch"/* ]] || continue
+      timeout 30 systemctl --user stop -- "$unit" >/dev/null 2>&1
+    done < <(systemctl --user list-units --all --no-pager --output=json -- \
+      "workplace-carrier-$label.service" "workplace-carrier-$label-*.service" 2>/dev/null | jq -r '.[].unit')
   fi
   [[ -n ${label2-} && -S ${root-}/config2/BUILD/RUN/$label2 ]] && tmux -S "$root/config2/BUILD/RUN/$label2" kill-server 2> /dev/null
   if [[ ${TMUX_TMPDIR-} == "$scratch"/* ]]; then
@@ -476,7 +490,7 @@ t_structure_and_order() {
       test "$(T display -p -t "$(pane_by_title "$title")" '#{pane_start_command}')" = "$BASH $clone/BUILD/bin/workplace exec -- \"$title\""
   done
   check "[C8] the calls followed the binding's order: server, sessions, windows, panes, arrangements, starts" \
-    test "$(jq -r --argjson n "$(jq '.programs.tmux.argv | length' "$tool/host/binding.json")" '.[$n]' "$run/calls.jsonl" | tr '\n' ' ')" = \
+    test "$(jq -r '.[index("-u") + 1]' "$run/calls.jsonl" | tr '\n' ' ')" = \
     "start-server new-session set-option new-session set-option rename-window new-window rename-window display-message select-pane split-window select-pane display-message select-pane display-message select-pane split-window select-pane select-layout select-layout select-layout set-option set-option set-option set-option set-option "
   check "[C8] the dock's seats stand side by side" \
     test "$(for t in "Harbor Pilot" "Harbor Keeper"; do T display -p -t "$(pane_by_title "$t")" '#{pane_top}'; done | sort -u | wc -l)" = 1
@@ -534,7 +548,7 @@ t_programs_out_of_order() {
   check "[C8] the same seats" \
     test "$(T list-panes -a -F '#{session_name}/#{window_name}/#{pane_title}' | sort | tr '\n' ',')" = \
     "Harbor/Dock/Harbor Keeper,Harbor/Dock/Harbor Pilot,Harbor/Tower/Harbor Watch,Orchard/Barn/Orchard Grower,Orchard/Barn/Orchard Picker,"
-  check "[C8] the server's term still came first" test "$(jq -r --argjson n "$(jq '.programs.tmux.argv | length' "$tool/host/binding.json")" '.[$n]' "$run/calls.jsonl" | head -1)" = start-server
+  check "[C8] the server's term still came first" test "$(jq -r '.[index("-u") + 1]' "$run/calls.jsonl" | head -1)" = start-server
   check "[C8] every seat runs" wait_for_probe "Orchard Picker" picker
 }
 
@@ -1005,7 +1019,7 @@ t_the_callers_locale() {
   check "[C26] status under $other" exit_is 0 "${in_locale[@]}" status
   check "[C26] down under $other" exit_is 0 "${in_locale[@]}" down
   export TMUX_TMPDIR=$scratch/sockets-ü
-  mkdir -p -- "$TMUX_TMPDIR"
+  mkdir -m 0700 -- "$TMUX_TMPDIR"
   check "[C26] up under C, with a TMUX_TMPDIR whose name is not ASCII, and the run's socket where it always stands" exit_is 0 wp up
   check "[C26] the run records the socket as it is" \
     test "$(jq -r '.slots[(["socket"] | tojson)]' "$run/state.json")" = "$run/$label"
@@ -2411,7 +2425,7 @@ t_floors() {
   g=$(top_gen)
   floors_named=$(jq -r --arg g "$g" '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "floor") | "floors/\(.[1])/\($g)/MANIFEST"] | join(" ")' "$clone/PLAN/plan.json")
   check "[C5] 5.160 point 2: the top names the frame, one shared generation and one generation for each floor, in the order of the floor terms, and nothing else" \
-    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq shared/$g/MANIFEST $floors_named "
+    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq libexec/floor-runtime.bash share/floor-set-enforced.conf share/floor-set-unenforced.conf shared/$g/MANIFEST $floors_named "
   check "[C2] 5.160 point 2: the plan's copies stand in the shared generation, PLAN's plan byte for byte, and no plan, view, mail, keys, homes or records stands beside the top" \
     bash -c 'cmp -s "$1/PLAN/plan.json" "$1/BUILD/shared/$2/plan.json" && [[ -f $1/BUILD/shared/$2/plan-view.json && -f $1/BUILD/shared/$2/plan-manifest.json ]] \
       && ! ls -- "$1/BUILD" | grep -qxE "(plan|plan-view|plan-manifest|plan-facts|mail|keys|homes|records)[.]json"' _ "$clone" "$g"
@@ -3004,9 +3018,14 @@ t_floors_up() {
   check "[C101] saying so" said "with floors, up names its floor: workplace up F"
   check "[C101] up of a floor the build does not make refuses, with exit 2" exit_is 2 wp up ghost
   check "[C101] naming it" said "the build has no floor ghost"
-  check "[C101] 5.167: up of the floor on the default socket refuses, with exit 1" exit_is 1 wp up bridge
-  check "[C101] saying what is not built" said "up refuses the floor bridge: it stands on the default socket"
-  check "[C101] and leaving no run for it" test ! -e "$run/bridge"
+  if [[ $(nnp_of $$) == NoNewPrivs:0 ]]; then
+    check "[C101] 4a2: the default floor starts outside the bar" exit_is 0 wp up bridge
+    check "[C101] and makes its own floor run" test -d "$run/bridge"
+    check "[C101] default floor down before the two enforced floors" exit_is 0 wp down bridge
+  else
+    skip "[C101] 4a2: the default floor's positive path requires an unbarred caller"
+    check "[C101] a barred caller refuses the default floor" exit_is 1 wp up bridge
+  fi
   check "up deck" exit_is 0 wp up deck
   check "[C21] saying its floor" said "up: the floor deck,"
   check "up lodge" exit_is 0 wp up lodge
@@ -3070,8 +3089,8 @@ t_floors_up() {
   check "[C57] a second carrier of a floor that is up ends, with exit 2" exit_is 2 "$BASH" "$clone/BUILD/bin/workplace" carry deck
   check "[C57] saying that another serves that floor" said "another carrier serves the floor deck of the workplace whose state is $s; this one ends"
   check "[C57] and the floor's own carrier still runs" kill -0 "$(carrier_pid deck)"
-  check "[C22] 5.167: the floor's own file is not read in 4a: an option it sets stands not on its server" \
-    bash -c '[[ -z $1 && ! -s $2 ]]' _ "$(on deck T show-options -gqv @floor-own 2> /dev/null)" "$run/deck/tmux.conf"
+  check "[C22] 4a2: the floor's own file is read before the frame's set" \
+    test "$(on deck T show-options -gqv @floor-own)" = deck
   local kpane
   kpane=$(on deck pane_by_title "Harbor Keeper")
   on deck T send-keys -t "$kpane" C-c
@@ -3099,16 +3118,9 @@ t_floors_up() {
   check "[C57] and the torn bytes stay as a line of their own" bash -c 'grep -qx "{\"at\":\"2026" "$1"' _ "$s/comms/record"
   wp status > "$scratch/out" 2>&1
   check "[C22] bare status reports every floor" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor lodge is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor bridge is down" "$1"' _ "$scratch/out"
-  check "[C22] 5.167: and says that a floor's own file is not read in 4a" said "conf    the floor's own file is not read in 4a"
-  local conf_line="conf    the floor's own file is not read in 4a: its server reads an empty file and stands on tmux's defaults, and the floor's file comes with the frame's set after it in 4a2 (5.167)"
-  check "[C22] follow-up of 4a: the conf line stands for every floor on a run socket: the deck's, just after its floor line" \
-    bash -c 'grep -A1 -x "floor   deck: generation [0-9]*" "$1" | grep -qxF -- "$2"' _ "$scratch/out" "$conf_line"
-  check "[C22] follow-up of 4a: and the lodge's, just after its floor line" \
-    bash -c 'grep -A1 -x "floor   lodge: generation [0-9]*" "$1" | grep -qxF -- "$2"' _ "$scratch/out" "$conf_line"
-  check "[C22] follow-up of 4a: two conf lines in all, one for each floor on a run socket" test "$(grep -c '^conf ' "$scratch/out")" = 2
-  check "[C22] review of 4a: and that the floor on the default socket is not stood up in 4a" said "lacks   the floor bridge stands on the default socket, which 4a does not stand up: up refuses it, and it comes with 4a2 (5.167)"
-  check "[C22] with no conf line for it, nor the unenforced run floor's lacks lines" \
-    bash -c '! grep -A1 -x "floor   bridge: generation [0-9]*" "$1" | grep -q "^conf " && ! grep -q "^lacks   the floor bridge is unenforced" "$1"' _ "$scratch/out"
+  check "[C22] 4a2: status names the sealed config and following frame set" said "sealed floor configuration, then the frame's set"
+  check "[C22] 4a2: every floor has a configuration line" test "$(grep -c '^conf ' "$scratch/out")" = 3
+  check "[C22] 4a2: no obsolete 4a capability warning remains" bash -c '! grep -q "^lacks " "$1"' _ "$scratch/out"
   # g2.grab's line took a hold of its own, and the carrier removes the holder as it lets that hold go, after the line;
   # the status that the check of no holder below reads is taken once the store's lock is free.
   eventually_long flock -n "$s/mail" true || note "    the store's lock $s/mail is still held after a minute"
@@ -3154,12 +3166,256 @@ t_floors_up() {
   check "[C99] removes the empty RUN with the build" test ! -e "$clone/BUILD"
 }
 
+t_floor_blocking_config() {
+  scoped_clone
+  floors_clone
+  printf '%s\n' 'run-shell "sleep 12"' > "$clone/floors/deck.conf"
+  statements_plan "$floors_terms"
+  check "[C105] blocking config: plan" exit_is 0 wplan
+  check "[C105] blocking config: build" exit_is 0 wp build
+  local before=$SECONDS
+  check "[C105] blocking config: up ends with refusal" exit_is 1 wp up deck
+  check "[C105] blocking config: up is bounded" test "$(( SECONDS - before ))" -lt 30
+  check "[C105] blocking config: diagnostics identify the floor and its file" said "RUN/deck/tmux.conf"
+  local socket=$run/deck/$label
+  if [[ -S $socket ]]; then timeout 15 tmux -S "$socket" kill-server || fail "cannot stop the blocking-config test's server"; fi
+  rm -rf -- "$run/deck"
+  check "[C105] blocking config: unbuild" exit_is 0 wp unbuild
+}
+
+t_unit_invocation_ownership() {
+  local unit=workplace-carrier-default.service
+  if ! systemctl --user show-environment >/dev/null 2>&1; then
+    skip "invocation ownership: no user manager"
+    return 0
+  fi
+  if [[ $(systemctl --user show -p LoadState --value "$unit" 2>/dev/null) != not-found ]]; then
+    skip "invocation ownership: the default-named unit already belongs to another run; untouched"
+    return 0
+  fi
+  local first=$clone first_run=$run second=$root/config2 first_inv second_inv
+  label=default
+  render default > "$scratch/plan.json"
+  scoped_clone
+  jq '.socket = "default"' "$clone/workplace.json" > "$scratch/w" && cp "$scratch/w" "$clone/workplace.json"
+  mkdir -p -- "$root/records"
+  statements_plan "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-chain") | .term[1]) = "journal"'
+  check "[C72] invocation ownership: first plan" exit_is 0 wplan
+  check "[C72] invocation ownership: first build" exit_is 0 wp build
+  check "[C72] invocation ownership: first up" exit_is 0 wp up
+  first_inv=$(systemctl --user show -p InvocationID --value "$unit")
+  systemctl --user stop "$unit"
+  make_clone "$second"
+  clone=$second run=$second/BUILD/RUN
+  export WORKPLACE_CONFIG=$clone XDG_STATE_HOME=$scratch/second-state
+  scoped_clone
+  jq '.socket = "default"' "$clone/workplace.json" > "$scratch/w" && cp "$scratch/w" "$clone/workplace.json"
+  render default > "$scratch/plan.json"
+  statements_plan "$records_terms"' | (.programs[-1].recorded[] | select(.term[0] == "record-chain") | .term[1]) = "journal"'
+  check "[C72] invocation ownership: second plan, same name" exit_is 0 wplan
+  check "[C72] invocation ownership: second build" exit_is 0 wp build
+  check "[C72] invocation ownership: second up" exit_is 0 wp up
+  second_inv=$(systemctl --user show -p InvocationID --value "$unit")
+  check "[C72] invocation ownership: new invocation belongs to the second workplace" \
+    bash -c '[[ -n $1 && -n $2 && $1 != "$2" ]]' _ "$first_inv" "$second_inv"
+  check "[C72] invocation ownership: first down" exit_is 0 env -u XDG_STATE_HOME WORKPLACE_CONFIG="$first" "$BASH" "$loop" down
+  check "[C72] invocation ownership: first down leaves the second invocation running" \
+    bash -c 'systemctl --user is-active --quiet "$1" && [[ $(systemctl --user show -p InvocationID --value "$1") == "$2" ]]' _ "$unit" "$second_inv"
+  check "[C72] invocation ownership: second panes stay up" test "$(T list-panes -a -F x | wc -l)" = 5
+  check "[C72] invocation ownership: second down" exit_is 0 wp down
+  unset XDG_STATE_HOME
+}
+
+t_floor_admin_mail() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "admin mail: unenforced server needs a caller without the bar"
+    return 0
+  fi
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","orchard","-","-","office","mail","harbor","-","-","office","allowed"]; 20),
+    m(["reach","harbor","-","-","office","mail","orchard","-","-","office","allowed"]; 21),
+    m(["reach","orchard","-","-","office","record","harbor","-","-","office","allowed"]; 22),
+    m(["record","-","-","-","workplace","pane","kept"]; 23),
+    m(["record-path","records"]; 24), m(["record-chain","file"]; 25)]'
+  check "[C106] admin mail: plan" exit_is 0 wplan
+  check "[C106] admin mail: build" exit_is 0 wp build
+  check "[C106] admin mail: build makes each unenforced mailbox" test -L "$root/mailbox/Orchard Grower/out"
+  check "[C106] admin mail: it points to the actual out" test "$(readlink "$root/mailbox/Orchard Grower/out")" = "$(state_of)/comms/Orchard Grower/out"
+  check "[C106] admin records: build provides the allowed host record link" \
+    test "$(readlink "$root/records/Orchard Grower/Harbor Keeper")" = "$(state_of)/floors/deck/records/Harbor Keeper"
+  check "[C106] admin mail: up bridge" exit_is 0 wp up bridge
+  check "[C106] admin mail: up deck" exit_is 0 wp up deck
+  check "[C106] admin mail: the admin pane retains ordinary privileges" \
+    test "$(nnp_of "$(on bridge T display-message -p -t "$(on bridge pane_by_title 'Orchard Grower')" '#{pane_pid}')")" = NoNewPrivs:0
+  check "[C106] admin mail: its carrier keeps no-new-privileges" test "$(nnp_of "$(carrier_pid bridge)")" = NoNewPrivs:1
+  printf '%s\n' 'to: Harbor Keeper' 'subject: admin path' --- body > "$root/mailbox/Orchard Grower/out/admin.md"
+  check "[C106] admin mail: a request through the visible host mailbox is delivered" answered_ok grower admin.md
+  request keeper reply.md 'to: Orchard Grower' 'subject: reply' --- response
+  check "[C106] admin mail: a reply is delivered" answered_ok keeper reply.md
+  check "[C106] admin mail: the reply is readable through the host link" \
+    eventually bash -c 'grep -qlFx response "$1"/*' _ "$root/mailbox/Orchard Grower/in"
+  on deck T set-option -g history-limit 1
+  check "[C106] frame set: carrier restores a changed history setting" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -gv history-limit) == 5000 ]]' _ "$run/deck/$label"
+  check "[C106] frame set: restoration is recorded" \
+    eventually_long bash -c 'jq -e "select(.action == \"frame-set\" and .floor == \"deck\" and .outcome == \"restored\")" "$1" >/dev/null' _ "$(state_of)/comms/record"
+  on deck T set-hook -g after-list-clients 'display-message harmless'
+  check "[C106] frame set: a refused transport change is recorded" \
+    eventually_long bash -c 'jq -e "select(.action == \"frame-set\" and .floor == \"deck\" and .outcome == \"refused\")" "$1" >/dev/null' _ "$(state_of)/comms/record"
+  request keeper still-mail.md 'to: Orchard Grower' 'subject: mail without terminal transport' --- still-delivered
+  check "[C106] frame set: mail continues while terminal transport is refused" answered_ok keeper still-mail.md
+  request keeper blocked.grab 'seat: Harbor Pilot'
+  check "[C106] frame set: screen access waits for valid transport" \
+    answered keeper blocked.grab "refused the floor's terminal transport settings are refused; try again after repair"
+  on deck T set-hook -gu after-list-clients
+  request keeper restored.grab 'seat: Harbor Pilot'
+  check "[C106] frame set: screen access resumes after the hook is removed" answered_ok keeper restored.grab
+  check "[C106] admin mail: down deck" exit_is 0 wp down deck
+  check "[C106] admin mail: down bridge" exit_is 0 wp down bridge
+}
+
+t_floor_config_refusals() {
+  scoped_clone
+  floors_clone
+  local variant expected socket
+  for variant in parse hook expansion session; do
+    case $variant in
+      parse) printf '%s\n' 'this-command-does-not-exist' > "$clone/floors/deck.conf"; expected="configuration does not parse" ;;
+      hook) printf '%s\n' 'set-hook -g after-select-window "display-message harmless"' > "$clone/floors/deck.conf"; expected="declares session hooks" ;;
+      expansion) printf '%s\n' 'set-option -g status-right "#(printf harmless)"' > "$clone/floors/deck.conf"; expected="shell expansion in an option" ;;
+      session) printf '%s\n' 'new-session -d -s unexpected' > "$clone/floors/deck.conf"; expected="file made sessions before the frame" ;;
+    esac
+    statements_plan "$floors_terms"
+    check "[C105] floor config $variant: plan" exit_is 0 wplan
+    check "[C105] floor config $variant: build" exit_is 0 wp build
+    check "[C105] floor config $variant: up refuses" exit_is 1 wp up deck
+    check "[C105] floor config $variant: diagnostic" said "$expected"
+    socket=$run/deck/$label
+    if [[ -S $socket ]]; then timeout 5 tmux -S "$socket" kill-server || fail "cannot stop the test's refused floor"; fi
+    rm -rf -- "$run/deck"
+    check "[C105] floor config $variant: unbuild" exit_is 0 wp unbuild
+  done
+}
+
+floor_server_digest() {
+  tmux -N -S "$1" list-sessions -F '#{session_id} #{session_name} #{session_windows}' \; \
+    show-options -s \; show-options -g \; show-options -gw \; show-hooks -g \; show-hooks -gw \; show-environment -g | sha256sum
+}
+
+t_floor_default_refusals() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "floor default refusals: the positive unbarred control needs a plain caller"
+    return 0
+  fi
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C101] floor default: plan" exit_is 0 wplan
+  check "[C101] floor default: build" exit_is 0 wp build
+  local socket=$TMUX_TMPDIR/tmux-$EUID/default before
+  mkdir -m 0700 -- "${socket%/*}"
+  env -i HOME="$HOME" PATH="$PATH" TERM=xterm TMUX_TMPDIR="$TMUX_TMPDIR" \
+    tmux -S "$socket" -f /dev/null new-session -d -s foreign
+  tmux -S "$socket" set-option -g @foreign unchanged \; set-environment -g FOREIGN harmless
+  before=$(floor_server_digest "$socket")
+  check "[C101] floor default: foreign server is refused" exit_is 1 wp up bridge
+  check "[C101] floor default: refusal names its socket" said "the server at $socket does not carry this clone's mark"
+  check "[C101] floor default: foreign sessions, options, hooks and environment remain unchanged" test "$(floor_server_digest "$socket")" = "$before"
+  check "[C101] floor default: no run was created" test ! -d "$run/bridge"
+  tmux -S "$socket" kill-server
+  env -i HOME="$HOME" PATH="$PATH" TERM=xterm TMUX_TMPDIR="$TMUX_TMPDIR" \
+    setpriv --no-new-privs tmux -S "$socket" -f /dev/null new-session -d -s barred
+  tmux -S "$socket" set-option -g @workplace-clone "$clone"
+  before=$(floor_server_digest "$socket")
+  check "[C101] floor default: correctly marked server with inherited bar is refused" exit_is 1 wp up bridge
+  check "[C101] floor default: reason names no-new-privileges" said "carries no-new-privileges"
+  check "[C101] floor default: refused marked server also stays unchanged" test "$(floor_server_digest "$socket")" = "$before"
+  tmux -S "$socket" kill-server
+  check "[C101] floor default: barred caller refuses before server creation" exit_is 1 setpriv --no-new-privs "$BASH" "$loop" up bridge
+  check "[C101] floor default: caller is told why it cannot lift the bar" said "this caller carries no-new-privileges"
+  check "[C101] floor default: no server answers afterward" bash -c '! tmux -N -S "$1" list-sessions >/dev/null 2>&1' _ "$socket"
+  check "[C101] floor default: own floor starts" exit_is 0 wp up bridge
+  tmux -S "$socket" new-session -d -s personal
+  local pid
+  pid=$(tmux -S "$socket" display-message -p '#{pid}')
+  check "[C101] floor default: down leaves personal session" exit_is 0 wp down bridge
+  check "[C101] floor default: personal server has same pid" test "$(tmux -S "$socket" display-message -p '#{pid}')" = "$pid"
+  check "[C101] floor default: only personal session remains" test "$(tmux -S "$socket" list-sessions -F '#{session_name}')" = personal
+  check "[C101] floor default: run was removed despite surviving server" test ! -e "$run/bridge"
+  check "[C101] floor default: own marked server can be reused" exit_is 0 wp up bridge
+  check "[C101] floor default: own floor can go down again" exit_is 0 wp down bridge
+  check "[C101] floor default: unbuild before a changed valid configuration" exit_is 0 wp unbuild
+  printf '%s\n' 'set-option -g @new-floor-setting changed' > "$clone/floors/bridge.conf"
+  statements_plan "$floors_terms"
+  check "[C101] floor default: changed configuration plan" exit_is 0 wplan
+  check "[C101] floor default: changed configuration build" exit_is 0 wp build
+  before=$(floor_server_digest "$socket")
+  check "[C101] floor default: an existing server must not silently ignore a changed file" exit_is 1 wp up bridge
+  check "[C101] floor default: the refusal explains the loaded configuration mismatch" said "has not loaded this sealed floor configuration"
+  check "[C101] floor default: the existing server is unchanged" test "$(floor_server_digest "$socket")" = "$before"
+  check "[C101] floor default: unbuild before testing a malformed replacement" exit_is 0 wp unbuild
+  printf '%s\n' 'this-command-does-not-exist' > "$clone/floors/bridge.conf"
+  statements_plan "$floors_terms"
+  check "[C101] floor default: replacement plan" exit_is 0 wplan
+  check "[C101] floor default: replacement build" exit_is 0 wp build
+  before=$(floor_server_digest "$socket")
+  check "[C101] floor default: own marked server refuses a malformed replacement" exit_is 1 wp up bridge
+  check "[C101] floor default: the personal server is unchanged after that refusal" test "$(floor_server_digest "$socket")" = "$before"
+  tmux -S "$socket" kill-server
+  rm -rf -- "$run/bridge"
+}
+
+t_floor_runtime() {
+  scoped_clone
+  floors_clone
+  printf '%s\n' 'set-option -g @floor-own deck' 'set-option -g history-limit 0' \
+    'set-window-option -g synchronize-panes on' 'set-environment -g COLORTERM poisoned' \
+    'set-option -s @workplace-shadow server' 'set-option -g @workplace-shadow session' \
+    'set-option -gw @workplace-shadow window' \
+    'set-option -s command-alias[999] "floor-poison=list-sessions"' > "$clone/floors/deck.conf"
+  printf '%s\n' 'set-option -g history-limit 12000' 'set-option -s set-clipboard on' \
+    'set-option -g status-right "#(printf allowed)"' > "$clone/floors/bridge.conf"
+  statements_plan "$floors_terms"' | (.programs[] | select(.path == "harbor/dock/keeper/seat.typify") | .plan[1].term[5]) |=
+    (fromjson + ["value=COLORTERM"] | tojson)'
+  check "[C105] floor runtime: plan" exit_is 0 wplan
+  check "[C105] floor runtime: build" exit_is 0 wp build
+  check "[C105] floor runtime: config is sealed into its generation" \
+    bash -c 'g=$(sed -n "s|^[0-9a-f]*  \\(floors/deck/[0-9]*\\)/MANIFEST$|\\1|p" "$1/BUILD/MANIFEST"); cmp -s "$1/floors/deck.conf" "$1/BUILD/$g/floor.conf" && grep -q "  floor.conf$" "$1/BUILD/$g/MANIFEST"' _ "$clone"
+  COLORTERM=original check "[C105] floor runtime: up deck" exit_is 0 wp up deck
+  check "[C105] floor runtime: floor config was read" test "$(on deck T show-options -gqv @floor-own)" = deck
+  check "[C105] floor runtime: frame restores the history requirement" test "$(on deck T show-options -gv history-limit)" = 5000
+  check "[C105] floor runtime: frame disables synchronized typing" test "$(on deck T show-options -gwv synchronize-panes)" = off
+  check "[C105] frame removes reserved option shadows in every global scope" \
+    test -z "$(on deck T show-options -sqv @workplace-shadow)$(on deck T show-options -gqv @workplace-shadow)$(on deck T show-options -gwqv @workplace-shadow)"
+  check "[C105] frame restores the default command aliases" test -z "$(on deck T show-options -sqv 'command-alias[999]')"
+  check "[C105] floor runtime: caller environment beats tmux's injected environment" on deck eventually_long screen_has "Harbor Keeper" "value COLORTERM=original"
+  check "[C105] floor runtime: down deck" exit_is 0 wp down deck
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "floor runtime: unenforced server requires a plain caller without no-new-privileges"
+    return 0
+  fi
+  check "[C105] floor runtime: default floor up" exit_is 0 wp up bridge
+  local pid
+  pid=$(on bridge T display-message -p '#{pid}')
+  check "[C105] floor runtime: unenforced server keeps ordinary privileges" test "$(nnp_of "$pid")" = NoNewPrivs:0
+  check "[C105] floor runtime: a higher declared history limit is preserved" test "$(on bridge T show-options -gv history-limit)" = 12000
+  check "[C105] an unenforced floor retains its clipboard choice" test "$(on bridge T show-options -sv set-clipboard)" = on
+  check "[C105] an unenforced floor retains shell expansion in its status option" test "$(on bridge T show-options -gv status-right)" = '#(printf allowed)'
+  check "[C105] floor runtime: default socket is inside the test's private directory" \
+    test "$(on bridge T display-message -p '#{socket_path}')" = "$TMUX_TMPDIR/tmux-$EUID/default"
+  check "[C105] floor runtime: the named default finds Management's equivalent" test "$(tmux -L default list-sessions -F '#{session_name}')" = Orchard
+  check "[C105] floor runtime: down default floor" exit_is 0 wp down bridge
+}
+
 t_floor_command_exclusion() {
   scoped_clone
   floors_clone
   statements_plan "$floors_terms"
-  check "floor exclusion: plan" exit_is 0 wplan
-  check "floor exclusion: build" exit_is 0 wp build
+  check "[C102] floor exclusion: plan" exit_is 0 wplan
+  check "[C102] floor exclusion: build" exit_is 0 wp build
   local s=$HOME/.local/state/workplace/$label
   ( umask 077; : > "$s/floors/deck/up.lock"; : > "$s/floors/deck/up.holder" )
   printf '%s\n' '{"command":"up deck","pid":4242,"at":"2026-11-17T00:00:00Z"}' > "$s/floors/deck/up.holder"
@@ -3171,10 +3427,10 @@ t_floor_command_exclusion() {
       mkdir -p -- "$run/deck"
       printf '%s\n' '{}' > "$run/deck/state.json"
     fi
-    check "floor exclusion: $verb refuses the held floor" exit_is 1 wp "$verb" deck
-    check "floor exclusion: $verb names the holder" said "up deck holds the floor deck, process 4242"
+    check "[C102] floor exclusion: $verb refuses the held floor" exit_is 1 wp "$verb" deck
+    check "[C102] floor exclusion: $verb names the holder" said "up deck holds the floor deck, process 4242"
   done
-  check "floor exclusion: no command waits for the holder" test "$(( SECONDS - before ))" -lt 10
+  check "[C102] floor exclusion: no command waits for the holder" test "$(( SECONDS - before ))" -lt 10
   exec {held}>&-
   rm -rf -- "$run/deck"
   mkdir -- "$scratch/gate-bin"
@@ -3189,16 +3445,31 @@ t_floor_command_exclusion() {
   chmod +x -- "$scratch/gate-bin/tmux"
   WP_GATE=$scratch WP_REAL_TMUX=$real_tmux PATH="$scratch/gate-bin:$PATH" wp up deck > "$scratch/blocked-up" 2>&1 &
   local starter=$!
-  check "floor exclusion: actual up reaches its first tmux call" eventually test -f "$scratch/entered"
-  check "floor exclusion: its floor lock is still held through startup" bash -c '! flock -n "$1" true' _ "$s/floors/deck/up.lock"
+  check "[C102] floor exclusion: actual up reaches its first tmux call" eventually test -f "$scratch/entered"
+  check "[C102] floor exclusion: its floor lock is still held through startup" bash -c '! flock -n "$1" true' _ "$s/floors/deck/up.lock"
   before=$SECONDS
-  check "floor exclusion: down refuses during an actual up" exit_is 1 wp down deck
-  check "floor exclusion: down names that up" said "up deck holds the floor deck"
-  check "floor exclusion: down returns before startup is released" test "$(( SECONDS - before ))" -lt 5
+  check "[C102] floor exclusion: down refuses during an actual up" exit_is 1 wp down deck
+  check "[C102] floor exclusion: down names that up" said "up deck holds the floor deck"
+  check "[C102] floor exclusion: down returns before startup is released" test "$(( SECONDS - before ))" -lt 5
   : > "$scratch/release"
-  check "floor exclusion: original up completes" wait "$starter"
-  check "floor exclusion: no daemon inherits the floor lock" flock -n "$s/floors/deck/up.lock" true
-  check "floor exclusion: down after startup" exit_is 0 wp down deck
+  check "[C102] floor exclusion: original up completes" wait "$starter"
+  check "[C102] floor exclusion: no daemon inherits the floor lock" flock -n "$s/floors/deck/up.lock" true
+  check "[C102] floor exclusion: down after startup" exit_is 0 wp down deck
+}
+
+t_actual_default_mask_build() {
+  local sockets=/tmp/tmux-$EUID
+  if [[ ! -d $sockets ]]; then
+    skip "[C68] the machine's default tmux directory does not stand; its build-only alias check is not run"
+    return 0
+  fi
+  scoped_clone
+  ln -s -- "$sockets" "$root/actual-sockets"
+  statements_plan '.programs[-1].recorded += [st("orchard"; "barn"; "grower"; "seat"; $root + "/actual-sockets"; "read-only"; 10)]'
+  check "[C68] a plan naming an alias of the actual default directory forms" exit_is 0 wplan
+  check "[C68] build refuses that alias without starting or contacting a server" exit_is 1 wp build
+  check "[C68] the refusal names the actual default directory" said "$sockets"
+  check "[C68] the refused build leaves no BUILD" test ! -e "$clone/BUILD"
 }
 
 # The store's lock (5.162 point 1, the DA's specimen): two floors' carriers deliver at one time on one store, one hold
@@ -3624,21 +3895,20 @@ t_floors_unenforced() {
   check "[C104] the view names it unenforced, on a run socket" \
     test "$(jq -c '[.floors[] | select(.key == "bridge") | .enforced, .socket]' "$clone/PLAN/view.json")" = '[false,"run"]'
   check "build" exit_is 0 wp build
-  check "[C101] 5.167 point 2: up of the unenforced floor on a run socket stands it up" exit_is 0 wp up bridge
-  check "[C68] on its own server at RUN/bridge" test -S "$run/bridge/$label"
-  check "[C8] which holds the orchard's session" on bridge sessions_are "Orchard "
-  check "[C104] its seats' programs run, with no view" on bridge eventually_long live_pane "Orchard Grower"
-  check "[C22] 5.167: status names what it lacks in 4a: its server runs under the bar" exit_is 0 wp status bridge
-  check "[C22] saying so" said "lacks   the floor bridge is unenforced, and in 4a its server runs under the bar on no new privileges, which 4a2 lifts (5.124 point 3, 5.167)"
-  check "[C22] and its seats read no mail at the mail path" said "lacks   its seats have no view, and their mailboxes stand on the machine at the mail path only in 4a2, so until then a seat of bridge reads no mail there (5.167)"
-  check "[C22] and that its own file is not read" said "conf    the floor's own file is not read in 4a"
-  if [[ $(sed -n 's/^NoNewPrivs:[[:space:]]*//p' /proc/self/status) == 1 ]]; then
-    skip "[C22] the bridge's server runs under no new privileges, but so would any process this shell starts; measured where the shell does not run under it"
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "[C104] 4a2: unenforced server and seats need a caller without the bar"
+    check "[C104] the barred caller is refused" exit_is 1 wp up bridge
   else
-    check "[C22] the bridge's server runs under no new privileges in 4a" \
-      test "$(sed -n 's/^NoNewPrivs:[[:space:]]*//p' "/proc/$(on bridge T display-message -p '#{pid}')/status")" = 1
+    check "[C101] 4a2: up of an unenforced floor on a run socket" exit_is 0 wp up bridge
+    check "[C68] on its own server at RUN/bridge" test -S "$run/bridge/$label"
+    check "[C8] which holds the orchard's session" on bridge sessions_are "Orchard "
+    check "[C104] its seats' programs run, with no view" on bridge eventually_long live_pane "Orchard Grower"
+    check "[C22] 4a2: status reads the frame's set" exit_is 0 wp status bridge
+    check "[C22] and reports agreement" said "set     the floor's frame settings agree"
+    check "[C104] 4a2: the unenforced server has no inherited bar" \
+      test "$(nnp_of "$(on bridge T display-message -p '#{pid}')")" = NoNewPrivs:0
+    check "down bridge" exit_is 0 wp down bridge
   fi
-  check "down bridge" exit_is 0 wp down bridge
   check "unbuild" exit_is 0 wp unbuild
 }
 
@@ -5105,8 +5375,12 @@ t_source_and_contract() {
       | range(0; length) | select($c[.] == "-t") | $c[. + 1] | (type == "object" and has("slot"))] | all' "$tool/host/binding.json")" = true
   check "[C17] respawn-pane -k is followed by clear-history in start" \
     test "$(jq -r '.primitives.start.call | map(strings) | (index("respawn-pane") < index("clear-history"))' "$tool/host/binding.json")" = true
-  check "[C10] every tmux call runs under setpriv --no-new-privs and names its server" \
-    test "$(jq -c '.programs.tmux.argv[0:5]' "$tool/host/binding.json")" = '[{"slot":["program","setpriv"]},"--no-new-privs",{"slot":["program","tmux"]},"-S",{"slot":["socket-path"]}]'
+  check "[C10] the binding's bar precedes tmux except on an unenforced floor, and the socket is explicit" \
+    jq -e '.programs.tmux.argv as $a
+      | {"unless-slot":["unenforced"],"args":[{"slot":["program","setpriv"]},"--no-new-privs"]} as $bar
+      | ($a | index($bar)) as $i | ($a | index({"slot":["program","tmux"]})) as $j
+      | $i != null and $j != null and $i < $j
+        and $a[$j + 1:$j + 3] == ["-S",{"slot":["socket-path"]}]' "$tool/host/binding.json"
   check "[C10] the loop removes TMUX and TMUX_PANE before any program runs" \
     test "$(sed -n 6p "$tool/bin/workplace")" = "unset TMUX TMUX_PANE"
   check "[C26] the loop sets LC_ALL=C before anything else, once it has kept the caller's" \
@@ -6513,6 +6787,9 @@ t_records_verify() {
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   local stood
   stood=$(jq -r '.files["comms/record"].offset' "$(state_of)/records/chain.state")
+  check "[C75] the restored file sink has taken an entry before the next fault is injected" \
+    eventually_long test -f "$(state_of)/records/chain"
+  [[ -f $(state_of)/records/chain ]] || return 1
   mv -- "$(state_of)/records/chain" "$scratch/chain"
   mkdir -- "$(state_of)/records/chain"
   request pilot refused.md "to: Harbor Keeper" "subject: while the sink refuses" --- "body"
@@ -7106,7 +7383,14 @@ t_alias_access_key_sources() {
 
 tests=(
   t_alias_access_review
+  t_floor_blocking_config
+  t_unit_invocation_ownership
+  t_floor_admin_mail
+  t_floor_config_refusals
+  t_floor_default_refusals
+  t_floor_runtime
   t_floor_command_exclusion
+  t_actual_default_mask_build
   t_alias_access_mask_failure
   t_alias_access_key_sources
   t_alias_access_rechecks

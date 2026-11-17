@@ -3301,7 +3301,7 @@ t_floor_config_refusals() {
 }
 
 floor_server_digest() {
-  tmux -N -S "$1" list-sessions -F '#{session_id} #{session_name} #{session_windows}' \; \
+  tmux -S "$1" -N list-sessions -F '#{session_id} #{session_name} #{session_windows}' \; \
     show-options -s \; show-options -g \; show-options -gw \; show-hooks -g \; show-hooks -gw \; show-environment -g | sha256sum
 }
 
@@ -3336,7 +3336,7 @@ t_floor_default_refusals() {
   tmux -S "$socket" kill-server
   check "[C101] floor default: barred caller refuses before server creation" exit_is 1 setpriv --no-new-privs "$BASH" "$loop" up bridge
   check "[C101] floor default: caller is told why it cannot lift the bar" said "this caller carries no-new-privileges"
-  check "[C101] floor default: no server answers afterward" bash -c '! tmux -N -S "$1" list-sessions >/dev/null 2>&1' _ "$socket"
+  check "[C101] floor default: no server answers afterward" bash -c '! tmux -S "$1" -N list-sessions >/dev/null 2>&1' _ "$socket"
   check "[C101] floor default: own floor starts" exit_is 0 wp up bridge
   tmux -S "$socket" new-session -d -s personal
   local pid

@@ -305,24 +305,73 @@ t_carrier_closed_wakes() {
   check "[C111] fixture builds" exit_is 0 wp build
   local s c record rec
   s=$(state_of) c=$s/floors/deck/comms record=$c/record
-  jq -nc '{seats:{"Gone Seat":{name:"Gone Seat",ids:["gone-1"],count:1,since:"2026-11-18T00:00:00Z",last:0},"Harbor Pilot":{name:"Harbor Pilot",ids:["kind-1"],count:1,since:"2026-11-18T00:00:00Z",last:0}}}' > "$s/comms/wake.json"
+  jq -nc '{seats:{"Gone Seat":{name:"Gone Seat",ids:["gone-1"],count:1,since:"2026-11-18T00:00:00Z",last:0},"Harbor Pilot":{name:"Harbor Pilot",ids:["kind-1"],count:1,since:"2026-11-18T00:00:00Z",last:0},"Lodge Ida":{name:"Lodge Ida",ids:["other-floor"],count:1,since:"2026-11-18T00:00:00Z",last:0}}}' > "$s/comms/wake.json"
   chmod 0600 -- "$s/comms/wake.json"
   check "[C111] start the only carrier" exit_is 0 wp up deck
   check "[C111] impossible entries close without a typing attempt" eventually_long bash -c '[[ $(jq -s "[.[] | select(.action==\"wake\" and .outcome==\"closed\")] | length" "$1") == 2 ]]' _ "$record"
   check "[C111] closing lines retain covered IDs and omit text lengths" jq -se 'all(.[] | select(.outcome=="closed"); (.covers|length)==1 and (has("length")|not) and (has("sha256")|not))' "$record"
   check "[C111] removed seat has an explicit reason" jq -se 'any(.[]; .target==["Gone Seat"] and .reason=="no build makes the seat Gone Seat")' "$record"
   check "[C111] removed pattern has an explicit kind reason" jq -se 'any(.[]; .target==["Harbor Pilot"] and .reason=="the kind none of Harbor Pilot has no wake now")' "$record"
-  check "[C111] no impossible entry remains due" eventually_long bash -c '[[ $(jq ".seats | length" "$1") == 0 ]]' _ "$s/comms/wake.json"
+  check "[C111] this floor closes only its own entries; a down peer keeps its due ID" eventually_long bash -c '[[ $(jq -c ".seats | keys" "$1") == "[\"Lodge Ida\"]" && $(jq -c ".seats[\"Lodge Ida\"].ids" "$1") == "[\"other-floor\"]" ]]' _ "$s/comms/wake.json"
   check "[C111] stop to plant the claim-before-delete window" exit_is 0 wp down deck
   jq -c '.seats["Gone Again"]={name:"Gone Again",ids:["gone-2"],count:1,since:"2026-11-18T00:00:00Z",last:0}' "$s/comms/wake.json" > "$scratch/wake-new"
   cp -- "$scratch/wake-new" "$s/comms/wake.json"
   rec=$(stat -c %s -- "$record")
   jq -nc --argjson rec "$rec" '{box:"Gone Again",target:"Gone Again",ids:["gone-2"],start:0,rec:$rec,outcome:"closed",reason:"no build makes the seat Gone Again"}' > "$c/.pointing/Gone Again"
   check "[C111] recover a closure already claimed in the local journal" exit_is 0 wp up deck
-  check "[C111] recovery both records and removes the claimed entry" eventually_long bash -c '[[ $(jq ".seats | length" "$1") == 0 && ! -e $2 ]] && jq -e "select(.covers==[\"gone-2\"] and .outcome==\"closed\")" "$3" >/dev/null' _ "$s/comms/wake.json" "$c/.pointing/Gone Again" "$record"
+  check "[C111] recovery both records and removes the claimed entry" eventually_long bash -c '[[ $(jq -c ".seats | keys" "$1") == "[\"Lodge Ida\"]" && ! -e $2 ]] && jq -e "select(.covers==[\"gone-2\"] and .outcome==\"closed\")" "$3" >/dev/null' _ "$s/comms/wake.json" "$c/.pointing/Gone Again" "$record"
   check "[C111] stop after recovered closure" exit_is 0 wp down deck
   check "[C111] restart without any waiting request" exit_is 0 wp up deck
   sleep 2
   check "[C111] no closing line is duplicated across another restart" test "$(jq -s '[.[] | select(.outcome=="closed")] | length' "$record")" = 3
   check "[C111] stop fixture" exit_is 0 wp down deck
+}
+
+t_carrier_recovery_decisions() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$scratch/recovery-mv"
+  statements_plan "$floors_terms | $comms_terms"' | kinds([
+    ["harbor","dock","keeper","clerk"],["harbor","dock","pilot","clerk"],["harbor","tower","watch","clerk"],
+    ["orchard","barn","grower","clerk"],["orchard","barn","picker","clerk"],["lodge","east","ida","clerk"]])
+    | .programs[-1].recorded += [m(["wake","clerk","^waiting>$"];2)]'
+  check "[C108] reader-by-reader recovery fixture plans" exit_is 0 wplan
+  check "[C108] fixture builds" exit_is 0 wp build
+  local s store c id=resumed-mail real_git real_mv pid
+  s=$(state_of) store=$s/mail c=$s/floors/deck/comms
+  real_git=$(command -v git); real_mv=$(command -v mv)
+  for path in 'Harbor Pilot/in' 'Lodge Ida/in' 'Harbor Keeper/sent'; do printf '%s\n' recovery > "$store/$path/$id.md"; done
+  check "[C108] stage the synthetic delivery under the store lock" exit_is 0 flock -o "$store" env -i PATH="$PATH" HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$real_git" -C "$store" add -- .
+  check "[C108] commit that delivery under the store lock" exit_is 0 flock -o "$store" env -i PATH="$PATH" HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$real_git" -C "$store" -c user.name=fixture -c user.email=fixture@example.test commit -qm "deliver $id"
+  jq -nc --arg id "$id" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"resumed.md",action:"mail",stage:"delivering",base:"",rec:0}' > "$c/serving"
+  printf '%s\n' '#!/usr/bin/env bash' 'dest=${!#}' \
+    "'$real_mv' \"\$@\" || exit" \
+    "if [[ \$dest == '$s/comms/wake.json' && -f '$scratch/recovery-stop' ]] && jq -e --arg id '$id' '(.seats[\"Harbor Pilot\"].ids // [] | index(\$id)) != null and (.seats[\"Lodge Ida\"].ids // [] | index(\$id)) == null' \"\$dest\" >/dev/null; then" \
+    "  printf '%s\\n' \"\$PPID\" > '$scratch/recovery-entered'; kill -STOP \"\$PPID\"" \
+    'fi' > "$scratch/recovery-mv/mv"
+  chmod +x -- "$scratch/recovery-mv/mv"
+  mkdir -p -- "$run/deck/carrier"
+  printf '%s\n' '{"slots":{}}' > "$run/deck/state.json"
+  : > "$scratch/recovery-stop"
+  PATH="$scratch/recovery-mv:$PATH" "$BASH" "$clone/BUILD/bin/workplace" carry deck > "$scratch/recovery-first.log" 2>&1 & pid=$!
+  check "[C108] recovery stops after the first reader's due decision" eventually_long test -s "$scratch/recovery-entered"
+  check "[C108] the actual recovery carrier is stopped" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
+  check "[C108] kill the carrier between its two readers" kill -KILL "$pid"
+  wait "$pid" 2>/dev/null
+  rm -f -- "$scratch/recovery-stop"
+  flock -o "$store" python3 - "$s/comms/wake.json" <<'PY'
+import json,os,sys
+p=sys.argv[1]
+with open(p) as f:v=json.load(f)
+v['seats']['Harbor Pilot'].update(ids=[],count=0,since=None)
+with open(p+'.fixture','w') as f:json.dump(v,f)
+os.replace(p+'.fixture',p)
+PY
+  "$BASH" "$clone/BUILD/bin/workplace" carry deck > "$scratch/recovery-second.log" 2>&1 & pid=$!
+  check "[C108] a second recovery completes and answers the delivery" answered keeper resumed.md "ok $id"
+  check "[C108] the already-pointed first reader is not made due again" test "$(jq -c '.seats["Harbor Pilot"].ids' "$s/comms/wake.json")" = '[]'
+  check "[C108] the unfinished second reader still receives its due decision" test "$(jq -c '.seats["Lodge Ida"].ids' "$s/comms/wake.json")" = '["resumed-mail"]'
+  rm -rf -- "$run/deck/carrier"
+  wait "$pid"
+  check "[C108] completed delivery releases its temporary reader decisions" jq -e --arg id "$id" '(.decided | has($id) | not) and (.delivered | has($id) | not)' "$s/comms/wake.json"
 }

@@ -3405,6 +3405,7 @@ JQ
 }
 
 carrier_decided() {
+  if [[ -f $comms/wake.json ]] && jq -e --arg id "$carrier_id" --arg reader "$1" '.decided[$id][$reader] == true' "$comms/wake.json" > /dev/null 2>&1; then return 0; fi
   # Whether the record holds a decision line for the reader $1 and the mail being served. A line that does not
   # parse, such as a torn last one, is passed over and decides nothing.
   jq -e -R --arg id "$carrier_id" --arg t "$1" 'fromjson? | objects | select(.seat == "the frame" and .action == "wake" and .covers == [$id] and .target == [$t])' \
@@ -3527,7 +3528,7 @@ carrier_serve() {
             [[ $subject == "deliver $carrier_id" ]] && delivered=1
           fi
           if (( delivered )); then
-            carrier_wake_note "$carrier_at" "${seat_names[i]}" "${readers[@]}"
+            carrier_wake_note "$carrier_at" "${seat_names[i]}" "${readers[@]}" || { carrier_release; return 1; }
             carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
             carrier_record "${seat_names[i]}" "$name" mail "$targets" ok ""
           else
@@ -3615,7 +3616,8 @@ carrier_wake_put() {
   local at=$1 id=$2 program=$3 current='{"seats":{}}'
   shift 3
   [[ -f $comms/wake.json ]] && current=$(< "$comms/wake.json")
-  jq -c --arg at "$at" --arg id "$id" --arg floor "$run_floor" --argjson order "$box_order" "$program"'
+  jq -c --arg at "$at" --arg id "$id" --arg floor "$run_floor" --argjson order "$box_order" \
+    --argjson noted "${carrier_note_readers:-null}" --argjson recovering "${carrier_noting_recovery:-0}" "$program"'
     | .seats as $s
     | .seats = (([$order[] | select($s[.] != null) | {key: ., value: $s[.]}]
                 + [$s | to_entries[] | select(.key as $k | ($order | index($k)) == null)]) | from_entries)' --args "$@" <<< "$current" \
@@ -3640,17 +3642,19 @@ carrier_wake_note() {
   local at=$1 writer=$2 p j w
   local -a due=()
   shift 2
+  local carrier_note_readers
+  carrier_note_readers=$(json_list "$@")
   w=$(carrier_seat_of "$writer") || w=""
   for p in "$@"; do
     j=$(carrier_seat_of "$p") || continue
     if [[ $p == "$writer" ]]; then
-      carrier_wake_decision "$p" none "the writer's own mail is pointed out to no one (5.79)"
+      carrier_wake_decision "$p" none "the writer's own mail is pointed out to no one (5.79)" || return 1
     elif [[ -n ${seat_own[j]} && -n $w ]] && carrier_cleared_more "$j" "$w"; then
-      carrier_wake_decision "$p" withheld "the room of $p, at ${seat_number[j]}, is cleared more than the writer's, $( [[ ${seat_number[w]} == null ]] && printf 'with no number' || printf 'at %s' "${seat_number[w]}" ), and its kind wakes by itself on its floor, as ${seat_own[j]} rules (5.124 point 8, 5.125 point 17)"
+      carrier_wake_decision "$p" withheld "the room of $p, at ${seat_number[j]}, is cleared more than the writer's, $( [[ ${seat_number[w]} == null ]] && printf 'with no number' || printf 'at %s' "${seat_number[w]}" ), and its kind wakes by itself on its floor, as ${seat_own[j]} rules (5.124 point 8, 5.125 point 17)" || return 1
     elif [[ -n ${seat_wake[j]} ]]; then
       due+=("${seat_boxes[j]}")
     else
-      carrier_wake_decision "$p" none "its kind has no wake pattern, so no pointer is typed for it (C94)"
+      carrier_wake_decision "$p" none "its kind has no wake pattern, so no pointer is typed for it (C94)" || return 1
     fi
   done
   carrier_wake_put "$at" "$carrier_id" '
@@ -3658,13 +3662,14 @@ carrier_wake_note() {
       .seats[$b] = ((.seats[$b] // {name: $b, count: 0, ids: [], since: null, last: 0})
         | (if (.ids | length) == 0 then .since = $at else . end)
         | .ids += [$id] | .times = ((.times // {}) + {($id): $at}) | .count = (.ids | length)))
-    | .delivered[$id] = $floor' "${due[@]}"
+    | reduce $noted[] as $reader (.; .decided[$id][$reader] = true)
+    | if $recovering == 0 then .delivered[$id] = $floor else . end' "${due[@]}" || return 1
   return 0
 }
 
 carrier_delivery_clear() {
   [[ -f $comms/wake.json ]] || return 0
-  carrier_wake_put "" "$carrier_id" 'del(.delivered[$id])'
+  carrier_wake_put "" "$carrier_id" 'del(.delivered[$id], .decided[$id])'
 }
 
 carrier_wake_record() {
@@ -3827,6 +3832,7 @@ carrier_record_mend() {
 carrier_recover() {
   # Run under a hold of the store's lock of its own, in the loop (5.162 point 1).
   local journal box request action seat answers reason base commit="" line stage rec found record written targets attempts lookup range ref absent noted
+  local carrier_noting_recovery=1
   [[ -f $fcomms/serving ]] || return 0
   journal=$(jq -c '.' "$fcomms/serving" 2> /dev/null) || { rm -f -- "$fcomms/serving"; return 0; }
   carrier_id=$(jq -r '.id' <<< "$journal") box=$(jq -r '.box' <<< "$journal") request=$(jq -r '.request' <<< "$journal")
@@ -3935,9 +3941,9 @@ carrier_recover() {
         (( noted )) && continue
         carrier_decided "$reader" && continue
         if [[ -z $j ]]; then
-          carrier_wake_decision "$reader" none "the build no longer makes this seat, so no pointer is typed for it"
+          carrier_wake_decision "$reader" none "the build no longer makes this seat, so no pointer is typed for it" || return 1
         elif ! jq -e --arg b "${seat_boxes[j]}" --arg id "$carrier_id" '(.seats[$b].ids // []) | index($id) != null' "$comms/wake.json" > /dev/null 2>&1; then
-          carrier_wake_note "$delivered_at" "$seat" "$reader"
+          carrier_wake_note "$delivered_at" "$seat" "$reader" || return 1
         fi
       done < "$taken/recovered.paths"
     fi

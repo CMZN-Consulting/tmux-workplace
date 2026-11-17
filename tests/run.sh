@@ -7757,6 +7757,7 @@ tests=(
   t_store_lock
   t_carrier_git_deadlines
   t_carrier_request_recovery
+  t_carrier_recovery_decisions
   t_carrier_pointer_recovery
   t_carrier_cross_floor
   t_carrier_closed_wakes

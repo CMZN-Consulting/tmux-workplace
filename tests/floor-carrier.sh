@@ -1,3 +1,16 @@
+carrier_test_answer() {
+  local file="$(state_of)/comms/$(box_of "$1")/answers/$2" wanted=$3 seconds=${4:-15} end=$(( EPOCHSECONDS + ${4:-15} )) first
+  while (( EPOCHSECONDS < end )); do
+    if [[ -s $file ]]; then
+      IFS= read -r first < "$file"
+      if [[ $wanted == ok ]]; then [[ $first =~ ^ok\ [0-9]{8}T[0-9]{6}Z-[0-9]{6}$ ]]; else [[ $first == "$wanted" ]]; fi
+      return
+    fi
+    sleep 0.05
+  done
+  return 1
+}
+
 t_carrier_git_deadlines() {
   scoped_clone
   floors_clone
@@ -7,7 +20,7 @@ t_carrier_git_deadlines() {
     m(["reach", "lodge", "-", "-", "floor", "mail", "harbor", "-", "-", "office", "allowed"]; 3)]'
   check "[C107] two floors with a shared mail store plan" exit_is 0 wplan
   check "[C107] build the throwaway workplace" exit_is 0 wp build
-  local real_git s pid blocked_id mode
+  local real_git s pid blocked_id mode start
   real_git=$(command -v git)
   s=$(state_of)
   mkfifo -- "$scratch/git-index-input"
@@ -41,8 +54,14 @@ t_carrier_git_deadlines() {
       check "[C107] prepared: kill only the source carrier" kill -KILL "$pid"
       check "[C107] prepared: the orphan Git still holds the store lock" bash -c '! flock -n "$1" true' _ "$s/mail"
     fi
+    start=${EPOCHREALTIME/./}
     request ida "$mode.md" "to: Harbor Keeper" "subject: other floor" --- body
-    check "[C107] $mode: the other floor delivers after the bounded child ends" answered_ok ida "$mode.md"
+    if carrier_test_answer ida "$mode.md" ok 8; then
+      check "[C107] $mode: the other floor delivers within eight seconds of the blocked transaction" test "$(( ${EPOCHREALTIME/./} - start ))" -lt 8000000
+    else
+      fail "[C107] $mode: the other floor did not deliver within eight seconds"
+      return 1
+    fi
     check "[C107] $mode: both stale index and ref locks are gone" bash -c '[[ ! -e $1/.git/index.lock && ! -e $1/.git/refs/heads/mail.lock ]]' _ "$s/mail"
     rm -f -- "$scratch/git-gate"
     if [[ $mode != committed ]]; then
@@ -95,7 +114,12 @@ t_carrier_request_recovery() {
   rm -f -- "$scratch/rename-stop"
   check "[C108] close only its dead run" exit_is 0 wp down deck
   check "[C108] a fresh source carrier recovers the request" exit_is 0 wp up deck
-  check "[C108] the original request is eventually delivered" answered_ok keeper lost.md
+  if carrier_test_answer keeper lost.md ok; then
+    check "[C108] the original request is delivered after recovery" true
+  else
+    fail "[C108] the original request was lost across the take rename"
+    return 1
+  fi
   id=$(answer_of keeper lost.md); id=${id#ok }
   check "[C108] recovered request has exactly one delivery commit" test "$(store_commits)" = 1
   check "[C108] the unserved take was returned without a fabricated refusal" bash -c '[[ $(jq -s --arg r lost.md "[.[] | select(.request == \$r)] | length" "$1") == 1 ]] && ! grep -qF "\"id\":\"$2\"" "$1"' _ "$record" "$original"

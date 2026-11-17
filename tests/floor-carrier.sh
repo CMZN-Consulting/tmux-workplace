@@ -375,3 +375,54 @@ PY
   wait "$pid"
   check "[C108] completed delivery releases its temporary reader decisions" jq -e --arg id "$id" '(.decided | has($id) | not) and (.delivered | has($id) | not)' "$s/comms/wake.json"
 }
+
+t_carrier_record_links() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","orchard","-","-","office","record","harbor","tower","-","room","allowed"];2),
+    m(["record","-","-","-","workplace","pane","kept"];3),
+    m(["record-path","records"];4),m(["record-chain","file"];5)]'
+  check "[C112] Administration record-view fixture plans" exit_is 0 wplan
+  check "[C112] fixture builds" exit_is 0 wp build
+  check "[C112] Administration starts with a recorded link view" exit_is 0 wp up bridge
+  local s stamp link obsolete sentinel top old_top mark pid
+  s=$(state_of) stamp=$s/floors/bridge/links.state
+  link=$root/records/Orchard\ Grower/Harbor\ Watch
+  obsolete=$root/records/Orchard\ Grower/Former
+  sentinel=$root/records/Orchard\ Grower/local-note
+  check "[C112] up records the live top and run identity" test -f "$stamp"
+  old_top=$(jq -r .top "$stamp") mark=$(jq -r .run "$stamp")
+  check "[C112] the record link points to its owner's persistent record directory" test "$(readlink -- "$link")" = "$s/floors/deck/records/Harbor Watch"
+  check "[C112] a cleanup for another run is refused" exit_is 1 wp record-links-end "$stamp" wrong-run
+  check "[C112] wrong-run cleanup changed no link" test -L "$link"
+  printf '%s\n' local > "$sentinel"
+  printf '%s\n' retained > "$s/floors/deck/records/Harbor Watch/retained"
+  ln -s -- "$s/floors/deck/records/Former" "$obsolete"
+  jq --arg path "$obsolete" --arg target "$s/floors/deck/records/Former" '.links += [{path:$path,target:$target}]' "$stamp" > "$scratch/link-stamp"
+  cat -- "$scratch/link-stamp" > "$stamp"
+  rm -f -- "$link"
+  python3 - "$clone/BUILD/MANIFEST" <<'PY'
+import os,re,sys
+p=sys.argv[1]
+with open(p) as f:lines=f.readlines()
+indices=[i for i,v in enumerate(lines) if re.match(r'^[0-9a-f]{64}  ',v)]
+values=[lines[i] for i in indices][::-1]
+for i,v in zip(indices,values):lines[i]=v
+with open(p+'.fixture','w') as f:f.writelines(lines)
+os.replace(p+'.fixture',p)
+PY
+  top=$(sha256sum "$clone/BUILD/MANIFEST"); top=${top%% *}
+  check "[C112] the semantically unchanged top now has a distinct digest" test "$top" != "$old_top"
+  check "[C112] carrier refreshes after that top change" eventually_long bash -c '[[ $(jq -r .top "$1") == "$2" && -L $3 && ! -e $4 && ! -L $4 ]]' _ "$stamp" "$top" "$link" "$obsolete"
+  check "[C112] refresh preserves an unowned file in the view" grep -qxF local "$sentinel"
+  pid=$(carrier_pid bridge)
+  check "[C112] kill only the synthetic Administration carrier" kill -KILL "$pid"
+  check "[C112] status detects that its carrier is gone" exit_is 1 wp status bridge
+  check "[C112] status names the last refresh and its stale-view limit" said "seats added or removed since are not reflected"
+  check "[C112] down ends the owned record links" exit_is 0 wp down bridge
+  check "[C112] down removes the managed link and its stamp" bash -c '[[ ! -e $1 && ! -L $1 && ! -e $2 ]]' _ "$link" "$stamp"
+  check "[C112] down preserves the recorded data" grep -qxF retained "$s/floors/deck/records/Harbor Watch/retained"
+  check "[C112] down preserves the unowned view file" grep -qxF local "$sentinel"
+}

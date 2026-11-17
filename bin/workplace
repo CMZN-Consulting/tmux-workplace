@@ -25,7 +25,7 @@ run_floor="" f_gen=""
 report_floors=()
 ALWAYS=(tmux setpriv env mkdir cp rm sha256sum stat)
 MAIL_PROGRAMS=(git timeout mktemp cat flock dd mv tail date)
-LOG_PROGRAMS=(dd date tail head timeout mktemp cat)
+LOG_PROGRAMS=(dd date tail head timeout mktemp cat ln readlink)
 JOURNAL_PROGRAMS=(systemd-run systemctl journalctl)
 CHAIN_PERIOD=10
 WAKE_PERIOD=60
@@ -2683,6 +2683,15 @@ set_records() {
       floor_record_links "$path" "$entry" "$binds" || return 1
     fi
   done < <(jq -c '.seats[]' "$records")
+  if [[ -n $run_floor && $(jq -r '.slots[(["unenforced"] | tojson)] // ""' <<< "$state") == 1 && -n $path ]]; then
+    local links_mark links_state
+    links_mark=$(jq -r '.slots[(["run"] | tojson)]' <<< "$state")
+    links_state=$made_in/links.state
+    floor_record_links_refresh "$run_floor" "$links_mark" || return 1
+    jq -nc --arg what "the record links of floor $run_floor" \
+      --argjson call "$(json_list "$BASH" "$build_dir/bin/workplace" record-links-end "$links_state" "$links_mark")" \
+      '{what:$what,call:$call}' >> "$run_dir/ledger" || return 1
+  fi
   if [[ -n $chain ]]; then
     for place in "mask-journal-var /var/log/journal" "mask-journal-run /run/log/journal" "mask-journal-sockets /run/systemd/journal"; do
       slot=${place%% *} key=${place#* }
@@ -4063,6 +4072,69 @@ carrier_watch() {
   done
 }
 
+floor_record_links_refresh() (
+  local floor=$1 mark=$2 top records state_home stamp old='[]' desired='[]' where path row link target actual parent temporary
+  [[ -n $floor ]] || return 0
+  top=$(sha_of "$build_dir/MANIFEST") || return 1
+  build_resolve
+  floor_scope "$floor"
+  records=$f_gen/records.json
+  [[ -f $records ]] || return 0
+  state_home=$(jq -er '.state | strings' "$records") || return 1
+  stamp=$state_home/links.state
+  if [[ -f $stamp && ! -L $stamp ]]; then
+    [[ $(stat -c %u -- "$stamp") == "$EUID" && $(stat -c %a -- "$stamp") == 600 ]] || return 1
+    if jq -e --arg top "$top" --arg run "$mark" '.top==$top and .run==$run' "$stamp" > /dev/null 2>&1; then return 0; fi
+    old=$(jq -ce '.links | arrays' "$stamp") || return 1
+  elif [[ -e $stamp || -L $stamp ]]; then return 1; fi
+  verify_build "$floor" > /dev/null || return 1
+  [[ $(floor_spec | jq -r '.[4]') == unenforced ]] || return 0
+  path=$(jq -r '.path // empty' "$records")
+  if [[ -n $path ]]; then
+    where=$(jq -c -L "$build_dir/libexec" --slurpfile b "$build_dir/binding.json" '
+      include "table"; floor_index($b[0]) as $ix
+      | [plan_terms[] | .term | select(.[0]=="pane") | {key:.[4],value:term_floor($b[0];$ix)}] | from_entries' "$b_plan") || return 1
+    desired=$(jq -c --arg path "$path" --arg root "${state_home%/floors/*}" --argjson where "$where" '
+      [.seats[] as $seat | $seat.reads[] as $name | select($where[$name]!=null)
+       | {path:($path+"/"+$seat.name+"/"+$name),target:($root+"/floors/"+$where[$name]+"/records/"+$name)}]' "$records") || return 1
+  fi
+  while IFS= read -r row; do
+    link=$(jq -r .path <<< "$row") target=$(jq -r .target <<< "$row") parent=${link%/*}
+    if [[ ! -e $parent && ! -L $parent ]]; then mkdir -m 0700 -- "$parent" || return 1; fi
+    [[ -d $parent && ! -L $parent && $(stat -c %u -- "$parent") == "$EUID" ]] || return 1
+    if [[ -L $link ]]; then
+      actual=$(readlink -- "$link") || return 1
+      [[ $actual != "$target" ]] || continue
+      jq -e --arg p "$link" --arg t "$actual" 'any(.[]; .path==$p and .target==$t)' <<< "$old" > /dev/null || return 1
+    elif [[ -e $link ]]; then return 1; fi
+    temporary=$state_home/.record-link.$BASHPID.$RANDOM
+    ln -s -- "$target" "$temporary" || return 1
+    if ! mv -fT -- "$temporary" "$link"; then rm -f -- "$temporary"; return 1; fi
+  done < <(jq -c '.[]' <<< "$desired")
+  while IFS= read -r row; do
+    link=$(jq -r .path <<< "$row") target=$(jq -r .target <<< "$row")
+    jq -e --arg p "$link" 'any(.[]; .path==$p)' <<< "$desired" > /dev/null && continue
+    if [[ -L $link && $(readlink -- "$link") == "$target" ]]; then rm -f -- "$link" || return 1
+    elif [[ -e $link || -L $link ]]; then return 1; fi
+  done < <(jq -c '.[]' <<< "$old")
+  jq -nc --arg top "$top" --arg run "$mark" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson links "$desired" \
+    '{top:$top,run:$run,at:$at,links:$links}' > "$stamp.new" && mv -fT -- "$stamp.new" "$stamp"
+)
+
+cmd_record_links_end() {
+  (( $# == 2 )) && [[ $1 == /* ]] || die "record-links-end takes the state file and run mark" 2
+  local file=$1 mark=$2 row link target
+  [[ -e $file || -L $file ]] || return 0
+  [[ -f $file && ! -L $file && $(stat -c %u -- "$file") == "$EUID" && $(stat -c %a -- "$file") == 600 ]] || return 1
+  jq -e --arg run "$mark" '.run==$run and (.links|type)=="array"' "$file" > /dev/null || return 1
+  while IFS= read -r row; do
+    link=$(jq -r .path <<< "$row") target=$(jq -r .target <<< "$row")
+    if [[ -L $link && $(readlink -- "$link") == "$target" ]]; then rm -f -- "$link" || return 1
+    elif [[ -e $link || -L $link ]]; then return 1; fi
+  done < <(jq -c '.links[]' "$file")
+  rm -f -- "$file"
+}
+
 cmd_carry() {
   need_jq
   locate
@@ -4178,6 +4250,13 @@ cmd_carry() {
   # fails, the pass tries no more, and its pipes and chain go on (5.162 point 1).
   while (( ! carrier_stop )) && [[ -d $run_dir/carrier ]]; do
     carrier_pass_begin
+    if [[ -n $run_floor && ${floor_unenforced-0} == 1 ]]; then
+      if floor_record_links_refresh "$run_floor" "$carrier_run"; then record_links_fault=0
+      elif [[ ${record_links_fault-0} == 0 ]]; then
+        warn "the record links were not refreshed; their last stamp is kept"
+        record_links_fault=1
+      fi
+    fi
     carrier_transport_ok=1
     if [[ -n $run_floor ]] && ! floor_refresh; then
       carrier_transport_ok=0
@@ -4817,6 +4896,24 @@ records_status() {
   local up=$1 records=$f_gen/records.json entry day size chained state_file name failed out line pane
   local -A piped=()
   [[ -f $records ]] || return 0
+  if [[ -n $run_floor ]]; then
+    local links_stamp links_top links_at links_live=0 links_pid links_ident links_current
+    links_stamp=$(jq -r '.state' "$records")/links.state
+    if [[ -f $links_stamp && ! -L $links_stamp ]]; then
+      links_top=$(jq -r '.top // "unknown"' "$links_stamp") links_at=$(jq -r '.at // "unknown"' "$links_stamp")
+      if [[ -f $run_dir/ledger ]]; then
+        entry=$(jq -sc '[.[] | select(.what | startswith("the carrier, pid "))][-1] // {}' "$run_dir/ledger")
+        links_pid=$(jq -r '.what // "" | ltrimstr("the carrier, pid ")' <<< "$entry") links_ident=$(jq -r '.is // ""' <<< "$entry")
+        if [[ $links_pid =~ ^[0-9]+$ ]]; then
+          links_current=$(stat -L -c %d:%i -- "/proc/$links_pid/cwd" 2>/dev/null) || links_current=""
+          [[ -n $links_current && $links_current == "$links_ident" ]] && links_live=1
+        fi
+      fi
+      line="records: links of the floor $run_floor were last refreshed at $links_at, for the build $links_top"
+      (( links_live )) && [[ $links_top == "$b_top_sha" ]] || line+="; seats added or removed since are not reflected"
+      say "$line"
+    fi
+  fi
   day=$(date -u +%F)
   state_file=$(jq -r '.dir' "$records")/chain.state
   if (( up )); then
@@ -5199,6 +5296,10 @@ case $command in
     ;;
   carrier-end)
     cmd_carrier_end "$@"
+    exit $?
+    ;;
+  record-links-end)
+    cmd_record_links_end "$@"
     exit $?
     ;;
   help | --help | -h) usage ;;

@@ -38,7 +38,8 @@ def relative($p; $q): $p[(if $q == "/" then 1 else ($q | length) + 1 end):];
   def covering($bind; $p; $seat; $rows):
     joined($bind.path; relative($p; $bind.real)) as $target
     | ([$rows[] | select(below(.path; $bind.path) and within($target; .path))] | max_by(.path | depth)) as $cover
-    | any($doc.masks[]; within($target; .path))
+    | any($doc.masks[]; fact(.path).status == "present"
+        and certified($bind; . + {real: fact(.path).real}; $target; $rows))
       or ($cover != null and ($cover.state | level) <= permission($seat; $rows; $p)
           and certified($bind; $cover; $target; $rows));
   def anchor_cover($row; $seat; $rows):
@@ -75,7 +76,7 @@ def relative($p; $q): $p[(if $q == "/" then 1 else ($q | length) + 1 end):];
         (if fact($r.path).kind == "directory" then
           boundaries($rows)[] as $p
           | select(below($p; $r.real) and (fact($p).status == "present"
-              or (($r.state | level) == 2 and any($rows[]; .path == $p and .path == .real and (.state | level) == 0))))
+              or any($rows[]; .path == $p and .path == .real and (.state | level) == 0)))
           | select(permission($seat; $rows; $p) < ($r.state | level))
           | select(covering($r; $p; $seat; $rows) | not)
           | "\(who($seat)): row \($r.path | tojson) (\($r.state), from \($r | origin)) holds \($p | tojson) through \($r.real | tojson), exposing it at \(joined($r.path; relative($p; $r.real)) | tojson) without a final cover at host access \(permission($seat; $rows; $p)); \(policy_name($seat; $rows; $p))"

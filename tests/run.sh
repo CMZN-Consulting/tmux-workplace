@@ -6870,6 +6870,47 @@ t_records_by_day() {
 }
 
 
+t_alias_access_review() {
+  local runner=$scratch/alias-review-guard id data base path target expected
+  local -a entries
+  printf '%s\n' '#!/usr/bin/env bash' 'set -u -o pipefail' 'export LC_ALL=C' \
+    'warn() { printf "workplace: %s\n" "$*" >&2; }' 'root=$1' 'mask_file=$6' > "$runner"
+  sed -n '/^physical_of() {/,/^held_by_nobody() {/p' "$loop" | sed '$d' >> "$runner"
+  printf '%s\n' 'frame_masks() { cat -- "$mask_file"; }' \
+    'refuse_alias_access "$2" "$3" "$4" "$5"' 'rc=$?' \
+    'printf "%s\n" "${alias_access_report-}"' 'exit "$rc"' >> "$runner"
+  while IFS= read -r id; do
+    base=$root/alias-review/$id
+    mkdir -p -- "$base/tree/vault/open" "$base/mask/sub"
+    data=$(jq -c --arg id "$id" --arg base "$base" --arg uid "$EUID" \
+      '.[] | select(.id == $id) | walk(if type == "string" then gsub("@R@"; $base) | gsub("@UID@"; $uid) else . end)' "$fixtures/alias-review-cases.json")
+    mapfile -d '' -t entries < <(jq --raw-output0 '(.links // [])[] | .[]' <<< "$data")
+    local i
+    for ((i=0; i<${#entries[@]}; i+=2)); do
+      path=$base/${entries[i]} target=${entries[i+1]}
+      mkdir -p -- "${path%/*}"
+      ln -s -- "$target" "$path"
+    done
+    jq -nc --argjson c "$data" '
+      def at($n): {path:"review-case.typify",line:$n};
+      {programs:[{path:"review-case.typify",plan:[["pane","orchard","barn","grower","Orchard Grower"]],recorded:
+        ([($c.labels // [])[] | {term:(["label"] + .),origin:at(1)}]
+         + [($c.keys // [])[] | {term:(["ssh-key"] + .),origin:at(2)}])}],
+       state:{view:[$c.rows | to_entries[] | {key:(["orchard","barn","grower"] + [.value[0]]),
+         value:[.value[1]],source:"statement",origins:[at(.key+3)]}]}}' > "$base/plan.json"
+    jq -nc --argjson c "$data" --slurpfile p "$base/plan.json" \
+      '{rows:$p[0].state.view,seats:[{seat:["orchard","barn","grower"],clearance:{value:($c.clearance // null)}}]}' > "$base/view.json"
+    jq --raw-output0 '(.masks // [])[] | .[]' <<< "$data" > "$base/masks"
+    expected=$(jq -r '.expected' <<< "$data")
+    local status=1
+    [[ $expected == refuse ]] || status=0
+    check "[C31] $id: $expected by the actual metadata and admission functions" exit_is "$status" \
+      bash "$runner" "$base" "$base/view.json" "$base/plan.json" "$tool/host/binding.json" "$tool/libexec" "$base/masks"
+    check "[C31] $id: no parser or extraction failure" \
+      bash -c '! grep -Eq "jq: error|syntax error|command not found|cannot decide alias access|cannot read alias-access|cannot inspect alias-access" "$1"' _ "$scratch/out"
+  done < <(jq -r '.[].id' "$fixtures/alias-review-cases.json")
+}
+
 t_alias_access() {
   scoped_clone
   local id casebase data expected path target
@@ -7010,6 +7051,7 @@ t_alias_access_key_sources() {
 }
 
 tests=(
+  t_alias_access_review
   t_alias_access_mask_failure
   t_alias_access_key_sources
   t_alias_access_rechecks

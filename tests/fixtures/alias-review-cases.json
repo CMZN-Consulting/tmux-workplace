@@ -1,0 +1,637 @@
+[
+  {
+    "id": "D1a-root-later-than-top-level-ro",
+    "rows": [
+      [
+        "/usr",
+        "read-only"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ],
+      [
+        "/",
+        "read-write"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "/usr"
+      ]
+    ]
+  },
+  {
+    "id": "D1b-root-later-than-top-level-searchable",
+    "rows": [
+      [
+        "/usr",
+        "searchable-only"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ],
+      [
+        "/",
+        "read-only"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "/usr/bin"
+      ]
+    ]
+  },
+  {
+    "id": "D1-control-equal-access",
+    "rows": [
+      [
+        "/usr",
+        "read-only"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ],
+      [
+        "/",
+        "read-write"
+      ]
+    ],
+    "expected": "accept",
+    "links": [
+      [
+        "alias",
+        "/usr"
+      ]
+    ]
+  },
+  {
+    "id": "D2a-escape-from-closed-mask",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault",
+        "read-only"
+      ],
+      [
+        "@R@/mask/escape/vault",
+        "read-write"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "mask/escape",
+        "../tree"
+      ]
+    ],
+    "labels": [],
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ]
+  },
+  {
+    "id": "D2b-escape-over-hidden-label",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault",
+        "hidden"
+      ],
+      [
+        "@R@/mask/escape/vault",
+        "read-write"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "mask/escape",
+        "../tree"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ]
+  },
+  {
+    "id": "D2-control-canonical-masked-child",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/mask/sub",
+        "read-only"
+      ]
+    ],
+    "expected": "accept",
+    "masks": [
+      [
+        "@R@/mask",
+        "closed",
+        "synthetic closed mask"
+      ]
+    ]
+  },
+  {
+    "id": "D3a-numbered-label",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "dangling",
+        "nowhere"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/dangling/sub",
+        "0"
+      ]
+    ]
+  },
+  {
+    "id": "D3b-closed-label",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "dangling",
+        "nowhere"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/dangling/sub",
+        "closed"
+      ]
+    ]
+  },
+  {
+    "id": "D3c-key-source",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "dangling",
+        "nowhere"
+      ]
+    ],
+    "keys": [
+      [
+        "synthetic",
+        "@R@/dangling/key"
+      ]
+    ]
+  },
+  {
+    "id": "D3d-protective-row",
+    "rows": [
+      [
+        "/",
+        "read-write"
+      ],
+      [
+        "@R@/dangling/sub",
+        "scratch"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "dangling",
+        "nowhere"
+      ]
+    ]
+  },
+  {
+    "id": "D3e-label-without-view-rows",
+    "rows": [],
+    "expected": "refuse",
+    "links": [
+      [
+        "dangling",
+        "nowhere"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/dangling/sub",
+        "0"
+      ]
+    ]
+  },
+  {
+    "id": "D3f-key-without-view-rows",
+    "rows": [],
+    "expected": "refuse",
+    "links": [
+      [
+        "dangling",
+        "nowhere"
+      ]
+    ],
+    "keys": [
+      [
+        "synthetic",
+        "@R@/dangling/key"
+      ]
+    ]
+  },
+  {
+    "id": "D3-control-missing-canonical-label",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "/usr",
+        "read-only"
+      ]
+    ],
+    "expected": "accept",
+    "labels": [
+      [
+        "@R@/missing-label",
+        "0"
+      ]
+    ]
+  },
+  {
+    "id": "H1-missing-hidden",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "hidden"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ]
+  },
+  {
+    "id": "H1-control-covered-hidden",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "hidden"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ],
+      [
+        "@R@/alias/future",
+        "hidden"
+      ]
+    ],
+    "expected": "accept",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ]
+  },
+  {
+    "id": "H1-missing-scratch",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "scratch"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ]
+  },
+  {
+    "id": "H1-control-covered-scratch",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "scratch"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ],
+      [
+        "@R@/alias/future",
+        "scratch"
+      ]
+    ],
+    "expected": "accept",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ]
+  },
+  {
+    "id": "H1-missing-searchable-only",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "searchable-only"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ]
+  },
+  {
+    "id": "H1-control-covered-searchable-only",
+    "rows": [
+      [
+        "/",
+        "searchable-only"
+      ],
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/future",
+        "searchable-only"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ],
+      [
+        "@R@/alias/future",
+        "searchable-only"
+      ]
+    ],
+    "expected": "accept",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ]
+  },
+  {
+    "id": "H2-boolean-clearance",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "tree/vault"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": true
+  },
+  {
+    "id": "H2-control-numeric-clearance",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ]
+    ],
+    "expected": "accept",
+    "links": [
+      [
+        "alias",
+        "tree/vault"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": 0
+  },
+  {
+    "id": "M-clearance-clamps-write",
+    "rows": [
+      [
+        "/",
+        "read-write"
+      ],
+      [
+        "@R@/alias",
+        "read-write"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "tree/vault"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": 0
+  },
+  {
+    "id": "M-private-key-boundary",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ],
+    "keys": [
+      [
+        "synthetic",
+        "@R@/tree/vault"
+      ]
+    ]
+  },
+  {
+    "id": "M-deepest-cover",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault",
+        "hidden"
+      ],
+      [
+        "@R@/alias",
+        "read-only"
+      ],
+      [
+        "@R@/alias/vault",
+        "hidden"
+      ],
+      [
+        "@R@/alias/vault/open",
+        "read-only"
+      ]
+    ],
+    "expected": "refuse",
+    "links": [
+      [
+        "alias",
+        "tree"
+      ]
+    ]
+  },
+  {
+    "id": "M-runtime-missing-row",
+    "rows": [
+      [
+        "/",
+        "read-only"
+      ],
+      [
+        "/run/user/@UID@/workplace-alias-review-never-created",
+        "read-only"
+      ]
+    ],
+    "expected": "refuse"
+  }
+]

@@ -875,6 +875,7 @@ alias_path_facts() {
             else status=error reason="cannot resolve the existing prefix"; fi
             break
             ;;
+          1) if [[ -L $prefix ]]; then status=error reason="unresolvable symbolic link in prefix $prefix"; break; fi ;;
           2) status=error reason=$unread; break ;;
         esac
       done
@@ -904,7 +905,7 @@ refuse_alias_access() {
        runtime_faults: [runtime_row_problems($b[0]; ($p | .state[$spec.cell] = $rows);
          (($v[0] // {}) + {rows: $rows}); $runtime)],
        chain: ($v[0].records.chain // "") }') || { warn "cannot read alias-access policy in $plan and $view"; return 1; }
-  [[ $(jq '.rows | length' <<< "$input") != 0 ]] || { alias_access_report='{"faults":[],"labelled":[]}'; return 0; }
+  [[ $(jq '[.rows[], .labels[], .keys[]] | length' <<< "$input") != 0 ]] || { alias_access_report='{"faults":[],"labelled":[]}'; return 0; }
   local -a masks=()
   mapfile -d '' -t masks < <(frame_masks "$(jq -r '.chain' <<< "$input")")
   wait "$!" || { warn "cannot read alias-access masks"; return 1; }

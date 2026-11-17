@@ -1,6 +1,6 @@
 def within($p; $q): $p == $q or ($q == "/" and ($p | startswith("/"))) or ($p | startswith($q + "/"));
 def below($p; $q): $p != $q and within($p; $q);
-def depth: split("/") | length;
+def depth: if . == "/" then 0 else (split("/") | length) - 1 end;
 def level: {"hidden": 0, "scratch": 0, "searchable-only": 0, "read-only": 1, "read-write": 2}[.] // error("\(.) is not one of hidden, scratch, searchable-only, read-only, read-write");
 def origin: [(.origins // [.origin // {}])[] | "\(.path // "?"):\(.line // "?")"] | join(", ");
 def joined($parent; $tail): ($parent | rtrimstr("/")) + "/" + $tail;
@@ -8,8 +8,11 @@ def relative($p; $q): $p[(if $q == "/" then 1 else ($q | length) + 1 end):];
 
 . as $doc
 | def fact($p): $doc.facts[$p] // error("missing path metadata for \($p | tojson)");
-  def terminal($r): any($doc.masks[]; .kind == "closed" and within($r.path; .path));
-  def cleared($seat; $label): $label.value != "closed" and $seat.clearance != null and $seat.clearance <= ($label.value | tonumber);
+  def terminal($r): any($doc.masks[]; .kind == "closed" and within($r.path; .path)
+    and (fact($r.path).symlink | not)
+    and (if $r.path == .path then $r.real == fact(.path).real
+         else $r.real == joined(fact(.path).real; relative($r.path; .path)) end));
+  def cleared($seat; $label): $label.value != "closed" and ($seat.clearance | type) == "number" and $seat.clearance <= ($label.value | tonumber);
   def permission($seat; $rows; $x):
     if any($doc.labels[]; .value == "closed" and fact(.path).status == "present" and within($x; .path))
        or any($doc.keys[]; fact(.path).status == "present" and within($x; .path))
@@ -71,7 +74,8 @@ def relative($p; $q): $p[(if $q == "/" then 1 else ($q | length) + 1 end):];
         else empty end,
         (if fact($r.path).kind == "directory" then
           boundaries($rows)[] as $p
-          | select(below($p; $r.real) and fact($p).status == "present")
+          | select(below($p; $r.real) and (fact($p).status == "present"
+              or (($r.state | level) == 2 and any($rows[]; .path == $p and .path == .real and (.state | level) == 0))))
           | select(permission($seat; $rows; $p) < ($r.state | level))
           | select(covering($r; $p; $seat; $rows) | not)
           | "\(who($seat)): row \($r.path | tojson) (\($r.state), from \($r | origin)) holds \($p | tojson) through \($r.real | tojson), exposing it at \(joined($r.path; relative($p; $r.real)) | tojson) without a final cover at host access \(permission($seat; $rows; $p)); \(policy_name($seat; $rows; $p))"

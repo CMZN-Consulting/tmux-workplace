@@ -4073,6 +4073,7 @@ carrier_watch() {
 }
 
 floor_record_links_refresh() (
+  umask 077
   local floor=$1 mark=$2 top records state_home stamp old='[]' desired='[]' where path row link target actual parent temporary
   [[ -n $floor ]] || return 0
   top=$(sha_of "$build_dir/MANIFEST") || return 1

@@ -393,6 +393,7 @@ t_carrier_record_links() {
   obsolete=$root/records/Orchard\ Grower/Former
   sentinel=$root/records/Orchard\ Grower/local-note
   check "[C112] up records the live top and run identity" test -f "$stamp"
+  check "[C112] its state is private even under the caller's ordinary umask" test "$(stat -c %a -- "$stamp")" = 600
   old_top=$(jq -r .top "$stamp") mark=$(jq -r .run "$stamp")
   check "[C112] the record link points to its owner's persistent record directory" test "$(readlink -- "$link")" = "$s/floors/deck/records/Harbor Watch"
   check "[C112] a cleanup for another run is refused" exit_is 1 wp record-links-end "$stamp" wrong-run
@@ -407,7 +408,7 @@ t_carrier_record_links() {
 import os,re,sys
 p=sys.argv[1]
 with open(p) as f:lines=f.readlines()
-indices=[i for i,v in enumerate(lines) if re.match(r'^[0-9a-f]{64}  ',v)]
+indices=[i for i,v in enumerate(lines) if re.match(r'^[0-9a-f]{64}  ',v) and '  floors/' not in v]
 values=[lines[i] for i in indices][::-1]
 for i,v in zip(indices,values):lines[i]=v
 with open(p+'.fixture','w') as f:f.writelines(lines)

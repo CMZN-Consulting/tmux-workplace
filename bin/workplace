@@ -599,7 +599,7 @@ physical_of() {
 # The real path of PATH, in the global physical: every link in it resolved, its last part too, a file's as well as a
 # directory's (5.176 point 7), read without entering the directory it names. A bind written through a link to a file
 # lies on the file it leads to. Where readlink cannot resolve it, the status is 1.
-real_of() {
+read_real_of() {
   local r
   physical=$1
   r=$(readlink -e -- "$1" && printf .) || return 1
@@ -609,7 +609,7 @@ real_of() {
 # Whether PATH stands, read without entering a directory: status 0 where it does, 1 where it does not (a part of it
 # names nothing, or a file that is no directory), and 2 where the rule cannot tell, as where a directory on its way
 # cannot be searched, with stat's reason in the global unread. A link that leads nowhere does not stand.
-presence_of() {
+read_presence_of() {
   # It reads stat's reason, which the frame's LC_ALL=C keeps in English, from the stat on PATH; under another reason
   # a path that does not stand is one of which the rule cannot tell, and the rule refuses it.
   local err
@@ -620,6 +620,35 @@ presence_of() {
   unread=${err##*: }
   [[ -n $unread ]] || unread="stat gives no reason"
   return 2
+}
+
+
+real_of() {
+  local status
+  if [[ -n $1 && ${alias_metadata_cache-0} == 1 && -n ${alias_real_status[$1]+set} ]]; then
+    physical=${alias_real_cache[$1]}
+    return "${alias_real_status[$1]}"
+  fi
+  read_real_of "$1"
+  status=$?
+  if [[ -n $1 && ${alias_metadata_cache-0} == 1 ]]; then
+    alias_real_cache[$1]=$physical alias_real_status[$1]=$status
+  fi
+  return "$status"
+}
+
+presence_of() {
+  local status
+  if [[ -n $1 && ${alias_metadata_cache-0} == 1 && -n ${alias_presence_cache[$1]+set} ]]; then
+    unread=${alias_reason_cache[$1]}
+    return "${alias_presence_cache[$1]}"
+  fi
+  read_presence_of "$1"
+  status=$?
+  if [[ -n $1 && ${alias_metadata_cache-0} == 1 ]]; then
+    alias_presence_cache[$1]=$status alias_reason_cache[$1]=$unread
+  fi
+  return "$status"
 }
 
 # Whether a mask is to be read: a directory that stands, or a path of which the rule cannot tell whether it stands.
@@ -674,7 +703,7 @@ frame_masks() {
 # A path that does not exist, as stat tells it, is passed over. With a seat named, only that seat's rows are read. The
 # binding and the library are those the views were made with: the tool's own at build, and BUILD's own at up, restart
 # and a pane's exec (5.176 point 11). Where the plan or the views cannot be read, the rule refuses.
-refuse_closed_names() {
+refuse_closed_names_legacy() {
   local view=$1 plan=$2 binding=$3 lib=$4 only=${5-} c r p row state seat origins label lorigin cphys rphys kind name target rest covered chain what
   local physical resolved unread
   local -a closed=() rows=() masks=() faults=() covers=() reals=()
@@ -812,6 +841,99 @@ refuse_closed_names() {
   (( ${#faults[@]} )) || return 0
   printf 'workplace: %s\n' "${faults[@]}" >&2
   return 1
+}
+
+
+alias_path_facts() {
+  local path status real kind link reason prefix tail item
+  for path in "$@"; do
+    reason="" real=$path kind=missing link=false
+    if [[ $path != /* ]]; then
+      printf '%s\0' "$path" "$path" error missing false "the view path is not absolute"
+      continue
+    fi
+    [[ ! -L $path ]] || link=true
+    presence_of "$path"
+    status=$?
+    if (( status == 0 )); then
+      if real_of "$path"; then real=$physical; status=present
+      else status=error; reason="cannot resolve its real path"; fi
+      if [[ -d $path ]]; then kind=directory; elif [[ -f $path ]]; then kind=file; else kind=other; fi
+    elif (( status == 2 )); then
+      status=error reason=$unread
+    else
+      status=missing prefix=$path tail=""
+      while [[ $prefix != / ]]; do
+        item=${prefix##*/}
+        tail=$item${tail:+/}$tail
+        prefix=${prefix%/*}
+        [[ -n $prefix ]] || prefix=/
+        presence_of "$prefix"
+        case $? in
+          0)
+            if real_of "$prefix"; then real=${physical%/}/$tail
+            else status=error reason="cannot resolve the existing prefix"; fi
+            break
+            ;;
+          2) status=error reason=$unread; break ;;
+        esac
+      done
+    fi
+    printf '%s\0' "$path" "$real" "$status" "$kind" "$link" "$reason"
+  done
+}
+
+refuse_alias_access() {
+  local view=$1 plan=$2 binding=$3 lib=$4 only=${5-} input facts result
+  local physical unread
+  local -a paths faults
+  input=$(jq -n -c -L "$lib" --arg root "$root" --arg only "$only" --arg runtime "/run/user/$EUID" \
+    --slurpfile b "$binding" --slurpfile p "$plan" --slurpfile v "$view" '
+    include "table";
+    ($p[0] | joined($b[0]; $root)) as $p | $b[0].tables.view as $spec
+    | [table_rows($p; $v[0]; $spec)[] | select($only == "" or (.key[0:3] | join("/")) == $only)] as $rows
+    | {rows: $rows, seats: ($v[0].seats // []), labels:
+       ([$p.programs[]?.recorded[]? | select(.term[0]? == "label")
+         | {path: .term[1], value: .term[2], origins: [.origin]}]
+        | group_by([.path, .value]) | map(.[0] + {origins: [.[].origins[]]})),
+       keys: ([$p.programs[]?.recorded[]? | select(.term[0]? == "ssh-key")
+         | {path: .term[2], name: .term[1], origins: [.origin]}]
+        | group_by(.path) | map(.[0] + {origins: [.[].origins[]]})),
+       names: ([$p.programs[]?.plan[]? | (if type == "object" then .term else . end)
+         | select(type == "array" and .[0] == "pane") | {key: (.[1:4] | tojson), value: .[4]}] | from_entries),
+       runtime_faults: [runtime_row_problems($b[0]; ($p | .state[$spec.cell] = $rows);
+         (($v[0] // {}) + {rows: $rows}); $runtime)],
+       chain: ($v[0].records.chain // "") }') || { warn "cannot read alias-access policy in $plan and $view"; return 1; }
+  [[ $(jq '.rows | length' <<< "$input") != 0 ]] || { alias_access_report='{"faults":[],"labelled":[]}'; return 0; }
+  local -a masks=()
+  mapfile -d '' -t masks < <(frame_masks "$(jq -r '.chain' <<< "$input")")
+  wait "$!" || { warn "cannot read alias-access masks"; return 1; }
+  input=$(jq -c --args '.masks = ([range(0; ($ARGS.positional | length); 3) as $i
+    | {path: $ARGS.positional[$i], kind: $ARGS.positional[$i+1], name: $ARGS.positional[$i+2]}])' \
+    -- "${masks[@]}" <<< "$input") || { warn "cannot read alias-access masks"; return 1; }
+  mapfile -d '' -t paths < <(jq --raw-output0 '[.rows[].key[3], .labels[].path, .keys[].path, .masks[].path] | unique[]' <<< "$input")
+  wait "$!" || { warn "cannot read alias-access paths"; return 1; }
+  facts=$(alias_path_facts "${paths[@]}" | jq -Rsc '
+    split("\u0000") | .[0:-1] as $a
+    | if ($a | length) % 6 != 0 then error("incomplete path metadata") else
+      [range(0; ($a | length); 6) as $i | {key: $a[$i], value:
+        {real: $a[$i+1], status: $a[$i+2], kind: $a[$i+3], symlink: ($a[$i+4] == "true"), reason: $a[$i+5]}}] | from_entries end') \
+    || { warn "cannot inspect alias-access paths"; return 1; }
+  result=$(jq -c --argjson facts "$facts" '.facts = $facts' <<< "$input" \
+    | jq -c -f "$lib/alias-access.jq") || { warn "cannot decide alias access"; return 1; }
+  alias_access_report=$result
+  mapfile -d '' -t faults < <(jq --raw-output0 '.faults[]' <<< "$result")
+  wait "$!" || { warn "cannot read alias-access verdict"; return 1; }
+  (( ${#faults[@]} == 0 )) && return 0
+  printf 'workplace: %s\n' "${faults[@]}" >&2
+  return 1
+}
+
+refuse_closed_names() {
+  local alias_metadata_cache=1
+  local -A alias_real_cache=() alias_real_status=() alias_presence_cache=() alias_reason_cache=()
+  refuse_closed_names_legacy "$@" || return 1
+  refuse_alias_access "$@"
 }
 
 held_by_nobody() {
@@ -1512,7 +1634,7 @@ make_records() {
   say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
 }
 
-frame_files=(binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq)
+frame_files=(binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq)
 manifest_files=(plan.json plan-manifest.json "${frame_files[@]}")
 
 # A generation's MANIFEST: a hash and a name for each file in its directory, in the C locale's order.
@@ -1664,6 +1786,7 @@ cmd_build() {
   fi
   refuse_rows "$plan_dir/plan.json" "$view_file" no || die "build refuses: PLAN/plan.json shows a seat a place the frame closes"
   refuse_closed_names "$view_file" "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec" || die "build refuses: a seat's view would hold a closed directory under another name"
+  jq -r ' .labelled[] ' <<< "$alias_access_report"
   plan_report "$plan_dir/plan.json" "$tool/host/binding.json" "$tool/libexec/check.jq" "$view_file"
   check_name "$manifest" || die "build refuses: the plan's workplace name is not the one its clone gives"
   if [[ $facts_member == none ]]; then
@@ -1708,7 +1831,7 @@ cmd_build() {
   fi
   local copies=$build_dir${shared:+/$shared}
   local -a sources=("$plan_dir/plan.json" "$plan_dir/manifest.json" "$tool/host/binding.json"
-    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq")
+    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq")
   local -a listed=("${shared:+$shared/}plan.json" "${shared:+$shared/}plan-manifest.json" "${frame_files[@]}")
   if [[ -f $plan_dir/facts.json ]]; then
     sources+=("$plan_dir/facts.json")
@@ -1730,7 +1853,7 @@ cmd_build() {
       cp -- "$plan_dir/manifest.json" "$copies/plan-manifest.json" &&
       cp -- "$tool/host/binding.json" "$build_dir/binding.json" &&
       cp -- "$tool/bin/workplace" "$build_dir/bin/workplace" &&
-      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$build_dir/libexec/"
+      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq" "$build_dir/libexec/"
   }; then
     rm -rf -- "$build_dir"
     die "build failed; $build_dir was removed"

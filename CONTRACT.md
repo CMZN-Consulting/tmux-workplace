@@ -150,6 +150,56 @@
   - a row that is not hidden, lying beneath a hidden row;
   - a row that is not hidden, whose governing label is one the seat is not cleared for. A row's governing label is the deepest label at or above it, and a passage is not refused.
   - a label the seat is not cleared for, whose path has no row of the seat's, and whose nearest row above is read-only or read-write: `seat NAME (K/R/S): PATH, labelled VALUE (from ORIGIN), lies beneath ROW (STATE, from ORIGIN) with no row of its own`, then `, and no clearance reaches closed`, `, and the seat is cleared for no label`, or `, and the seat's clearance C does not reach VALUE`. This checks what the label step made (5.129 point 2): the rule above reads the labels at or above a row, and this one reads the labels beneath one. A row at the labelled path itself is the rule above's.
+  In addition to that closed-name check, `build`, `up`, `restart` and `exec` check
+  alias access on the machine. The first three check all views; `exec` checks its
+  selected seat. They read the same plan, view and binding as the closed-name
+  check. `libexec/alias-access.jq` is copied into BUILD and covered by its
+  manifest. The existing closed-name refusal is returned first.
+
+  Host contents have three access levels: unshown, read-only and read-write.
+  Hidden, scratch and searchable-only rows give no access to their host backing
+  contents. Each host bind is checked against the deepest canonical own-name
+  permission, the governing label, private-key source files and frame masks. A
+  cleared child label or explicit writable child remains an exception at its own
+  path. A cleared label alone grants reading, never writing. An uncleared label
+  remains a restriction even when the fold made no row for it beneath scratch
+  or searchable-only ancestry. No alias makes a read-only path writable.
+
+  A directory bind must preserve stricter descendants too. Each is projected
+  onto the bind's written destination and needs a later cover there. The deepest
+  standing row decides: an earlier scratch cover does not excuse a later bind
+  reopening the protected contents. A read-only submount can preserve a file's
+  read-only access beneath a writable parent alias. A cover can stand above the
+  projected restriction, strictly beneath the introducing bind. A protective row
+  written through a link is accepted only as such an independently anchored,
+  symlink-free projection. It cannot define a different canonical restriction or
+  justify another unanchored cover. Labels and declared private-key source paths
+  must be written without symbolic links, including their parent components.
+  Checking a private-key source reads metadata only, never its contents.
+
+  The runtime-directory restriction is checked again at every admission point,
+  including on a build changed by hand. Its mask is not a terminal cover of rows
+  emitted again by rows-beneath after the mask. Read-only and read-write rows in
+  that directory refuse; hidden, scratch and searchable-only rows keep their
+  existing rules. A final mask can bury an earlier row only where the renderer
+  actually places it. It does not authorize an outside alias to the masked host
+  path.
+
+  A command caches path-presence and real-path results only within that one
+  admission check. Non-absolute, looping, unreadable or indeterminate metadata
+  refuses; a missing bind source still fails the existing build checks. No
+  directory is walked and no mount is injected to repair an invalid view.
+  `build` also reports admitted aliases which stand at or expose a numbered
+  labelled path, with written and resolved names and their origins. This report
+  does not change the reader's source accounting or the persisted view.
+
+  These checks require stable path components and host mount topology from
+  inspection to the bind, and no replacement of protected objects beneath a
+  running view by external host work. They do not identify hard links, duplicate
+  host mounts or already-held descriptors. The checkout, caller environment and
+  trusted-tool limits above remain. No continuous filesystem guarantee follows
+  from a successful admission check.
+
 - **C32.** `plan` prints, for each seat:
   - its kind and clearance, or that it is cleared for no label, and its home and the names it expects where it has them;
   - each remaining statement that replaced others, with every statement that it replaced. A statement that was itself replaced is printed only as replaced;

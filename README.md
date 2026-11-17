@@ -30,6 +30,20 @@ bin/workplace doctor
 
 What each term does is one entry of `host/binding.json`. What the loop does with any entry is `CONTRACT.md`. What a seat is told about its mailbox is `share/seat-page.md`, which every mailbox holds as `README.md`.
 
+An enforced seat's aliases cannot increase its host-file access. A bind through a
+symbolic link needs the same or greater permission at the resolved path's own
+name. A writable alias of a read-only path is refused. A parent alias must also
+cover each stricter descendant at the alias's destination; explicitly permitted
+children and read-only aliases of writable data remain usable. The check runs
+again at build, up, restart and each seat's exec. Private-key source files remain
+unshown even where an alias uses a different name. This is a check of declared
+paths and host metadata, not a scan of file contents.
+
+The check assumes stable paths and mounts between inspection and namespace
+creation. It does not identify hard links, separate host mounts of the same data
+or descriptors that another process already holds. The contract states the
+external host work on which a running view depends.
+
 ## Needs
 
 - bash 5.2, jq 1.7 and tmux 3.5a or later;

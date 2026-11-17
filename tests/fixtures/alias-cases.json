@@ -1,0 +1,693 @@
+[
+  {
+    "id": "A01-numbered-no-clearance-no-label-row",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A02-numbered-file-alias",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault/value"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A03-numbered-writable-alias",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A04-numbered-middle-link",
+    "rows": [
+      [
+        "@R@/aliases/link/vault",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A05-numbered-parent-alias",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A06-statement-ban",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "hidden"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A07-scratch-host-contents",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "scratch"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A08-searchable-host-contents",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "searchable-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A09-ro-directory-writable-alias",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A10-ro-file-writable-alias",
+    "rows": [
+      [
+        "@R@/tree/vault/value",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault/value"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A11-writable-parent-ro-child",
+    "rows": [
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/vault",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A12-readable-parent-hidden-child",
+    "rows": [
+      [
+        "@R@/tree",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault",
+        "hidden"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A13-readable-parent-covered-child",
+    "rows": [
+      [
+        "@R@/tree",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault",
+        "hidden"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link/vault",
+        "hidden"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A14-writable-parent-ro-cover",
+    "rows": [
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/tree/vault",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ],
+      [
+        "@R@/aliases/link/vault",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A15-cover-at-wrong-name",
+    "rows": [
+      [
+        "@R@/tree",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault",
+        "hidden"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A16-partial-cover",
+    "rows": [
+      [
+        "@R@/tree",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault",
+        "searchable-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link/vault/open",
+        "scratch"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A17-ro-alias-of-ro",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A18-ro-alias-of-rw",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "read-write"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A19-rw-alias-of-rw",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "read-write"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A20-explicit-rw-child-under-ro",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "read-only"
+      ],
+      [
+        "@R@/tree/vault/open",
+        "read-write"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault/open"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A21-cleared-child-passage-ro",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ],
+      [
+        "@R@/tree/vault/open",
+        "4"
+      ]
+    ],
+    "clearance": "4",
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault/open"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A22-cleared-child-passage-rw",
+    "rows": [
+      [
+        "@R@/tree/vault/open",
+        "read-write"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-write"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ],
+      [
+        "@R@/tree/vault/open",
+        "4"
+      ]
+    ],
+    "clearance": "4",
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault/open"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A23-cleared-parent-uncleared-child",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "4"
+      ],
+      [
+        "@R@/tree/vault/secret",
+        "0"
+      ]
+    ],
+    "clearance": "4",
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A24-numbered-label-through-link",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/aliases/link",
+        "0"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A25-component-boundary",
+    "rows": [
+      [
+        "@R@/tree/vault",
+        "hidden"
+      ],
+      [
+        "@R@/tree/vaultish",
+        "read-only"
+      ],
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vaultish"
+      ]
+    ],
+    "proposed": "accept"
+  },
+  {
+    "id": "A26-multiple-links",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "0"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/next",
+        "../tree/vault"
+      ],
+      [
+        "aliases/link",
+        "next"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A27-existing-closed-control",
+    "rows": [
+      [
+        "@R@/aliases/link",
+        "read-only"
+      ]
+    ],
+    "labels": [
+      [
+        "@R@/tree/vault",
+        "closed"
+      ]
+    ],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree/vault"
+      ]
+    ],
+    "proposed": "refuse"
+  },
+  {
+    "id": "A28-protective-alias-without-anchor",
+    "rows": [
+      [
+        "@R@/tree",
+        "read-write"
+      ],
+      [
+        "@R@/aliases/link/vault",
+        "hidden"
+      ]
+    ],
+    "labels": [],
+    "clearance": null,
+    "links": [
+      [
+        "aliases/link",
+        "../tree"
+      ]
+    ],
+    "proposed": "refuse"
+  }
+]

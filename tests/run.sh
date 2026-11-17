@@ -1677,7 +1677,7 @@ t_the_fold() {
   check "[C31] review of 4a: build refuses it too, since the label lies beneath a searchable-only row and has no tmpfs of its own: that row's tmpfs lies at $root/orchard, and the bind shows the directory at $root/aa/cellar" exit_is 1 wp build
   check "[C31] naming that path" said "and would show it at $root/aa/cellar, where no hidden, scratch or searchable-only row of the view, nor a mask, lies over it"
   statements_plan '.programs[-1].recorded += ['"$closed_base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
-                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 13)]'
+                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 13), st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard"; "read-only"; 14)]'
   check "plan with that row and a hidden row at the path where it would show the closed directory" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
   check "[C31] builds, since the hidden row lies over that path and is mounted after the bind" exit_is 0 wp build
@@ -1685,7 +1685,7 @@ t_the_fold() {
   # is shown one level up: a label on cellar/casks, and a scratch row at aa/cellar, beneath the read-write row.
   statements_plan '.programs[-1].recorded += [st("-"; "-"; "-"; "workplace"; $root + "/orchard"; "searchable-only"; 9), lb($root + "/orchard/cellar/casks"; "closed"; 11), sc(12),
                                               st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-write"; 10),
-                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "scratch"; 13)]'
+                                              st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "scratch"; 13), st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard"; "read-write"; 14)]'
   check "plan with a read-write row through a link to orchard and a scratch row above the closed casks" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
   check "[C31] review of 4a: builds, since a scratch row lies over the path where the bind would show the casks, as a hidden one does" exit_is 0 wp build
@@ -1870,7 +1870,7 @@ t_closed_names() {
     said "$grower: its row $root/aa (read-only, from programs/policy.typify:10) is the directory $root/orchard, which holds $root/orchard/cellar, $by, and would show it at $root/aa/cellar, $none"
   statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
                                                 st("orchard"; "barn"; "picker"; "seat"; $root + "/aa/cellar"; "hidden"; 13),
-                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 14)]'
+                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 14), st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard"; "read-only"; 15), st("orchard"; "barn"; "picker"; "seat"; $root + "/orchard"; "read-only"; 16), st("orchard"; "barn"; "picker"; "seat"; $root + "/aa"; "read-only"; 17)]'
   check "plan with the same hidden row written for grower too" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
   check "builds, since grower's own hidden row lies over that place" exit_is 0 wp build
@@ -1930,7 +1930,7 @@ t_closed_names() {
   fi
 
   statements_plan '.programs[-1].recorded += ['"$base"', st("orchard"; "barn"; "grower"; "seat"; $root + "/aa"; "read-only"; 10),
-                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 13)]'
+                                                st("orchard"; "barn"; "grower"; "seat"; $root + "/aa/cellar"; "hidden"; 13), st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard"; "read-only"; 14)]'
   check "plan that the rule takes: grower's row through a link to orchard, and grower's hidden row where it would show the closed directory" exit_is 0 wplan
   rm -rf -- "$clone/BUILD"
   check "build takes it" exit_is 0 wp build
@@ -2131,8 +2131,8 @@ t_closed_names_unfolded() {
   check "[C31] naming the row and the clone's mask" \
     said "$grower: its row $root/cfglink (read-only, from orchard/barn/grower/seat.typify:10) is the directory $clone, at or beneath $clone, the clone, which every view masks (C52)"
   rm -rf -- "$clone/BUILD"
-  mkdir -p -- "$root/unfolded"
-  ln -sfn -- unfolded "$root/cfglink"
+  mkdir -p -- "$root/orchard/unfolded"
+  ln -sfn -- orchard/unfolded "$root/cfglink"
   make_plan --arg root "$root" "$unfolded"
   check "build of the same plan, made again with the link leading to a directory of its own" exit_is 0 wp build
   ln -sfn -- config "$root/cfglink"
@@ -2404,7 +2404,7 @@ t_floors() {
   g=$(top_gen)
   floors_named=$(jq -r --arg g "$g" '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "floor") | "floors/\(.[1])/\($g)/MANIFEST"] | join(" ")' "$clone/PLAN/plan.json")
   check "[C5] 5.160 point 2: the top names the frame, one shared generation and one generation for each floor, in the order of the floor terms, and nothing else" \
-    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq shared/$g/MANIFEST $floors_named "
+    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq shared/$g/MANIFEST $floors_named "
   check "[C2] 5.160 point 2: the plan's copies stand in the shared generation, PLAN's plan byte for byte, and no plan, view, mail, keys, homes or records stands beside the top" \
     bash -c 'cmp -s "$1/PLAN/plan.json" "$1/BUILD/shared/$2/plan.json" && [[ -f $1/BUILD/shared/$2/plan-view.json && -f $1/BUILD/shared/$2/plan-manifest.json ]] \
       && ! ls -- "$1/BUILD" | grep -qxE "(plan|plan-view|plan-manifest|plan-facts|mail|keys|homes|records)[.]json"' _ "$clone" "$g"
@@ -3737,7 +3737,7 @@ t_closed_names_up() {
   rm -rf -- "$clone/BUILD"
   statements_plan '.programs[-1].recorded += [lb($root + "/orchard/cellar"; "closed"; 30), sc(31),
       st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard"; "read-write"; 32),
-      st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard/cellar"; "hidden"; 33)]
+      st("orchard"; "barn"; "grower"; "seat"; $root + "/zz/orchard/cellar"; "hidden"; 33), st("orchard"; "barn"; "grower"; "seat"; $root + "/orchard"; "read-write"; 34)]
     | (.programs[] | select(.path == "orchard/barn/grower/seat.typify") | .plan[1].term[5]) |= (fromjson
         + ["rw=" + $root + "/zz/orchard/almanac", "hidden=" + $root + "/zz/orchard/cellar", "hidden=" + $root + "/orchard/cellar"] | tojson)'
   check "plan with that row and a hidden row of grower's at the place where it would show the cellar" exit_is 0 wplan
@@ -6869,7 +6869,152 @@ t_records_by_day() {
   check "[C75] and says that no entry covers it" said "Harbor Keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
 }
 
+
+t_alias_access() {
+  scoped_clone
+  local id casebase data expected path target
+  local -a entries
+  while IFS= read -r id; do
+    data=$(jq -c --arg id "$id" '.[] | select(.id == $id)' "$fixtures/alias-cases.json")
+    expected=$(jq -r '.proposed' <<< "$data")
+    casebase=$root/alias-cases/$id
+    mkdir -p -- "$casebase/tree/vault/open" "$casebase/tree/vault/secret" "$casebase/tree/vaultish" "$casebase/aliases"
+    printf '%s\n' synthetic > "$casebase/tree/vault/value"
+    mapfile -d '' -t entries < <(jq --raw-output0 '.links[] | .[]' <<< "$data")
+    local i
+    for (( i=0; i+1<${#entries[@]}; i+=2 )); do
+      ln -s -- "${entries[i+1]}" "$casebase/${entries[i]}"
+    done
+    statements_plan '('"$data"') as $case | '"$(jq -n --arg b "$casebase" '$b')"' as $base
+      | .programs[-1].recorded = ([st("-"; "-"; "-"; "workplace"; "/"; "searchable-only"; 1)]
+        + [$case.rows | to_entries[] | st("orchard"; "-"; "-"; "office"; (.value[0] | gsub("@R@"; $base)); .value[1]; (.key+2))]
+        + [$case.labels[] | lb((.[0] | gsub("@R@"; $base)); .[1]; 50)]
+        + (if $case.clearance == null then [] else [cl("orchard"; "-"; "-"; "office"; $case.clearance; 51)] end)
+        + (if ($case.labels | length) == 0 and $case.clearance == null then [] else [sc(52)] end))'
+    check "$id: lexical plan" exit_is 0 wplan
+    if [[ $expected == accept ]]; then
+      check "$id: admitted without widening" exit_is 0 wp build
+    else
+      check "$id: refused before BUILD" exit_is 1 wp build
+      check "$id: a policy refusal, not a broken checker" bash -c '! grep -Eq "jq: error|cannot decide alias access|cannot read alias-access|cannot inspect alias-access" "$1"' _ "$scratch/out"
+      check "$id: no BUILD published" test ! -e "$clone/BUILD"
+    fi
+    [[ ! -d $clone/BUILD ]] || rm -rf -- "$clone/BUILD"
+  done < <(jq -r '.[].id' "$fixtures/alias-cases.json")
+}
+
+
+t_alias_access_rechecks() {
+  scoped_clone
+  mkdir -p -- "$root/aliasbox" "$root/private-alias-data"
+  ln -s -- ../orchard/almanac "$root/aliasbox/link"
+  statements_plan '.programs[-1].recorded += [sc(30), lb($root + "/private-alias-data"; "0"; 31),
+    st("orchard"; "barn"; "grower"; "seat"; $root + "/aliasbox"; "scratch"; 32),
+    st("orchard"; "barn"; "grower"; "seat"; $root + "/aliasbox/link"; "read-only"; 33)]'
+  check "alias rechecks: plan" exit_is 0 wplan
+  check "alias rechecks: build an admitted alias" exit_is 0 wp build
+  ln -sfn -- ../private-alias-data "$root/aliasbox/link"
+  check "alias rechecks: up refuses a numbered target swapped after build" exit_is 1 wp up
+  check "alias rechecks: up made no run directory" test ! -d "$run"
+  check "alias rechecks: up started no server" no_server
+  ln -sfn -- ../orchard/almanac "$root/aliasbox/link"
+  check "alias rechecks: up with the admitted target" exit_is 0 wp up
+  check "alias rechecks: grower started" wait_for_probe "Orchard Grower" grower
+  local before
+  before=$(T list-panes -a -F '#{pane_id}:#{pane_pid}')
+  ln -sfn -- ../private-alias-data "$root/aliasbox/link"
+  check "alias rechecks: restart refuses before replacing a pane" exit_is 1 wp restart "Orchard Grower"
+  check "alias rechecks: existing pane processes unchanged" test "$(T list-panes -a -F '#{pane_id}:#{pane_pid}')" = "$before"
+  check "alias rechecks: exec refuses the affected seat" exit_is 2 wp exec --print "Orchard Grower"
+  check "alias rechecks: exec of an unaffected seat remains available" exit_is 0 wp exec --print "Harbor Keeper"
+  ln -sfn -- ../orchard/almanac "$root/aliasbox/link"
+  local runtime=/run/user/$EUID
+  jq --arg p "$runtime/house-alias-test-missing" '.rows += [{key: ["orchard", "barn", "grower", $p],
+    value: ["read-only"], source: "statement", origins: [{path: "hand-edited-view", line: 1}]}]' \
+    "$clone/BUILD/plan-view.json" > "$scratch/changed-view"
+  mv -- "$scratch/changed-view" "$clone/BUILD/plan-view.json"
+  restamp plan-view.json
+  check "runtime rechecks: exec rejects a hand-added runtime row" exit_is 2 wp exec --print "Orchard Grower"
+  check "runtime rechecks: the runtime restriction is named" said "the user's runtime directory"
+  check "runtime rechecks: exec retains its selected-seat scope" exit_is 0 wp exec --print "Harbor Keeper"
+  check "runtime rechecks: restart rejects the runtime row" exit_is 1 wp restart "Orchard Grower"
+  check "runtime rechecks: no pane replaced" test "$(T list-panes -a -F '#{pane_id}:#{pane_pid}')" = "$before"
+  check "runtime rechecks: down" exit_is 0 wp down
+  check "runtime rechecks: up rejects the runtime row" exit_is 1 wp up
+  check "runtime rechecks: no run directory remains" test ! -d "$run"
+}
+
+t_alias_access_file_cover() {
+  scoped_clone
+  mkdir -p -- "$root/aliasbox" "$root/file-data"
+  printf '%s\n' original > "$root/file-data/locked"
+  ln -s -- ../file-data "$root/aliasbox/link"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf "%s\n" "probe grower start"' \
+    'if IFS= read -r value < "$1/locked"; then echo "locked read=$value"; else echo "locked read=refused"; fi' \
+    'if { echo changed > "$1/locked"; } 2>/dev/null; then echo "locked write=ok"; else echo "locked write=refused"; fi' \
+    'if echo writable > "$1/open"; then echo "parent write=ok"; fi' \
+    'read -r -t 300 _ || :' > "$root/tools/alias-file-probe"
+  chmod +x -- "$root/tools/alias-file-probe"
+  statements_plan '.programs[-1].recorded += [
+    st("orchard"; "barn"; "grower"; "seat"; $root + "/file-data"; "read-write"; 30),
+    st("orchard"; "barn"; "grower"; "seat"; $root + "/file-data/locked"; "read-only"; 31),
+    st("orchard"; "barn"; "grower"; "seat"; $root + "/aliasbox"; "scratch"; 32),
+    st("orchard"; "barn"; "grower"; "seat"; $root + "/aliasbox/link"; "read-write"; 33),
+    st("orchard"; "barn"; "grower"; "seat"; $root + "/aliasbox/link/locked"; "read-only"; 34)]
+    | (.programs[] | select(.path == "orchard/barn/grower/seat.typify") | .plan[1].term[5]) =
+      ([$root + "/tools/alias-file-probe", $root + "/aliasbox/link"] | tojson)'
+  check "file cover: plan" exit_is 0 wplan
+  check "file cover: build" exit_is 0 wp build
+  check "file cover: up" exit_is 0 wp up
+  check "file cover: the file remains readable" eventually screen_has "Orchard Grower" "locked read=original"
+  check "file cover: the file cannot be written through the parent alias" screen_has "Orchard Grower" "locked write=refused"
+  check "file cover: the parent remains writable" screen_has "Orchard Grower" "parent write=ok"
+  check "file cover: original host bytes retained" test "$(cat "$root/file-data/locked")" = original
+  check "file cover: host received the permitted write" test "$(cat "$root/file-data/open")" = writable
+  check "file cover: down" exit_is 0 wp down
+}
+
+
+t_alias_access_mask_failure() {
+  scoped_clone
+  statements_plan
+  check "mask failure: plan" exit_is 0 wplan
+  mkdir -- "$scratch/mask-fault-frame"
+  cp -R -- "$tool/bin" "$tool/libexec" "$tool/host" "$tool/share" "$scratch/mask-fault-frame/"
+  local modified
+  modified=$(< "$scratch/mask-fault-frame/bin/workplace")
+  printf '%s\n' "${modified/'frame_masks() {'/$'frame_masks() {\n  return 42'}" > "$scratch/mask-fault-frame/bin/workplace"
+  local loop=$scratch/mask-fault-frame/bin/workplace
+  check "mask failure: a failed mask provider refuses build" exit_is 1 wp build
+  check "mask failure: the failed inspection is named" said "cannot read alias-access masks"
+  check "mask failure: no BUILD published" test ! -d "$clone/BUILD"
+}
+
+t_alias_access_key_sources() {
+  scoped_clone
+  mkdir -p -- "$root/key-fixture/real"
+  printf '%s\n' 'synthetic non-key data' > "$root/key-fixture/real/account"
+  ln -s -- real "$root/key-fixture/declared"
+  statements_plan '.programs[-1].recorded = [st("-"; "-"; "-"; "workplace"; "/"; "searchable-only"; 1),
+    st("orchard"; "-"; "-"; "office"; $root + "/key-fixture/real"; "read-only"; 2),
+    {term: ["ssh-key", "synthetic", ($root + "/key-fixture/declared/account")], origin: at(3)}]'
+  check "key source: name-only declaration plan" exit_is 0 wplan
+  check "key source: a declaration through a parent link refuses" exit_is 1 wp build
+  check "key source: the physical source is named" said "$root/key-fixture/real/account"
+  check "key source: no BUILD published" test ! -d "$clone/BUILD"
+  statements_plan '.programs[-1].recorded = [st("-"; "-"; "-"; "workplace"; "/"; "searchable-only"; 1),
+    {term: ["ssh-key", "synthetic", ($root + "/key-fixture/real/account")], origin: at(2)}]'
+  check "key source: canonical ungranted declaration plan" exit_is 0 wplan
+  check "key source: an ungranted canonical source needs no key parsing" exit_is 0 wp build
+}
+
 tests=(
+  t_alias_access_mask_failure
+  t_alias_access_key_sources
+  t_alias_access_rechecks
+  t_alias_access_file_cover
+  t_alias_access
   t_inputs_and_refusals
   t_program_floors
   t_structure_and_order

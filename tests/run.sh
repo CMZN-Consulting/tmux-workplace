@@ -6823,7 +6823,8 @@ inject_chain_sink_fault() {
   [[ $carrier =~ ^[1-9][0-9]*$ ]] || return 1
   kill -STOP "$carrier" || return 1
   if eventually grep -Eq '^State:[[:space:]]+T' "/proc/$carrier/status"; then
-    chain_fault_offset=$(jq -s -r '[.[] | select(.file == "comms/record") | .offset + .length] | max // 0' "$(state_of)/records/chain") \
+    chain_fault_offset=$(jq -s -r --slurpfile state "$(state_of)/records/chain.state" \
+      '([($state[0].files["comms/record"].offset // 0)] + [.[] | select(.file == "comms/record") | .offset + .length]) | max' "$(state_of)/records/chain") \
       && mv -- "$(state_of)/records/chain" "$backup" && mkdir -- "$(state_of)/records/chain" || status=1
   else
     status=1

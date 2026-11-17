@@ -6784,8 +6784,7 @@ t_records_verify() {
   check "[C75] record verify refuses a seat the workplace does not make, with exit 2" exit_is 2 wp record verify "Ghost" "$day"
   check "up" exit_is 0 wp up
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
-  rm -f -- "$(state_of)/records/chain"
-  mkdir -- "$(state_of)/records/chain"
+  check "[C75] make the first sink fault while its writer is stopped" inject_chain_sink_fault "$scratch/first-chain" || return 1
   check "down, with the file sink made unwritable" exit_is 0 wp down
   check "[C75] status exits 1 for a sink that did not take an entry" exit_is 1 wp status
   check "[C75] naming the sink and when" bash -c 'grep -qE "^gone    the chain'"'"'s sink, the file, did not take its last entry, at [0-9-]+T[0-9:]+Z, and has taken none since$" "$1"' _ "$scratch/out"
@@ -6797,8 +6796,7 @@ t_records_verify() {
   check "[C75] the restored file sink has taken an entry before the next fault is injected" \
     eventually_long test -f "$(state_of)/records/chain"
   [[ -f $(state_of)/records/chain ]] || return 1
-  mv -- "$(state_of)/records/chain" "$scratch/chain"
-  mkdir -- "$(state_of)/records/chain"
+  check "[C75] make the second sink fault while its writer is stopped" inject_chain_sink_fault "$scratch/chain" || return 1
   request pilot refused.md "to: Harbor Keeper" "subject: while the sink refuses" --- "body"
   check "a mail is served while the sink refuses" answered_ok pilot refused.md
   check "[C75] while the run is up and the sink's last entry was refused, status exits 1" status_comes_to 1
@@ -6815,6 +6813,20 @@ t_records_verify() {
   check "down" exit_is 0 wp down
   check "[C57] 5.153: a carrier that starts on a record whose last line is whole adds nothing to it: after three such starts no line of the record is empty" \
     bash -c '! grep -qx "" "$1"' _ "$(state_of)/comms/record"
+}
+
+inject_chain_sink_fault() {
+  local backup=$1 carrier status=0
+  carrier=$(carrier_pid)
+  [[ $carrier =~ ^[1-9][0-9]*$ ]] || return 1
+  kill -STOP "$carrier" || return 1
+  if eventually grep -Eq '^State:[[:space:]]+T' "/proc/$carrier/status"; then
+    mv -- "$(state_of)/records/chain" "$backup" && mkdir -- "$(state_of)/records/chain" || status=1
+  else
+    status=1
+  fi
+  kill -CONT "$carrier" || status=1
+  return "$status"
 }
 
 status_exits() {

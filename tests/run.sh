@@ -7747,6 +7747,7 @@ tests=(
   t_floors_up
   t_store_lock
   t_carrier_git_deadlines
+  t_carrier_request_recovery
   t_wake_floors
   t_carrier_floors
   t_floors_readers

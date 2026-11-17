@@ -59,3 +59,71 @@ t_carrier_git_deadlines() {
   check "[C107] stop the source floor" exit_is 0 wp down deck
   check "[C107] stop the other floor" exit_is 0 wp down lodge
 }
+
+t_carrier_request_recovery() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$scratch/mv-wrapper"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach", "harbor", "-", "-", "office", "mail", "lodge", "-", "-", "floor", "allowed"]; 2),
+    m(["reach", "lodge", "-", "-", "floor", "mail", "harbor", "-", "-", "office", "allowed"]; 3)]'
+  check "[C108] journal recovery fixture plans" exit_is 0 wplan
+  check "[C108] fixture builds" exit_is 0 wp build
+  local s c record real_mv pid id original line rec unknown_id=20261118T000000Z-900001
+  s=$(state_of) c=$s/floors/deck/comms record=$c/record
+  check "[C108] each floor has a private request record; there is no shared writer" bash -c '[[ -f $1/floors/deck/comms/record && -f $1/floors/lodge/comms/record && ! -e $1/comms/record ]] && [[ $(stat -c %a "$1/floors/deck/comms/record") == 600 ]]' _ "$s"
+  real_mv=$(command -v mv)
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'dest=${!#}' \
+    "if [[ -f '$scratch/rename-stop' && \$dest == '$c/taken/'* ]]; then" \
+    "  '$real_mv' \"\$@\" || exit" \
+    "  printf '%s\\n' \"\$PPID\" > '$scratch/rename-entered'" \
+    '  kill -STOP "$PPID"; exit 0' \
+    'fi' \
+    "exec '$real_mv' \"\$@\"" > "$scratch/mv-wrapper/mv"
+  chmod +x -- "$scratch/mv-wrapper/mv"
+  check "[C108] start the source carrier with only the rename gate" exit_is 0 env PATH="$scratch/mv-wrapper:$PATH" "$BASH" "$loop" up deck
+  check "[C108] start the other floor" exit_is 0 wp up lodge
+  : > "$scratch/rename-stop"
+  request keeper lost.md "to: Lodge Ida" "subject: never lost" --- body
+  check "[C108] the actual take rename completes at the gate" eventually_long test -s "$scratch/rename-entered"
+  pid=$(cat "$scratch/rename-entered")
+  check "[C108] the source carrier is stopped between rename and next instruction" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
+  original=$(jq -r .id "$c/serving")
+  check "[C108] a named journal already identifies the taken request" bash -c '[[ -f $1/taken/$2 && $(jq -r .stage "$1/serving") == named && $(jq -r .request "$1/serving") == lost.md ]]' _ "$c" "$original"
+  check "[C108] kill the stopped source carrier" kill -KILL "$pid"
+  rm -f -- "$scratch/rename-stop"
+  check "[C108] close only its dead run" exit_is 0 wp down deck
+  check "[C108] a fresh source carrier recovers the request" exit_is 0 wp up deck
+  check "[C108] the original request is eventually delivered" answered_ok keeper lost.md
+  id=$(answer_of keeper lost.md); id=${id#ok }
+  check "[C108] recovered request has exactly one delivery commit" test "$(store_commits)" = 1
+  check "[C108] the unserved take was returned without a fabricated refusal" bash -c '[[ $(jq -s --arg r lost.md "[.[] | select(.request == \$r)] | length" "$1") == 1 ]] && ! grep -qF "\"id\":\"$2\"" "$1"' _ "$record" "$original"
+  request ida other.md "to: Harbor Keeper" "subject: other writer" --- body
+  check "[C108] the second floor also delivers" answered_ok ida other.md
+  check "[C108] floor records contain only their own request writers" eventually_long bash -c 'jq -s -e "all(.[] | select(.seat != \"the frame\"); .seat != \"Lodge Ida\")" "$1/floors/deck/comms/record" >/dev/null && jq -s -e "any(.[]; .seat == \"Lodge Ida\" and .request == \"other.md\")" "$1/floors/lodge/comms/record" >/dev/null' _ "$s"
+  check "[C108] stop the source for planted later windows" exit_is 0 wp down deck
+  line=$(jq -c --arg id "$id" 'select(.id == $id and .action == "mail")' "$record")
+  jq -nc --arg id "$id" --argjson record "$line" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"lost.md",action:"mail",stage:"recorded",rec:0,record:$record,answer:("ok " + $id + "\n")}' > "$c/serving"
+  rm -f -- "$s/comms/Harbor Keeper/answers/lost.md"
+  check "[C108] recover after the record but before journal removal" exit_is 0 wp up deck
+  check "[C108] the saved answer is restored" answered_ok keeper lost.md
+  check "[C108] dedupe appends no second request line" test "$(jq -s --arg id "$id" '[.[] | select(.id == $id and .request == "lost.md")] | length' "$record")" = 1
+  check "[C108] stop for an interrupted action" exit_is 0 wp down deck
+  rec=$(stat -c %s -- "$record")
+  jq -nc --arg id "$unknown_id" --argjson rec "$rec" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.write",action:"write",stage:"acting",rec:$rec,target:["Lodge Ida"],written:"3 abc"}' > "$c/serving"
+  check "[C108] recover with no further request waiting" exit_is 0 wp up deck
+  check "[C108] interrupted write is answered without pretending success" answered keeper uncertain.write "refused the carrier stopped while it served this, and whether it acted is not known"
+  check "[C108] its unknown line retains the original target and charged text" eventually_long bash -c 'jq -e "select(.request == \"uncertain.write\" and .outcome == \"unknown\" and .target == [\"Lodge Ida\"] and .length == 3 and .sha256 == \"abc\")" "$1" >/dev/null' _ "$record"
+  check "[C108] stop for an invalid recorded base" exit_is 0 wp down deck
+  rec=$(stat -c %s -- "$record")
+  jq -nc --argjson rec "$rec" '{id:"invalid-base",box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.md",action:"mail",stage:"delivering",rec:$rec,base:"ffffffffffffffffffffffffffffffffffffffff"}' > "$c/serving"
+  printf '%s\n' preserve > "$s/mail/Lodge Ida/in/invalid-base.md"
+  check "[C108] invalid base is handled by bounded recovery retries" exit_is 0 wp up deck
+  check "[C108] no delivery verdict is invented for an unreadable commit range" answered keeper uncertain.md "refused the carrier could not tell whether this was delivered; look in the store for deliver invalid-base before you send it again"
+  check "[C108] uncertain recipient data is retained for inspection" test -f "$s/mail/Lodge Ida/in/invalid-base.md"
+  request keeper after.md "to: Lodge Ida" "subject: after recovery" --- body
+  check "[C108] failed lookup recovery does not block later mail" answered_ok keeper after.md
+  check "[C108] stop source" exit_is 0 wp down deck
+  check "[C108] stop other floor" exit_is 0 wp down lodge
+}

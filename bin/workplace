@@ -1553,10 +1553,19 @@ make_mail() {
   else
     make_dirs "$state_dir" comms/taken || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
   fi
-  if [[ ! -e $comms/record && ! -L $comms/record ]]; then
-    : > "$comms/record" && chmod 0600 -- "$comms/record" || die "cannot make $comms/record" 2
+  local request_record
+  local -a request_records=("$comms/record")
+  if (( ${#floor_keys[@]} )); then
+    request_records=()
+    for taken_floor in "${floor_keys[@]}"; do request_records+=("$state_dir/floors/$taken_floor/comms/record"); done
   fi
-  [[ -f $comms/record && ! -L $comms/record ]] || die "build refuses: $comms/record is not the carrier's record, a file"
+  for request_record in "${request_records[@]}"; do
+    if [[ ! -e $request_record && ! -L $request_record ]]; then
+      : > "$request_record" && chmod 0600 -- "$request_record" || die "cannot make $request_record" 2
+    fi
+    [[ -f $request_record && ! -L $request_record && $(stat -c %u -- "$request_record") == "$EUID" && $(stat -c %a -- "$request_record") == 600 ]] \
+      || die "build refuses: $request_record is not the carrier's record, a file of this user's with mode 600"
+  done
   while IFS= read -r seat; do
     name=$(jq -r '.name' <<< "$seat")
     box=$name
@@ -3222,53 +3231,38 @@ carrier_release() {
   carrier_held=0
 }
 
-# One line of the record, written under the store's lock after a torn last line is ended (5.153), so that it parses by
-# itself whichever floor's carrier stopped while it wrote. A line decided while no lock is held, a grab's, a write's or
-# a pointer's, takes a hold of its own, within the pass's budget; where it gets none it waits in the carrier's queue,
-# which the next hold writes first, in its order, after the mend. Only at the carrier's end, where its last hold gets
-# none within a second, are the lines that wait written without the lock and without the mend (a limit). A line that
-# waits lives in the carrier's memory alone, so a hard kill of the carrier loses it, though its act is done (a limit,
-# which 4b's record of each floor closes; 5.176 point 8).
 carrier_append() {
   local line=$1
   [[ -n $line ]] || return 1
-  if (( carrier_held )); then
-    carrier_record_mend
-  elif [[ -n $store ]]; then
-    if ! carrier_hold; then
-      pend_lines+=("$line")
-      return 0
-    fi
-    carrier_record_mend
-    printf '%s\n' "$line" >> "$comms/record"
-    carrier_release
-    return 0
-  fi
-  printf '%s\n' "$line" >> "$comms/record"
+  carrier_record_mend || return 1
+  printf '%s\n' "$line" >> "$comms_record"
 }
 
-# The lines that wait for a hold, written under one, first, in their order.
-carrier_flush() {
-  local line
-  (( ${#pend_lines[@]} )) || return 0
-  carrier_record_mend
-  for line in "${pend_lines[@]}"; do printf '%s\n' "$line" >> "$comms/record"; done
-  pend_lines=()
-}
+carrier_flush() { return 0; }
 
 carrier_answer() {
   local answers=$1 name=$2 file=$taken/$carrier_id.answer
   shift 2
-  printf '%s\n' "$@" > "$file" && mv -fT -- "$file" "$answers/$name"
+  printf '%s\n' "$@" > "$file" || return 1
+  if [[ -f $fcomms/serving ]]; then
+    carrier_progress --rawfile answer "$file" '.answer = $answer' || return 1
+  fi
+  mv -fT -- "$file" "$answers/$name"
 }
 
 carrier_record() {
-  local seat=$1 name=$2 action=$3 targets=$4 outcome=$5 reason=$6 written=${7-}
-  carrier_append "$(jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg id "$carrier_id" --arg seat "$seat" --arg request "$name" \
+  local seat=$1 name=$2 action=$3 targets=$4 outcome=$5 reason=$6 written=${7-} record
+  (( ${carrier_journal_failed-0} == 0 )) || return 1
+  record=$(jq -n -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg id "$carrier_id" --arg seat "$seat" --arg request "$name" \
     --arg action "$action" --argjson target "$targets" --arg outcome "$outcome" --arg reason "$reason" --arg written "$written" '
     {at: $at, id: $id, seat: $seat, request: $request, action: $action, target: $target, outcome: $outcome}
     + (if $reason == "" then {} else {reason: $reason} end)
-    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)')"
+    + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)') || return 1
+  if [[ -f $fcomms/serving ]]; then
+    carrier_progress --argjson record "$record" '.stage = "recorded" | .record = $record' || return 1
+  fi
+  carrier_append "$record" || return 1
+  carrier_finished=1
 }
 
 carrier_refuse() {
@@ -3347,7 +3341,7 @@ carrier_decided() {
   # Whether the record holds a decision line for the reader $1 and the mail being served. A line that does not
   # parse, such as a torn last one, is passed over and decides nothing.
   jq -e -R --arg id "$carrier_id" --arg t "$1" 'fromjson? | objects | select(.seat == "the frame" and .action == "wake" and .covers == [$id] and .target == [$t])' \
-    "$comms/record" > /dev/null 2>&1
+    "$comms_record" > /dev/null 2>&1
 }
 
 carrier_seat_of() {
@@ -3359,9 +3353,19 @@ carrier_seat_of() {
 }
 
 carrier_journal() {
-  jq -n -c --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" --arg base "${5-}" \
-    '{id: $id, box: $box, request: $request, action: $action, seat: $seat} + (if $action == "mail" then {base: $base} else {} end)' \
+  local rec=0
+  [[ -f $comms_record ]] && rec=$(stat -c %s -- "$comms_record")
+  jq -n -c --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" --arg base "${5-}" --argjson rec "$rec" \
+    '{id: $id, box: $box, request: $request, action: $action, seat: $seat, stage: "named", rec: $rec} + (if $action == "mail" then {base: $base} else {} end)' \
     > "$fcomms/serving.new" && mv -f -- "$fcomms/serving.new" "$fcomms/serving"
+}
+
+carrier_progress() {
+  if jq -c "$@" "$fcomms/serving" > "$fcomms/serving.new" && mv -fT -- "$fcomms/serving.new" "$fcomms/serving"; then
+    return 0
+  fi
+  carrier_journal_failed=1
+  return 1
 }
 
 # Whether seat i has a request to serve: its first entry by name whose change time is at least a second old (C57).
@@ -3399,8 +3403,10 @@ carrier_serve() {
   [[ $action == mail ]] && { base=$(carrier_git rev-parse -q --verify HEAD 2> /dev/null) || base=""; }
   carrier_next_id || { carrier_release; warn "cannot count the carrier's requests in $comms/next"; return 1; }
   carrier_holder "$carrier_id"
-  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || { carrier_release; return 0; }
+  carrier_finished=0 carrier_journal_failed=0
   carrier_journal "${seat_boxes[i]}" "$name" "$action" "${seat_names[i]}" "$base" || { carrier_release; warn "cannot write $fcomms/serving"; return 1; }
+  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || { carrier_release; return 0; }
+  carrier_progress '.stage = "taken"' || { carrier_release; return 1; }
   carrier_at=""
   kind=$(stat -c %F -- "$taken/$carrier_id" 2> /dev/null) || kind=unknown
   if [[ $kind != "regular file" && $kind != "regular empty file" ]]; then
@@ -3415,7 +3421,6 @@ carrier_serve() {
       rm -f -- "$taken/$carrier_id" "$copy"
       carrier_refuse "$i" "$name" "$action" '[]' "it could not be read at once; it is removed"
     else
-      rm -f -- "$taken/$carrier_id"
       size=$(stat -c %s -- "$copy")
       if (( size > MAIL_LIMIT )); then
         carrier_refuse "$i" "$name" "$action" '[]' "it is more than 256 kB, 256,000 bytes"
@@ -3426,6 +3431,7 @@ carrier_serve() {
         if [[ $(jq -r '.ok' <<< "$verdict") != true ]]; then
           carrier_refuse "$i" "$name" "$action" "$targets" "$(jq -r '.reason' <<< "$verdict")"
         elif [[ $action == mail ]]; then
+          carrier_progress '.stage = "delivering"' || { carrier_release; return 1; }
           mapfile -d '' -t readers < <(jq --raw-output0 '.readers[]' <<< "$verdict")
           mapfile -d '' -t keep < <(jq --raw-output0 '.keep[]' <<< "$verdict")
           carrier_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -3472,6 +3478,7 @@ carrier_serve() {
           elif [[ -z $pane ]]; then
             carrier_refuse "$i" "$name" "$action" "$targets" "the pane of ${seat_names[j]} is not one that this run made"
           elif [[ $action == grab ]] && carrier_release; then
+            carrier_progress --argjson target "$targets" '.stage = "acting" | .target = $target' || return 1
             if ! out=$(carrier_tmux display-message -p -t "$pane" '#{@workplace}' \; capture-pane -p -t "$pane" -S "-$(jq -r '.lines' <<< "$verdict")" 2> /dev/null); then
               carrier_refuse "$i" "$name" grab "$targets" "the pane of ${seat_names[j]} does not answer"
             elif mark=${out%%$'\n'*} && [[ $mark != "$carrier_run" ]]; then
@@ -3488,6 +3495,7 @@ carrier_serve() {
             key=$(jq -r '.key' <<< "$verdict")
             sum=$(printf '%s' "$text" | sha256sum)
             written="${#text} ${sum%% *}"
+            carrier_progress --argjson target "$targets" --arg written "$written" '.stage = "acting" | .target = $target | .written = $written' || return 1
             carrier_type "$pane" "$text" "$key"
             typed=$?
             case $typed in
@@ -3514,7 +3522,9 @@ carrier_serve() {
       rm -f -- "$copy"
     fi
   fi
-  rm -f -- "$fcomms/serving"
+  if (( carrier_finished )); then
+    rm -f -- "$taken/$carrier_id" "$fcomms/serving"
+  fi
   carrier_release
 }
 
@@ -3650,34 +3660,97 @@ carrier_record_mend() {
   # would be written onto it, so that neither parses. The carrier ends such a line before it writes, so every line it
   # writes parses by itself (5.153). The torn bytes stay as they were, a line of their own, which parses as nothing
   # unless the stop fell just before the newline; the chain covers them and the newline after them as every byte.
-  [[ -s $comms/record ]] || return 0
-  [[ $(tail -c 1 -- "$comms/record"; printf .) == $'\n.' ]] && return 0
-  printf '\n' >> "$comms/record"
+  [[ -s $comms_record ]] || return 0
+  [[ $(tail -c 1 -- "$comms_record"; printf .) == $'\n.' ]] && return 0
+  printf '\n' >> "$comms_record"
 }
 
 carrier_recover() {
   # Run under a hold of the store's lock of its own, in the loop (5.162 point 1).
-  local journal box request action seat answers reason base commit="" line
-  rm -rf -- "$taken"/* 2> /dev/null
+  local journal box request action seat answers reason base commit="" line stage rec found record written targets attempts lookup range ref absent
   [[ -f $fcomms/serving ]] || return 0
   journal=$(jq -c '.' "$fcomms/serving" 2> /dev/null) || { rm -f -- "$fcomms/serving"; return 0; }
   carrier_id=$(jq -r '.id' <<< "$journal") box=$(jq -r '.box' <<< "$journal") request=$(jq -r '.request' <<< "$journal")
   action=$(jq -r '.action' <<< "$journal") seat=$(jq -r '.seat' <<< "$journal") base=$(jq -r '.base // ""' <<< "$journal")
   answers=$comms/$box/answers
+  carrier_finished=0 carrier_journal_failed=0
+  stage=$(jq -r '.stage // "legacy"' <<< "$journal")
+  rec=$(jq -r '.rec // -1' <<< "$journal")
+  found=""
+  if [[ $rec =~ ^[0-9]+$ && -f $comms_record ]]; then
+    found=$(tail -c "+$(( rec + 1 ))" -- "$comms_record" | jq -R -s -c --arg id "$carrier_id" --arg seat "$seat" --arg request "$request" --arg action "$action" \
+      '[split("\n")[] | fromjson? | objects | select(.id == $id and .seat == $seat and .request == $request and .action == $action)][0] // empty')
+  fi
+  if [[ -n $found ]] || [[ $stage == recorded ]]; then
+    if [[ -z $found ]]; then
+      record=$(jq -c '.record // empty' <<< "$journal")
+      [[ -n $record ]] && carrier_append "$record" || return 1
+    fi
+    if jq -e '.answer | type == "string"' <<< "$journal" > /dev/null; then
+      jq -rj '.answer' <<< "$journal" > "$taken/$carrier_id.answer" \
+        && mv -fT -- "$taken/$carrier_id.answer" "$answers/$request" || return 1
+    fi
+    rm -f -- "$taken/$carrier_id" "$taken/$carrier_id.copy" "$taken/$carrier_id.mail" "$fcomms/serving"
+    return 0
+  fi
+  if [[ $stage == named && ! -e $taken/$carrier_id && ! -L $taken/$carrier_id ]]; then
+    rm -f -- "$fcomms/serving"
+    return 0
+  fi
+  if [[ $stage == named || $stage == taken || $stage == returning ]]; then
+    if [[ -e $taken/$carrier_id || -L $taken/$carrier_id ]]; then
+      if [[ ! -e $comms/$box/out/$request && ! -L $comms/$box/out/$request ]]; then
+        carrier_progress '.stage = "returning"' || return 1
+        if mv -nT -- "$taken/$carrier_id" "$comms/$box/out/$request" && [[ ! -e $taken/$carrier_id && ! -L $taken/$carrier_id ]]; then
+          rm -f -- "$taken/$carrier_id.copy" "$fcomms/serving"
+          return 0
+        fi
+      fi
+    elif [[ $stage == returning ]]; then
+      rm -f -- "$fcomms/serving"
+      return 0
+    fi
+  fi
   # The delivery's commit, by its subject: among the commits since the head the journal noted, since another floor's
   # carrier may have committed after it; among all of them where the journal noted an empty head, the store's first
   # delivery; or the head alone for a journal from before 4a, which notes none.
   if [[ $action == mail ]]; then
-    local range=""
-    if [[ $base =~ ^[0-9a-f]{40,64}$ ]]; then range=$base..HEAD
-    elif jq -e 'has("base") and .base == ""' <<< "$journal" > /dev/null 2>&1; then range=HEAD
+    range="" lookup=0
+    if [[ $base =~ ^[0-9a-f]{40,64}$ ]]; then
+      carrier_git cat-file -e "$base^{commit}" > /dev/null 2>&1 || lookup=$?
+      range=$base..HEAD
+    elif jq -e 'has("base") and .base == ""' <<< "$journal" > /dev/null 2>&1; then
+      range=HEAD
     fi
-    if [[ -n $range ]]; then
-      while IFS=$'\t' read -r line reason; do
-        [[ $reason == "deliver $carrier_id" ]] && { commit=$line; break; }
-      done < <(carrier_git log --format='%H%x09%s' "$range" 2> /dev/null)
-    else
-      line=$(carrier_git log -1 --format='%H%x09%s' 2> /dev/null) && [[ ${line#*$'\t'} == "deliver $carrier_id" ]] && commit=${line%%$'\t'*}
+    if (( lookup == 0 )); then
+      if [[ -n $range ]]; then
+        line=$(carrier_git log --format='%H%x09%s' "$range" 2> /dev/null) || lookup=$?
+        if (( lookup == 0 )); then
+          while IFS=$'\t' read -r found reason; do
+            [[ $reason == "deliver $carrier_id" ]] && { commit=$found; break; }
+          done <<< "$line"
+        fi
+      else
+        line=$(carrier_git log -1 --format='%H%x09%s' 2> /dev/null) || lookup=$?
+        [[ ${line#*$'\t'} == "deliver $carrier_id" ]] && commit=${line%%$'\t'*}
+      fi
+    fi
+    if (( lookup == 128 )) && [[ -z $base ]]; then
+      if ref=$(carrier_git symbolic-ref -q HEAD 2> /dev/null); then
+        absent=0
+        carrier_git show-ref --verify --quiet "$ref" > /dev/null 2>&1 || absent=$?
+        (( absent == 1 )) && lookup=0
+      fi
+    fi
+    if (( lookup != 0 )); then
+      attempts=$(jq -r '.lookupFailures // 0' <<< "$journal")
+      carrier_progress --argjson n "$(( attempts + 1 ))" '.lookupFailures = $n' || return 1
+      (( attempts >= 2 )) || return 1
+      reason="the carrier could not tell whether this was delivered; look in the store for deliver $carrier_id before you send it again"
+      [[ -d $answers ]] && carrier_answer "$answers" "$request" "refused $reason"
+      carrier_record "$seat" "$request" mail '[]' refused "$reason" || return 1
+      rm -f -- "$fcomms/serving"
+      return 0
     fi
   fi
   if [[ -n $commit ]]; then
@@ -3728,9 +3801,16 @@ carrier_recover() {
       reason="the carrier stopped while it served this, and whether it acted is not known"
     fi
     [[ -d $answers ]] && carrier_answer "$answers" "$request" "refused $reason"
-    carrier_record "$seat" "$request" "$action" '[]' refused "$reason"
+    if [[ $stage == acting ]]; then
+      targets=$(jq -c '.target // []' <<< "$journal")
+      written=$(jq -r '.written // ""' <<< "$journal")
+      carrier_record "$seat" "$request" "$action" "$targets" unknown "$reason" "$written" || return 1
+    else
+      carrier_record "$seat" "$request" "$action" '[]' refused "$reason" || return 1
+    fi
   fi
-  rm -f -- "$fcomms/serving"
+  (( carrier_finished )) || return 1
+  rm -f -- "$taken/$carrier_id" "$taken/$carrier_id.copy" "$taken/$carrier_id.mail" "$fcomms/serving"
 }
 
 chain_load() {
@@ -3871,7 +3951,7 @@ cmd_carry() {
     [[ -n $run_floor ]] && fcomms=$floor_state/comms
     taken=$fcomms/taken
     [[ -d $taken && ! -L $taken && $(stat -c %a -- "$taken") == 700 ]] || die "$taken is not the carrier's directory of what it takes, mode 700; build again" 2
-    comms_record=$comms/record
+    comms_record=$fcomms/record
     for i in "${!seat_names[@]}"; do
       [[ -z $run_floor || ${seat_fl[i]} == "$run_floor" ]] || continue
       own+=("$i")
@@ -3955,7 +4035,7 @@ cmd_carry() {
     if carrier_hold final; then
       carrier_release
     else
-      printf '%s\n' "${pend_lines[@]}" >> "$comms/record"
+      printf '%s\n' "${pend_lines[@]}" >> "$comms_record"
       pend_lines=()
     fi
   fi
@@ -3985,20 +4065,25 @@ record_entries() {
 }
 
 cmd_record() {
-  [[ ${1-} == verify ]] && (( $# == 2 || $# == 3 )) && [[ $2 != --requests || $# == 2 ]] \
+  [[ ${1-} == verify ]] && (( $# == 2 || $# == 3 )) \
     || die "record takes verify and a seat's name, then a day as YYYY-MM-DD, today by default, or unstored, gaps or signed; or verify --requests" 2
   local name=$2 day=${3-} records seat file rel since="" until="" size expected=0 prev=0000000000000000000000000000000000000000000000000000000000000000 entry at offset length hash previous got
   need_jq
   locate
-  # With floors a seat's records are its floor's (C102); the record of requests per floor comes with S2's stop 4b.
   if [[ $b_layout == generations ]]; then
-    [[ $name != --requests ]] || die "with floors, record verify --requests comes with the record of requests of each floor, in S2's stop 4b" 2
     local floor
-    floor=$(seat_floor "$name")
-    [[ -n $floor && -n ${b_floor[$floor]+x} ]] || die "no seat is named $name in this workplace" 2
+    if [[ $name == --requests ]]; then
+      (( $# == 3 )) || die "with floors, record verify --requests names its floor" 2
+      floor=$3
+      [[ -n $floor && -n ${b_floor[$floor]+x} ]] || die "the build has no floor $floor" 2
+    else
+      floor=$(seat_floor "$name")
+      [[ -n $floor && -n ${b_floor[$floor]+x} ]] || die "no seat is named $name in this workplace" 2
+    fi
     floor_scope "$floor"
     verify_build "$floor" || die "record verify reads only a verified build" 2
   else
+    [[ $name != --requests || $# == 2 ]] || die "without floors, record verify --requests takes no floor" 2
     verify_build || die "record verify reads only a verified build" 2
   fi
   records=$f_gen/records.json
@@ -4009,6 +4094,7 @@ cmd_record() {
     [[ -f $b_mail ]] || die "this workplace holds no mail, so it keeps no record of requests" 2
     rel=comms/record
     file=$(jq -r '.comms' "$b_mail")/record
+    [[ -n $run_floor ]] && file="$(jq -r '.state' "$b_mail")/floors/$run_floor/comms/record"
   else
     seat=$(jq -c --arg n "$name" '.seats[] | select(.name == $n)' "$records")
     [[ -n $seat ]] || die "no seat is named $name in this workplace" 2

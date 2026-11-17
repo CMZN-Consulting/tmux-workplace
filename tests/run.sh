@@ -7682,6 +7682,8 @@ t_alias_access_key_sources() {
   check "key source: an ungranted canonical source needs no key parsing" exit_is 0 wp build
 }
 
+source "$here/floor-carrier.sh"
+
 tests=(
   t_alias_access_review
   t_floor_blocking_config
@@ -7744,6 +7746,7 @@ tests=(
   t_pointer_floors
   t_floors_up
   t_store_lock
+  t_carrier_git_deadlines
   t_wake_floors
   t_carrier_floors
   t_floors_readers

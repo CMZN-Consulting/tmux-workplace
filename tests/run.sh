@@ -3424,19 +3424,20 @@ t_floor_scoped_readback() {
   check "[C105] scoped readback: plan" exit_is 0 wplan
   check "[C105] scoped readback: build" exit_is 0 wp build
   check "[C105] scoped readback: up deck" exit_is 0 wp up deck
+  [[ -f $run/deck/state.json ]] || return 1
   local session window pane scope target key value commands client control_fd
   session=$(on deck T list-sessions -F '#{session_id}' | head -1)
   window=$(on deck T list-windows -a -F '#{window_id}' | head -1)
   pane=$(on deck T list-panes -a -F '#{pane_id}' | head -1)
-  for scope in global-pane session window pane; do
+  for scope in pane-via-gp session window pane; do
     case $scope in
-      global-pane) target=-gp ;;
+      pane-via-gp) target=-gp ;;
       session) target=$session ;;
       window) target=$window ;;
       pane) target=$pane ;;
     esac
     case $scope in
-      global-pane) on deck T set-hook -gp after-list-clients 'display-message harmless' ;;
+      pane-via-gp) on deck T set-hook -gp after-list-clients 'display-message harmless' ;;
       session) on deck T set-hook -t "$target" after-list-clients 'display-message harmless' ;;
       window) on deck T set-hook -w -t "$target" after-list-clients 'display-message harmless' ;;
       pane) on deck T set-hook -p -t "$target" after-list-clients 'display-message harmless' ;;
@@ -3444,7 +3445,7 @@ t_floor_scoped_readback() {
     check "[C105] $scope hook: status refuses" exit_is 1 wp status deck
     check "[C105] $scope hook: diagnostic names hooks" said "hooks, which the frame refuses"
     case $scope in
-      global-pane) on deck T set-hook -gpu after-list-clients ;;
+      pane-via-gp) on deck T set-hook -gpu after-list-clients ;;
       session) on deck T set-hook -u -t "$target" after-list-clients ;;
       window) on deck T set-hook -wu -t "$target" after-list-clients ;;
       pane) on deck T set-hook -pu -t "$target" after-list-clients ;;
@@ -3519,6 +3520,7 @@ t_floor_refresh_scoped() {
   check "[C106] scoped refresh: plan" exit_is 0 wplan
   check "[C106] scoped refresh: build" exit_is 0 wp build
   check "[C106] scoped refresh: up deck" exit_is 0 wp up deck
+  [[ -f $run/deck/state.json ]] || return 1
   local pane session client control_fd
   pane=$(on deck pane_by_title 'Harbor Keeper')
   session=$(on deck T list-sessions -F '#{session_id}' | head -1)
@@ -3570,6 +3572,7 @@ t_floor_alias_reuse() {
   check "[C105] alias reuse: plan" exit_is 0 wplan
   check "[C105] alias reuse: build" exit_is 0 wp build
   check "[C105] alias reuse: up" exit_is 0 wp up bridge
+  [[ -f $run/bridge/state.json ]] || return 1
   local socket=$TMUX_TMPDIR/tmux-$EUID/default before
   tmux -S "$socket" new-session -d -s personal
   check "[C105] alias reuse: initial baseline digest exists" \
@@ -3598,6 +3601,7 @@ t_floor_restart_mail_links() {
   check "[C98] restart links: plan" exit_is 0 wplan
   check "[C98] restart links: build" exit_is 0 wp build
   check "[C98] restart links: up bridge" exit_is 0 wp up bridge
+  [[ -f $run/bridge/state.json ]] || return 1
   local pane target link="$root/mailbox/Orchard Grower/out"
   pane=$(on bridge pane_by_title 'Orchard Grower')
   on bridge T respawn-pane -k -t "$pane" /usr/bin/true
@@ -3619,6 +3623,7 @@ t_floor_call_deadlines() {
   check "[C105] deadlines: plan" exit_is 0 wplan
   check "[C105] deadlines: build" exit_is 0 wp build
   check "[C105] deadlines: up deck" exit_is 0 wp up deck
+  [[ -f $run/deck/state.json ]] || return 1
   local socket=$run/deck/$label pid kind
   pid=$(on deck T display-message -p '#{pid}')
   {
@@ -3653,6 +3658,7 @@ t_floor_server_privilege_recheck() {
   check "[C10] privilege recheck: plan" exit_is 0 wplan
   check "[C10] privilege recheck: build" exit_is 0 wp build
   check "[C10] privilege recheck: up enforced deck" exit_is 0 wp up deck
+  [[ -f $run/deck/state.json ]] || return 1
   local socket=$run/deck/$label previous
   previous=$(on deck T display-message -p '#{pid}')
   tmux -S "$socket" kill-server

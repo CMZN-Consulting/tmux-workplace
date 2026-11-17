@@ -114,7 +114,6 @@ floor_readback() {
   [[ $value == off ]] || { warn "the floor $run_floor's global synchronized input is not off"; failed=1; }
   floor_scope_readback session -g || return 1
   floor_scope_readback window -gw || return 1
-  floor_scope_readback pane -gp || return 1
   if (( ! floor_unenforced )); then
     value=$(floor_client show-options -sv set-clipboard 2>/dev/null)
     [[ $value == external ]] || { warn "the floor $run_floor's set-clipboard is not external"; failed=1; }
@@ -188,7 +187,7 @@ floor_after_term() {
       || { warn "the floor $run_floor's configuration does not parse: $(jq_message "$run_dir/config-check")"; return 1; }
     floor_readback "$floor_existing" || return 1
     local scope options option
-    for scope in -s -g -gw -gp; do
+    for scope in -s -g -gw; do
       options=$(floor_client show-options "$scope" 2>/dev/null) || return 1
       while IFS=' ' read -r option _; do
         [[ $option == @workplace* ]] || continue

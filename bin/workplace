@@ -3238,7 +3238,6 @@ carrier_hold() {
   carrier_git_deadline=$(( ${EPOCHREALTIME/./} + 5000000 ))
   carrier_git_locks || { carrier_release; hold_over=1; return 1; }
   carrier_holder ""
-  carrier_flush
   return 0
 }
 
@@ -3263,7 +3262,6 @@ carrier_append() {
   printf '%s\n' "$line" >> "$comms_record"
 }
 
-carrier_flush() { return 0; }
 
 carrier_answer() {
   local answers=$1 name=$2 file=$taken/$carrier_id.answer
@@ -3548,6 +3546,7 @@ carrier_serve() {
     fi
   fi
   if (( carrier_finished )); then
+    [[ $action != mail ]] || carrier_delivery_clear || { carrier_release; return 1; }
     rm -f -- "$taken/$carrier_id" "$fcomms/serving"
   fi
   carrier_release
@@ -3560,7 +3559,7 @@ carrier_wake_put() {
   local at=$1 id=$2 program=$3 current='{"seats":{}}'
   shift 3
   [[ -f $comms/wake.json ]] && current=$(< "$comms/wake.json")
-  jq -c --arg at "$at" --arg id "$id" --argjson order "$box_order" "$program"'
+  jq -c --arg at "$at" --arg id "$id" --arg floor "$run_floor" --argjson order "$box_order" "$program"'
     | .seats as $s
     | .seats = (([$order[] | select($s[.] != null) | {key: ., value: $s[.]}]
                 + [$s | to_entries[] | select(.key as $k | ($order | index($k)) == null)]) | from_entries)' --args "$@" <<< "$current" \
@@ -3598,12 +3597,18 @@ carrier_wake_note() {
       carrier_wake_decision "$p" none "its kind has no wake pattern, so no pointer is typed for it (C94)"
     fi
   done
-  (( ${#due[@]} )) && carrier_wake_put "$at" "$carrier_id" '
+  carrier_wake_put "$at" "$carrier_id" '
     reduce $ARGS.positional[] as $b (.;
       .seats[$b] = ((.seats[$b] // {name: $b, count: 0, ids: [], since: null, last: 0})
         | (if (.ids | length) == 0 then .since = $at else . end)
-        | .ids += [$id] | .times = ((.times // {}) + {($id): $at}) | .count = (.ids | length)))' "${due[@]}"
+        | .ids += [$id] | .times = ((.times // {}) + {($id): $at}) | .count = (.ids | length)))
+    | .delivered[$id] = $floor' "${due[@]}"
   return 0
+}
+
+carrier_delivery_clear() {
+  [[ -f $comms/wake.json ]] || return 0
+  carrier_wake_put "" "$carrier_id" 'del(.delivered[$id])'
 }
 
 carrier_wake_record() {
@@ -3734,7 +3739,7 @@ carrier_record_mend() {
 
 carrier_recover() {
   # Run under a hold of the store's lock of its own, in the loop (5.162 point 1).
-  local journal box request action seat answers reason base commit="" line stage rec found record written targets attempts lookup range ref absent
+  local journal box request action seat answers reason base commit="" line stage rec found record written targets attempts lookup range ref absent noted
   [[ -f $fcomms/serving ]] || return 0
   journal=$(jq -c '.' "$fcomms/serving" 2> /dev/null) || { rm -f -- "$fcomms/serving"; return 0; }
   carrier_id=$(jq -r '.id' <<< "$journal") box=$(jq -r '.box' <<< "$journal") request=$(jq -r '.request' <<< "$journal")
@@ -3757,6 +3762,7 @@ carrier_recover() {
       jq -rj '.answer' <<< "$journal" > "$taken/$carrier_id.answer" \
         && mv -fT -- "$taken/$carrier_id.answer" "$answers/$request" || return 1
     fi
+    [[ $action != mail ]] || carrier_delivery_clear || return 1
     rm -f -- "$taken/$carrier_id" "$taken/$carrier_id.copy" "$taken/$carrier_id.mail" "$fcomms/serving"
     return 0
   fi
@@ -3830,6 +3836,8 @@ carrier_recover() {
     carrier_git show -z --name-only --format= "$commit" > "$taken/recovered.paths" 2> /dev/null || listed=0
     delivered_at=$(carrier_git log -1 --format=%ct "$commit" 2> /dev/null) || delivered_at=""
     if [[ $delivered_at =~ ^[0-9]+$ ]]; then delivered_at=$(date -u -d "@$delivered_at" +%Y-%m-%dT%H:%M:%SZ); else delivered_at=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
+    noted=0
+    if [[ -f $comms/wake.json ]] && jq -e --arg id "$carrier_id" '.delivered | has($id)' "$comms/wake.json" > /dev/null 2>&1; then noted=1; fi
     if (( listed )); then
       while IFS= read -r -d '' path; do
         [[ $path == */in/"$carrier_id".md ]] || continue
@@ -3837,6 +3845,7 @@ carrier_recover() {
         for k in "${!seat_boxes[@]}"; do [[ ${seat_boxes[k]} == "$box_in" ]] && { j=$k; break; }; done
         if [[ -n $j ]]; then reader=${seat_names[j]}; else reader=$box_in; fi
         names+=("$reader")
+        (( noted )) && continue
         carrier_decided "$reader" && continue
         if [[ -z $j ]]; then
           carrier_wake_decision "$reader" none "the build no longer makes this seat, so no pointer is typed for it"
@@ -3877,6 +3886,7 @@ carrier_recover() {
     fi
   fi
   (( carrier_finished )) || return 1
+  [[ $action != mail ]] || carrier_delivery_clear || return 1
   rm -f -- "$taken/$carrier_id" "$taken/$carrier_id.copy" "$taken/$carrier_id.mail" "$fcomms/serving"
 }
 
@@ -3988,8 +3998,7 @@ cmd_carry() {
     exec 9>> "$state_dir/carrier.lock" || die "cannot open $state_dir/carrier.lock" 2
     flock -n 9 || die "another carrier serves the workplace whose state is $state_dir; this one ends" 2
   fi
-  carrier_stop=0 carrier_held=0 hold_left=1000000 hold_over=0 pend_box="" store="" store_holder=$state_dir/store.holder
-  pend_lines=()
+  carrier_stop=0 carrier_held=0 hold_left=1000000 hold_over=0 store="" store_holder=$state_dir/store.holder
   trap 'carrier_stop=1' TERM INT
   trap '' HUP
   exec {pause_fd}<> <(:)
@@ -4084,29 +4093,21 @@ cmd_carry() {
       floor_fault_recorded=0
     fi
     carrier_settle
-    if [[ -n $store && -z $pend_box && -f $fcomms/serving ]] && carrier_hold; then
+    if [[ -n $store && -f $fcomms/serving ]] && carrier_hold; then
       carrier_recover
       carrier_release
     fi
-    if [[ -n $store && -z $pend_box && ! -f $fcomms/serving ]]; then
+    if [[ -n $store && ! -f $fcomms/serving ]]; then
       for i in "${own[@]}"; do
         (( carrier_stop || hold_over )) && break
         carrier_serve "$i"
       done
     fi
-    (( carrier_stop || hold_over )) || [[ -n $pend_box ]] || carrier_wake
+    (( carrier_stop || hold_over )) || carrier_wake
     (( ${#record_names[@]} )) && { carrier_watch; carrier_chain; }
     (( carrier_stop )) || carrier_pause 1
   done
   carrier_settle final
-  if (( ${#pend_lines[@]} )); then
-    if carrier_hold final; then
-      carrier_release
-    else
-      printf '%s\n' "${pend_lines[@]}" >> "$comms_record"
-      pend_lines=()
-    fi
-  fi
   if (( ${#record_names[@]} )); then
     carrier_chain 1
     carrier_pause 0.5

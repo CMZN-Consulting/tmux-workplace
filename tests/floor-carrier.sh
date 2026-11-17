@@ -10,7 +10,9 @@ t_carrier_git_deadlines() {
   local real_git s pid blocked_id mode
   real_git=$(command -v git)
   s=$(state_of)
+  mkfifo -- "$scratch/git-index-input"
   printf '%s\n' '#!/usr/bin/env bash' \
+    "for a in \"\$@\"; do if [[ \$a == add && -f '$scratch/git-gate' && \$(cat '$scratch/git-gate') == index ]]; then printf '%s\\n' \"\$\$\" > '$scratch/git-entered'; exec 5<> '$scratch/git-index-input'; exec '$real_git' update-index --index-info < '$scratch/git-index-input'; fi; done" \
     "args=(); for a in \"\$@\"; do if [[ \$a == commit && -f '$scratch/git-gate' ]]; then args+=(-c 'core.hooksPath=$scratch/git-hooks'); fi; args+=(\"\$a\"); done" \
     "exec '$real_git' \"\${args[@]}\"" > "$scratch/git-wrapper/git"
   printf '%s\n' '#!/usr/bin/env bash' \
@@ -23,15 +25,18 @@ t_carrier_git_deadlines() {
   request keeper seed.md "to: Lodge Ida" "subject: seed" --- body
   check "[C107] seed a real commit before the kill" answered_ok keeper seed.md
   printf '%s\n' preserve > "$s/mail/Lodge Ida/in/stray.md"
-  for mode in prepared committed; do
+  for mode in index prepared committed; do
     rm -f -- "$scratch/git-entered"
     printf '%s\n' "$mode" > "$scratch/git-gate"
     request keeper "$mode.md" "to: Lodge Ida" "subject: $mode" --- body
     check "[C107] $mode: the real reference transaction reaches the hook" eventually_long test -s "$scratch/git-entered"
     blocked_id=$(jq -r .id "$s/floors/deck/comms/serving")
-    if [[ $mode == prepared ]]; then
-      check "[C107] prepared: Git really holds its branch ref lock" test -f "$s/mail/.git/refs/heads/mail.lock"
-      check "[C107] prepared: Git really holds its index lock" test -f "$s/mail/.git/index.lock"
+    if [[ $mode != committed ]]; then
+      if [[ $mode == prepared ]]; then
+        check "[C107] prepared: Git really holds its branch ref lock" test -f "$s/mail/.git/refs/heads/mail.lock"
+      else
+        check "[C107] index: the real Git index writer holds its lock" eventually_long test -f "$s/mail/.git/index.lock"
+      fi
       pid=$(carrier_pid deck)
       check "[C107] prepared: kill only the source carrier" kill -KILL "$pid"
       check "[C107] prepared: the orphan Git still holds the store lock" bash -c '! flock -n "$1" true' _ "$s/mail"
@@ -40,8 +45,9 @@ t_carrier_git_deadlines() {
     check "[C107] $mode: the other floor delivers after the bounded child ends" answered_ok ida "$mode.md"
     check "[C107] $mode: both stale index and ref locks are gone" bash -c '[[ ! -e $1/.git/index.lock && ! -e $1/.git/refs/heads/mail.lock ]]' _ "$s/mail"
     rm -f -- "$scratch/git-gate"
-    if [[ $mode == prepared ]]; then
-      check "[C107] prepared: restart the source floor for recovery" exit_is 0 env PATH="$scratch/git-wrapper:$PATH" "$BASH" "$loop" restart deck
+    if [[ $mode != committed ]]; then
+      check "[C107] $mode: stop the dead source floor" exit_is 0 wp down deck
+      check "[C107] $mode: start a fresh source carrier for recovery" exit_is 0 env PATH="$scratch/git-wrapper:$PATH" "$BASH" "$loop" up deck
       check "[C107] prepared: the uncommitted delivery is refused after recovery" answered keeper "$mode.md" "refused the carrier stopped while it served this, and it went to none; leave it in out again"
       check "[C107] prepared: uncommitted recipient and sent copies are removed" bash -c '[[ ! -e $1/mail/"Lodge Ida"/in/$2.md && ! -e $1/mail/"Harbor Keeper"/sent/$2.md ]]' _ "$s" "$blocked_id"
     else

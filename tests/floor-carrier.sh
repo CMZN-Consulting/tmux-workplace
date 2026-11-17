@@ -237,9 +237,11 @@ t_carrier_cross_floor() {
     m(["reach","orchard","-","-","office","grab","harbor","-","-","office","allowed"];2),
     m(["reach","orchard","-","-","office","write","harbor","-","-","office","allowed"];3),
     m(["reach","orchard","barn","picker","seat","write","harbor","-","-","office","banned"];4),
-    m(["record","-","-","-","workplace","pane","kept"];5),
-    m(["record-path","records"];6),m(["record-chain","file"];7),
-    st("harbor";"tower";"-";"room";$root+"/harbor/charts";"read-write";8)]
+    m(["reach","orchard","-","-","office","mail","harbor","-","-","office","allowed"];5),
+    m(["reach","harbor","-","-","office","mail","orchard","-","-","office","allowed"];6),
+    m(["record","-","-","-","workplace","pane","kept"];7),
+    m(["record-path","records"];8),m(["record-chain","file"];9),
+    st("harbor";"tower";"-";"room";$root+"/harbor/charts";"read-write";10)]
     | (.programs[] | select(.path=="harbor/tower/watch/seat.typify") | .plan[1].term[5]) |=
       (fromjson + ["typed="+$root+"/harbor/charts/cross-typed"] | tojson)'
   check "[C110] Administration-to-enforced-floor fixture plans" exit_is 0 wplan

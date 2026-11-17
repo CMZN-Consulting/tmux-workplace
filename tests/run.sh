@@ -3392,6 +3392,13 @@ t_floor_runtime() {
     test -z "$(on deck T show-options -sqv @workplace-shadow)$(on deck T show-options -gqv @workplace-shadow)$(on deck T show-options -gwqv @workplace-shadow)"
   check "[C105] frame restores the default command aliases" test -z "$(on deck T show-options -sqv 'command-alias[999]')"
   check "[C105] floor runtime: caller environment beats tmux's injected environment" on deck eventually_long screen_has "Harbor Keeper" "value COLORTERM=original"
+  check "[C22] status control has no carrier that could repair the setting" test ! -d "$run/deck/carrier"
+  on deck T set-option -g history-limit 1
+  check "[C22] status refuses transport settings that differ" exit_is 1 wp status deck
+  check "[C22] status names the settings disagreement" said "the floor's frame settings differ"
+  check "[C22] status leaves the disagreeing setting unchanged" test "$(on deck T show-options -gv history-limit)" = 1
+  on deck T set-option -g history-limit 5000
+  check "[C22] status agrees once the setting is restored externally" exit_is 0 wp status deck
   check "[C105] floor runtime: down deck" exit_is 0 wp down deck
   if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
     skip "floor runtime: unenforced server requires a plain caller without no-new-privileges"

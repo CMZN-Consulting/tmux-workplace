@@ -2137,7 +2137,7 @@ run_call() {
   local -n _out=$1
   shift
   if [[ -n $run_floor ]]; then
-    _out=$(caller_locale; timeout --foreground --kill-after=1 10 "$@" 2> "$run_dir/call.err" 6>&-)
+    _out=$(caller_locale; floor_capture timeout --foreground --kill-after=1 10 "$@" 2> "$run_dir/call.err" 6>&-)
   else
     _out=$(caller_locale; "$@" 2> "$run_dir/call.err" 6>&-)
   fi
@@ -2818,7 +2818,7 @@ cmd_up() {
     need_version env --version "$ENV_FLOOR"
   fi
   if [[ -n $run_floor ]]; then
-    need_programs_for "a workplace with floors" timeout || exit $?
+    need_programs_for "a workplace with floors" timeout mktemp cat || exit $?
     floor_lock "$run_floor" "up $run_floor"
     floor_prepare || die "up refuses before its first term, and starts nothing"
   fi
@@ -3090,7 +3090,7 @@ carrier_git() {
 
 carrier_tmux() {
   local -a prefix=()
-  [[ -z $run_floor ]] || prefix=(timeout --foreground --kill-after=1 10)
+  [[ -z $run_floor ]] || prefix=(floor_capture timeout --foreground --kill-after=1 10)
   "${prefix[@]}" "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 6>&- 8>&- 9>&-
 }
 

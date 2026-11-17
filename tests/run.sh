@@ -3455,7 +3455,7 @@ t_floor_scoped_readback() {
   if [[ $(printf '%s\n' "$commands" | sed -n '/^show-hooks /p') == *B* ]]; then
     on deck T set-hook -gp -B "@scope-probe:$pane:#{pane_dead}"
     check "[C105] a monitor with no command body still refuses" exit_is 1 wp status deck
-    check "[C105] the monitor's diagnostic names hooks" said "monitor hooks, which the frame refuses"
+    check "[C105] the monitor's diagnostic names hooks" said "hooks, which the frame refuses"
     on deck T set-hook -gpu -B @scope-probe
   else
     skip "[C105] this tmux has no hook-monitor subscriptions"
@@ -3628,17 +3628,22 @@ t_floor_call_deadlines() {
   pid=$(on deck T display-message -p '#{pid}')
   {
     printf '%s\n' 'set -o nounset -o pipefail' 'run_floor=deck' 'run_dir=$1' \
-      'carrier_setpriv=$(command -v setpriv)' 'carrier_tmux_program=$(command -v tmux)' 'carrier_socket=$2'
+      'carrier_setpriv=$(command -v setpriv)' 'carrier_tmux_program=$(command -v tmux)' 'carrier_socket=$2' \
+      'floor_socket=$2' 'floor_unenforced=0'
+    sed -n '/^floor_capture() {/,/^}/p;/^floor_client() {/,/^}/p' "$tool/libexec/floor-runtime.bash"
     sed -n '/^caller_locale() {/,/^} 2> \/dev\/null/p;/^run_call() {/,/^}/p;/^read_server() {/,/^}/p;/^carrier_tmux() {/,/^}/p' "$loop"
     printf '%s\n' 'if [[ $3 == carrier ]]; then' \
-      '  carrier_tmux display-message -p "#{pid}" && exit 1' \
+      '  value=$(carrier_tmux display-message -p "#{pid}") && exit 1' \
+      '  result=$?; [[ $result == 124 || $result == 137 ]]' \
+      'elif [[ $3 == client ]]; then' \
+      '  value=$(floor_client display-message -p "#{pid}") && exit 1' \
       '  result=$?; [[ $result == 124 || $result == 137 ]]' \
       'else' '  read_server "$carrier_setpriv" "$carrier_tmux_program" "$carrier_socket"' \
       '  [[ $server_up == 0 ]]' 'fi'
   } > "$scratch/deadline-driver"
   trap 'kill -CONT "$pid" 2>/dev/null || :; exit 1' HUP INT TERM
   kill -STOP "$pid"
-  for kind in carrier read-server; do
+  for kind in carrier read-server client; do
     check "[C105] deadlines: $kind returns before the outer guard with a stopped real server" \
       exit_is 0 timeout --foreground --kill-after=1 14 "$BASH" "$scratch/deadline-driver" "$scratch" "$socket" "$kind"
   done

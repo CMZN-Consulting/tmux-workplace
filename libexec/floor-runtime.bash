@@ -3,15 +3,25 @@ floor_spec() {
     | select(type == "array" and .[0] == "floor" and .[1] == $f)][0] // empty' "$b_plan"
 }
 
+floor_capture() {
+  local capture result=0
+  capture=$(mktemp "${TMPDIR:-/tmp}/workplace-tmux.XXXXXXXX") || return 1
+  "$@" > "$capture" || result=$?
+  cat -- "$capture" || result=1
+  rm -f -- "$capture" || result=1
+  return "$result"
+}
+
 floor_client() {
   local -a prefix=()
   [[ ${floor_unenforced-0} == 1 ]] || prefix=("$(command -v setpriv)" --no-new-privs)
-  timeout --foreground --kill-after=1 10 "${prefix[@]}" "$(command -v tmux)" -N -S "$floor_socket" -u "$@" 6>&-
+  floor_capture timeout --foreground --kill-after=1 10 "${prefix[@]}" "$(command -v tmux)" -N -S "$floor_socket" -u "$@" 6>&-
 }
 
 floor_prepare() {
   [[ -n $run_floor ]] || return 0
-  command -v timeout > /dev/null || { warn "a floor needs timeout for bounded tmux calls"; return 1; }
+  command -v timeout > /dev/null && command -v mktemp > /dev/null && command -v cat > /dev/null \
+    || { warn "a floor needs timeout, mktemp and cat for bounded tmux calls"; return 1; }
   floor_term=$(floor_spec) || { warn "cannot read the floor $run_floor"; return 1; }
   floor_unenforced=0 floor_existing=0
   [[ $(jq -r '.[4]' <<< "$floor_term") == unenforced ]] && floor_unenforced=1

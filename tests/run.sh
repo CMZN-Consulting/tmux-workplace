@@ -2899,9 +2899,10 @@ t_pointer_floors() {
       "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)" "$(answer_of gleaner l1.md)" "$(answer_of watch w1.md)" "$(answer_of pilot p1.md)"
   for f in bridge deck lodge; do rm -rf -- "$clone/BUILD/RUN/$f/carrier"; done
   wait "${carriers[@]}"
+  cat -- "$s"/floors/*/comms/record > "$scratch/requests-joined"
   # The record is read line by line, and a line that does not parse is passed over, as the carrier passes it over.
-  idof() { jq -r -R --arg w "$1" --arg r "$2" 'fromjson? | objects | select(.seat == $w and .request == $r and .action == "mail" and .outcome == "ok") | .id' "$s/comms/record"; }
-  decided() { jq -r -R --arg id "$1" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | "\(.target[0]):\(.outcome)"' "$s/comms/record" | tr '\n' ,; }
+  idof() { jq -r -R --arg w "$1" --arg r "$2" 'fromjson? | objects | select(.seat == $w and .request == $r and .action == "mail" and .outcome == "ok") | .id' "$scratch/requests-joined"; }
+  decided() { jq -r -R --arg id "$1" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | "\(.target[0]):\(.outcome)"' "$scratch/requests-joined" | tr '\n' ,; }
   due() { jq -c --arg id "$1" '[.seats[] | select(.ids | index($id)) | .name]' "$s/comms/wake.json"; }
   together() {
     jq -R -s -e --arg id "$2" '[split("\n")[] | fromjson? | objects] | (to_entries | map(select(.value.seat == "the frame" and .value.covers == [$id] and (.value | has("length") | not)) | .key)) as $k
@@ -2918,11 +2919,11 @@ t_pointer_floors() {
   check "[C94] toward rooms of the same number and cleared less, due, in wake.json: a reader at 10 from a writer at 9 is cleared less (5.153)" test "$(due "$g")" = '["Harbor Watch","Lodge Ivo"]'
   check "[C94] 5.153: a reader at 0 from a writer at 0 is cleared as much, and due even where its kind wakes by itself" test "$(decided "$p")$(due "$p")" = '["Harbor Keeper"]'
   check "[C94] 5.153: and a reader at 9 from a writer at 10 is cleared more, and withheld: the numbers are compared as numbers" \
-    test "$(decided "$w")$(due "$w")|$(jq -r -R --arg id "$w" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$s/comms/record")" = "Orchard Picker:withheld,[]|the room of Orchard Picker, at 9, is cleared more than the writer's, at 10, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)"
+    test "$(decided "$w")$(due "$w")|$(jq -r -R --arg id "$w" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$scratch/requests-joined")" = "Orchard Picker:withheld,[]|the room of Orchard Picker, at 9, is cleared more than the writer's, at 10, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)"
   check "[C94] a writer with no number counts as cleared least: withheld toward a numbered room above it, and on an unenforced floor by its mode's own wake; due by an own wake of the other mode" \
     test "$(decided "$r")$(due "$r")" = 'Harbor Keeper:withheld,Orchard Picker:withheld,["Orchard Grower"]'
   check "[C96] the withheld line of a writer with no number says so" \
-    test "$(jq -r -R --arg id "$r" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$s/comms/record" | tr '\n' '|')" = "the room of Harbor Keeper, at 0, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)|the room of Orchard Picker, at 9, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)|"
+    test "$(jq -r -R --arg id "$r" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id]) | .reason' "$scratch/requests-joined" | tr '\n' '|')" = "the room of Harbor Keeper, at 0, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)|the room of Orchard Picker, at 9, is cleared more than the writer's, with no number, and its kind wakes by itself on its floor, as 5.151 rules (5.124 point 8, 5.125 point 17)|"
   check "[C94] on a floor of rooms the numbers decide the pointer: from 9 to 0 withheld, and a kind with no pattern there gets none (5.132 point 4)" \
     test "$(decided "$v")" = "Lodge Ida:withheld,Lodge Ira:none,"
   check "[C94] on a floor of rooms from 0 to 9 due, 0 as the writer's number, and the writer's own copy none" test "$(decided "$d")$(due "$d")" = 'Lodge Ida:none,["Lodge Ivo"]'
@@ -2932,13 +2933,13 @@ t_pointer_floors() {
   check "[C94] 5.146: between two rooms with no number, both cleared least, due even where the reader's kind wakes by itself" \
     test "$(decided "$l")$(due "$l")" = '["Orchard Reaper"]'
   check "[C96] a withheld line names the mail, both rooms' numbers and the item" \
-    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "withheld") | .reason' "$s/comms/record")" = "the room of Harbor Keeper, at 0, is cleared more than the writer's, at 9, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)"
+    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "withheld") | .reason' "$scratch/requests-joined")" = "the room of Harbor Keeper, at 0, is cleared more than the writer's, at 9, and its kind wakes by itself on its floor, as 5.150 rules (5.124 point 8, 5.125 point 17)"
   check "[C96] and a none line its reason" \
-    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "none") | .reason' "$s/comms/record" | tr '\n' '|')" = "its kind has no wake pattern, so no pointer is typed for it (C94)|the writer's own mail is pointed out to no one (5.79)|"
+    test "$(jq -r -R --arg id "$g" 'fromjson? | objects | select(.seat == "the frame" and .covers == [$id] and .outcome == "none") | .reason' "$scratch/requests-joined" | tr '\n' '|')" = "its kind has no wake pattern, so no pointer is typed for it (C94)|the writer's own mail is pointed out to no one (5.79)|"
   check "[C96] each mail's decision lines stand together, just before the line of its delivery" \
-    all_together "$s/comms/record" "$g" "$r" "$v" "$d" "$k" "$g2" "$l" "$w" "$p"
+    all_together "$scratch/requests-joined" "$g" "$r" "$v" "$d" "$k" "$g2" "$l" "$w" "$p"
   check "[C96] each decision line carries the time it was made, in the record's form" \
-    bash -c 'jq -R -s -e --arg t "$2" "[split(\"\n\")[] | fromjson? | objects | select(.seat == \"the frame\" and .action == \"wake\" and (has(\"length\") | not))] | length > 0 and all(.at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\") and . >= \$t)" "$1" > /dev/null' _ "$s/comms/record" "$started"
+    bash -c 'jq -R -s -e --arg t "$2" "[split(\"\n\")[] | fromjson? | objects | select(.seat == \"the frame\" and .action == \"wake\" and (has(\"length\") | not))] | length > 0 and all(.at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\") and . >= \$t)" "$1" > /dev/null' _ "$scratch/requests-joined" "$started"
   check "[C59] the writer is told only that its mail was delivered" test "$(cat "$s/comms/Orchard Grower/answers/g1.md")" = "ok $g"
   check "[C59] 5.146 point 3: every reader sees its mail in in, withheld, due or none alike, the same file as the writer's sent" \
     bash -c 's=$1; shift; while (( $# )); do w=$1 id=$2 n=$3; shift 3; for (( i = 0; i < n; i++ )); do cmp -s "$s/$1/in/$id.md" "$s/$w/sent/$id.md" || exit 1; shift; done; done' _ "$store" \
@@ -2964,8 +2965,8 @@ t_pointer_floors() {
   cp -- "$store/Lodge Ida/in/recovered-1.md" "$store/Lodge Ivo/sent/recovered-1.md"
   git -C "$store" add -A > /dev/null 2>&1 \
     && GIT_COMMITTER_DATE="2026-01-02T03:04:05Z" git -C "$store" -c user.name=test -c user.email=test@test commit -q -m "deliver recovered-1" > /dev/null 2>&1
-  printf '%s\n' '{"at":"2026-01-01T00:00:00Z","seat":"the frame","action":"wake","target":["Lodge Ira"],"covers":["recovered-1"],"outcome":"none","reason":"its kind has no wake pattern, so no pointer is typed for it (C94)"}' >> "$s/comms/record"
-  printf '%s' '{"at":"2026' >> "$s/comms/record"
+  printf '%s\n' '{"at":"2026-01-01T00:00:00Z","seat":"the frame","action":"wake","target":["Lodge Ira"],"covers":["recovered-1"],"outcome":"none","reason":"its kind has no wake pattern, so no pointer is typed for it (C94)"}' >> "$s/floors/lodge/comms/record"
+  printf '%s' '{"at":"2026' >> "$s/floors/lodge/comms/record"
   jq '.seats["Orchard Grower"] |= (.count += 1 | .ids += ["recovered-1"]) | del(.seats["Harbor Watch"])' "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
   printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/floors/lodge/comms/serving"
   mkdir -p -- "$clone/BUILD/RUN/lodge/carrier"
@@ -2975,20 +2976,21 @@ t_pointer_floors() {
   check "[C57] a carrier that finds a delivery's commit of a stopped carrier of its floor answers it ok" test "$(answer_of ivo v9.md)" = "ok recovered-1"
   rm -rf -- "$clone/BUILD/RUN/lodge/carrier"
   wait "$carrier"
+  cat -- "$s"/floors/*/comms/record > "$scratch/requests-joined"
   check "[C96] 5.146: and decides for each reader the stopped carrier had not decided, by a line or in wake.json, and for no other, in the store's order" \
     test "$(decided recovered-1)$(jq -c '.seats["Orchard Grower"].ids | map(select(. == "recovered-1")) | length' "$s/comms/wake.json")" = "Lodge Ira:none,Gone Seat:none,Lodge Ida:withheld,1"
   check "[C96] a reader whose seat the build no longer makes gets a none line, with its reason" \
-    test "$(jq -r -R 'fromjson? | objects | select(.covers == ["recovered-1"] and .target == ["Gone Seat"]) | .reason' "$s/comms/record")" = "the build no longer makes this seat, so no pointer is typed for it"
+    test "$(jq -r -R 'fromjson? | objects | select(.covers == ["recovered-1"] and .target == ["Gone Seat"]) | .reason' "$scratch/requests-joined")" = "the build no longer makes this seat, so no pointer is typed for it"
   check "[C94] a reader the stopped carrier had found due and not saved is due again, from the time of the delivery's commit" \
     test "$(jq -c '.seats["Harbor Watch"] | [.count, .ids, .since]' "$s/comms/wake.json")" = '[1,["recovered-1"],"2026-01-02T03:04:05Z"]'
   check "[C57] its line names the readers the delivery's commit gave the mail to, in the store's order" \
-    test "$(jq -c -R 'fromjson? | objects | select(.id == "recovered-1" and .action == "mail") | [.target, .outcome]' "$s/comms/record")" = '[["Gone Seat","Harbor Watch","Lodge Ida","Lodge Ira","Orchard Grower"],"ok"]'
-  check "[C96] the recovered mail's decision lines, the stopped carrier's and the new one's, stand together just before its ok line" together "$s/comms/record" recovered-1
+    test "$(jq -c -R 'fromjson? | objects | select(.id == "recovered-1" and .action == "mail") | [.target, .outcome]' "$scratch/requests-joined")" = '[["Gone Seat","Harbor Watch","Lodge Ida","Lodge Ira","Orchard Grower"],"ok"]'
+  check "[C96] the recovered mail's decision lines, the stopped carrier's and the new one's, stand together just before its ok line" together "$scratch/requests-joined" recovered-1
   check "[C57] 5.153: a torn last line cut before its newline swallows nothing: it stands alone, and every line the next carrier writes after it parses by itself" \
     bash -c 'n=$(grep -c -xF "{\"at\":\"2026" "$1") && [[ $n == 1 ]] && tail -n +$(( $(grep -n -xF "{\"at\":\"2026" "$1" | cut -d: -f1) + 1 )) "$1" \
-      | jq -R -s -e "split(\"\n\") as \$l | (\$l | last) == \"\" and (\$l[:-1] | length > 0 and all(.[]; (try fromjson catch null) | type == \"object\"))" > /dev/null' _ "$s/comms/record"
+      | jq -R -s -e "split(\"\n\") as \$l | (\$l | last) == \"\" and (\$l[:-1] | length > 0 and all(.[]; (try fromjson catch null) | type == \"object\"))" > /dev/null' _ "$scratch/requests-joined"
   check "[C57] 5.153: a recovered decision line carries the time it is written, at the restart, and only the due entry the commit's time" \
-    bash -c 'jq -R -s -e --arg t "$2" "[split(\"\n\")[] | fromjson? | objects | select(.covers == [\"recovered-1\"] and (.target == [\"Gone Seat\"] or .target == [\"Lodge Ida\"]))] | length == 2 and all(.[]; .at >= \$t)" "$1" > /dev/null' _ "$s/comms/record" "$started"
+    bash -c 'jq -R -s -e --arg t "$2" "[split(\"\n\")[] | fromjson? | objects | select(.covers == [\"recovered-1\"] and (.target == [\"Gone Seat\"] or .target == [\"Lodge Ida\"]))] | length == 2 and all(.[]; .at >= \$t)" "$1" > /dev/null' _ "$scratch/requests-joined" "$started"
 
   rm -rf -- "$clone/BUILD/RUN"
   wp status > "$scratch/out" 2>&1
@@ -3109,13 +3111,13 @@ t_floors_up() {
   check "[C60] 5.162 point 1: a grab across floors is refused until 4b" answered keeper g1.grab "refused a grab or a write across floors comes with S2's stop 4b"
   # A stopped carrier's torn last line, and then a grab, whose line is written after the store's lock is let go. The
   # refusal's line is awaited first, so that the torn bytes stand last.
-  check "the refusal's line stands in the record" eventually bash -c 'grep -q "\"request\":\"g1.grab\"" "$1"' _ "$s/comms/record"
-  printf '%s' '{"at":"2026' >> "$s/comms/record"
+  check "the refusal's line stands in the record" eventually bash -c 'grep -q "\"request\":\"g1.grab\"" "$1"' _ "$s/floors/deck/comms/record"
+  printf '%s' '{"at":"2026' >> "$s/floors/deck/comms/record"
   request keeper g2.grab "seat: Harbor Pilot"
   check "a grab of a seat of its own floor is served" answered_ok keeper g2.grab
   check "[C57] 5.153: a grab's line, decided after the store's lock is let go, takes a hold of its own, ends the torn last line first, and parses by itself" \
-    eventually bash -c '[[ $(jq -R -c "fromjson? | select(.request == \"g2.grab\") | .outcome" "$1") == "\"ok\"" ]]' _ "$s/comms/record"
-  check "[C57] and the torn bytes stay as a line of their own" bash -c 'grep -qx "{\"at\":\"2026" "$1"' _ "$s/comms/record"
+    eventually bash -c '[[ $(jq -R -c "fromjson? | select(.request == \"g2.grab\") | .outcome" "$1") == "\"ok\"" ]]' _ "$s/floors/deck/comms/record"
+  check "[C57] and the torn bytes stay as a line of their own" bash -c 'grep -qx "{\"at\":\"2026" "$1"' _ "$s/floors/deck/comms/record"
   wp status > "$scratch/out" 2>&1
   check "[C22] bare status reports every floor" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor lodge is up, workplace-[0-9a-f]*" "$1" && grep -qx "run: floor bridge is down" "$1"' _ "$scratch/out"
   check "[C22] 4a2: status names the sealed config and following frame set" said "sealed floor configuration, then the frame's set"
@@ -3261,10 +3263,10 @@ t_floor_admin_mail() {
   check "[C106] frame set: carrier restores a changed history setting" \
     on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -gv history-limit) == 5000 ]]' _ "$run/deck/$label"
   check "[C106] frame set: restoration is recorded" \
-    eventually_long bash -c 'jq -e "select(.action == \"frame-set\" and .floor == \"deck\" and .outcome == \"restored\")" "$1" >/dev/null' _ "$(state_of)/comms/record"
+    eventually_long bash -c 'jq -e "select(.action == \"frame-set\" and .floor == \"deck\" and .outcome == \"restored\")" "$1" >/dev/null' _ "$(state_of)/floors/deck/comms/record"
   on deck T set-hook -g after-list-clients 'display-message harmless'
   check "[C106] frame set: a refused transport change is recorded" \
-    eventually_long bash -c 'jq -e "select(.action == \"frame-set\" and .floor == \"deck\" and .outcome == \"refused\")" "$1" >/dev/null' _ "$(state_of)/comms/record"
+    eventually_long bash -c 'jq -e "select(.action == \"frame-set\" and .floor == \"deck\" and .outcome == \"refused\")" "$1" >/dev/null' _ "$(state_of)/floors/deck/comms/record"
   request keeper still-mail.md 'to: Orchard Grower' 'subject: mail without terminal transport' --- still-delivered
   check "[C106] frame set: mail continues while terminal transport is refused" answered_ok keeper still-mail.md
   request keeper blocked.grab 'seat: Harbor Pilot'
@@ -3801,14 +3803,15 @@ t_store_lock() {
     bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of keeper k1.md)" "$(answer_of keeper k2.md)" "$(answer_of keeper k3.md)" \
       "$(answer_of pilot p1.md)" "$(answer_of pilot p2.md)" "$(answer_of pilot p3.md)" "$(answer_of ida i1.md)" "$(answer_of ida i2.md)" "$(answer_of ida i3.md)"
   # The carrier answers before it writes the line, so the lines are awaited.
-  check "the nine mails' lines stand in the record" eventually bash -c '[[ $(jq -r "select(.action == \"mail\" and .outcome == \"ok\") | .id" "$1" | wc -l) == 9 ]]' _ "$s/comms/record"
-  mapfile -t ids < <(jq -r 'select(.action == "mail" and .outcome == "ok") | .id' "$s/comms/record")
+  check "the nine mails' lines stand across their floors' records" eventually bash -c '[[ $(jq -r "select(.action == \"mail\" and .outcome == \"ok\") | .id" "$1"/floors/*/comms/record | wc -l) == 9 ]]' _ "$s"
+  cat -- "$s"/floors/*/comms/record > "$scratch/requests-joined"
+  mapfile -t ids < <(jq -r 'select(.action == "mail" and .outcome == "ok") | .id' "$scratch/requests-joined")
   check "[C57] one commit for each delivery, and ids that no two floors share, counted once" \
     bash -c '[[ $1 == 9 && $2 == 9 && $(printf "%s\n" "${@:4}" | sort -u | wc -l) == 9 && $3 == 9 ]]' _ "$(store_commits)" "${#ids[@]}" "$(< "$s/comms/next")" "${ids[@]}"
   check "[C57] each commit holds its own mail alone: its readers' in and its writer's sent" bash -c '
     s=$1; shift
     for id in "$@"; do
-      want=$(jq -r --arg id "$id" "select(.id == \$id and .action == \"mail\") | ([.target[] | \"\(.)/in/\(\$id).md\"] + [\"\(.seat)/sent/\(\$id).md\"]) | sort[]" "$s/comms/record")
+      want=$(jq -r --arg id "$id" "select(.id == \$id and .action == \"mail\") | ([.target[] | \"\(.)/in/\(\$id).md\"] + [\"\(.seat)/sent/\(\$id).md\"]) | sort[]" "$scratch/requests-joined")
       commit=$(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" log --format=%H --grep="^deliver $id\$")
       got=$(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$s/mail" show --name-only --format= "$commit" | sort)
       [[ -n $commit && $want == "$got" ]] || exit 1
@@ -3816,14 +3819,14 @@ t_store_lock() {
   check "[C96] each mail's decision lines stand together, just before its line, though two floors write the record" \
     bash -c 'for id in "${@:2}"; do jq -R -s -e --arg id "$id" "[split(\"\n\")[] | fromjson? | objects] | (to_entries | map(select(.value.seat == \"the frame\" and .value.covers == [\$id] and (.value | has(\"length\") | not)) | .key)) as \$k
       | (to_entries | map(select(.value.id == \$id and .value.action == \"mail\") | .key)) as \$m
-      | (\$m | length) == 1 and ((\$k | length) == 0 or \$k == [range(\$m[0] - (\$k | length); \$m[0])])" "$1" > /dev/null || exit 1; done' _ "$s/comms/record" "${ids[@]}"
+      | (\$m | length) == 1 and ((\$k | length) == 0 or \$k == [range(\$m[0] - (\$k | length); \$m[0])])" "$1" > /dev/null || exit 1; done' _ "$scratch/requests-joined" "${ids[@]}"
   check "[C96] and such lines stand: keeper's none for each of its three mails, which it reads itself" \
-    test "$(jq -c 'select(.seat == "the frame" and .outcome == "none" and .target == ["Harbor Keeper"])' "$s/comms/record" | wc -l)" = 3
+    test "$(jq -c 'select(.seat == "the frame" and .outcome == "none" and .target == ["Harbor Keeper"])' "$scratch/requests-joined" | wc -l)" = 3
   check "[C94] 5.162 point 1: wake.json holds every reader's due ids, both floors', none lost to the other's write" \
     test "$(jq -c '[(.seats["Harbor Keeper"].ids | length), (.seats["Harbor Pilot"].ids | length), (.seats["Lodge Ida"].ids | length)]' "$s/comms/wake.json")" = '[6,6,3]'
   check "[C94] in the order of mail.json's seats" test "$(jq -c '.seats | keys_unsorted' "$s/comms/wake.json")" = '["Harbor Keeper","Harbor Pilot","Lodge Ida"]'
   # Which floor took the lock next is the kernel's choice, so the order is shown and not checked.
-  note "    the floors' deliveries in the store's order (D the deck, L the lodge): $(for id in "${ids[@]}"; do jq -r --arg id "$id" 'select(.id == $id and .action == "mail") | if .seat == "Lodge Ida" then "L" else "D" end' "$s/comms/record"; done | tr -d '\n')"
+  note "    the floors' deliveries in the store's order (D the deck, L the lodge): $(for id in "${ids[@]}"; do jq -r --arg id "$id" 'select(.id == $id and .action == "mail") | if .seat == "Lodge Ida" then "L" else "D" end' "$scratch/requests-joined"; done | tr -d '\n')"
   # A carrier removes the holder as it lets the store's lock go, which is after the last delivery's line.
   eventually_long flock -n "$store" true || note "    the store's lock is still held after a minute"
   check "[C57] and no holder of the store's lock stands once they are done" test ! -e "$s/store.holder"
@@ -3836,10 +3839,10 @@ t_store_lock() {
   request ida i4.md "to: Harbor Keeper" "subject: i4" --- "i4"
   wait "$holder"
   check "a mail is delivered after the stale add" answered_ok ida i4.md
-  check "its line stands in the record" eventually bash -c '[[ -n $(jq -r "select(.request == \"i4.md\" and .action == \"mail\") | .id" "$1") ]]' _ "$s/comms/record"
+  check "its line stands in the record" eventually bash -c '[[ -n $(jq -r "select(.request == \"i4.md\" and .action == \"mail\") | .id" "$1") ]]' _ "$s/floors/lodge/comms/record"
   check "[C57] 5.162 point 1: its commit holds its own paths alone, and the stale add is unstaged, not committed" \
     bash -c '[[ $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" show --name-only --format= HEAD | sort | tr "\n" " ") == "Harbor Keeper/in/$2.md Lodge Ida/sent/$2.md " ]] \
-      && [[ -z $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" ls-files -- "Harbor Keeper/in/zz.md") ]]' _ "$store" "$(jq -r 'select(.request == "i4.md" and .action == "mail") | .id' "$s/comms/record")"
+      && [[ -z $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" ls-files -- "Harbor Keeper/in/zz.md") ]]' _ "$store" "$(jq -r 'select(.request == "i4.md" and .action == "mail") | .id' "$s/floors/lodge/comms/record")"
   # The holder of the store's lock, seen while a delivery holds it: a poller copies S/store.holder once it stands.
   ( for (( n = 0; n < 2000000; n++ )); do [[ -s $s/store.holder ]] && { cp -- "$s/store.holder" "$scratch/holder-seen" 2> /dev/null && [[ -s $scratch/holder-seen ]] && exit 0; }; done; exit 1 ) &
   holder=$!
@@ -3866,7 +3869,7 @@ t_store_lock() {
   carriers=("$!")
   check "[C57] 5.162 point 1: recovery finds the delivery's commit by its subject, after another floor's, and answers it ok" answered ida x.md "ok recovered-x"
   check "[C57] and names its readers, the commit's" \
-    eventually bash -c '[[ $(jq -c "select(.id == \"recovered-x\" and .action == \"mail\") | .target" "$1") == "[\"Harbor Keeper\"]" ]]' _ "$s/comms/record"
+    eventually bash -c '[[ $(jq -c "select(.id == \"recovered-x\" and .action == \"mail\") | .target" "$1") == "[\"Harbor Keeper\"]" ]]' _ "$s/floors/lodge/comms/record"
   rm -rf -- "$run/lodge/carrier"
   wait "${carriers[@]}"
   # A fresh store: the first delivery starts from no head, and another floor's commit follows it.
@@ -3950,7 +3953,7 @@ t_wake_floors() {
   check "[C94] 5.162 point 1: while the lock is held the pointer is not settled: its ids stay in wake.json" \
     test "$(jq -c '.seats["Lodge Ida"].ids' "$s/comms/wake.json")" = "[\"$k1\"]"
   check "[C57] review of 4a: and its line is not written without the lock: it waits for the carrier's next hold" \
-    bash -c '[[ -z $(jq -c "select(.action == \"wake\" and has(\"length\"))" "$1") ]]' _ "$s/comms/record"
+    bash -c '[[ -z $(jq -c "select(.action == \"wake\" and has(\"length\"))" "$1") ]]' _ "$s/floors/lodge/comms/record"
   jq --arg x "$x" '.seats["Lodge Ida"] |= (.ids += [$x] | .times[$x] = "2026-11-14T23:59:59Z" | .count = (.ids | length))' \
     "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
   pkill -P "$holder" sleep 2> /dev/null
@@ -3958,7 +3961,7 @@ t_wake_floors() {
   check "[C94] 5.162 point 1: once it settles, the mail it counted is no longer to be pointed out, and the mail delivered meanwhile stays" \
     eventually bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.count, .ids, .since, (.last > 0)]" "$1") == "[1,[\"$2\"],\"2026-11-14T23:59:59Z\",true]" ]]' _ "$s/comms/wake.json" "$x"
   check "[C96] the pointer's line covers the mail it counted alone, written once the lock is free" \
-    test "$(jq -c --arg k "$k1" 'select(.action == "wake" and has("length")) | [.target, .covers, .outcome]' "$s/comms/record")" = "[[\"Lodge Ida\"],[\"$k1\"],\"ok\"]"
+    test "$(jq -c --arg k "$k1" 'select(.action == "wake" and has("length")) | [.target, .covers, .outcome]' "$s/floors/lodge/comms/record")" = "[[\"Lodge Ida\"],[\"$k1\"],\"ok\"]"
   rm -rf -- "$run/deck/carrier"
   wait "$deck"
   check "down lodge" exit_is 0 wp down lodge
@@ -4050,16 +4053,16 @@ t_carrier_floors() {
   check "up lodge, with a stopped request's journal in its state, while the test holds the store's lock" exit_is 0 wp up lodge
   sleep 3
   check "[C57] follow-up of 4a: recovery runs under a hold: while the test holds the store's lock, the lodge's carrier does not recover the journal: it stays, and its request has no answer and no line" \
-    bash -c '[[ -f $1 && ! -e $2/answers/f1.grab ]] && ! grep -qF "\"request\":\"f1.grab\"" "$3"' _ "$s/floors/lodge/comms/serving" "$s/comms/Lodge Ida" "$s/comms/record"
+    bash -c '[[ -f $1 && ! -e $2/answers/f1.grab ]] && ! grep -qF "\"request\":\"f1.grab\"" "$3"' _ "$s/floors/lodge/comms/serving" "$s/comms/Lodge Ida" "$s/floors/lodge/comms/record"
   pkill -P "$holder" sleep 2> /dev/null
   wait "$holder" 2> /dev/null
   check "[C57] follow-up of 4a: once the test lets go, the carrier recovers it: its request is answered" \
     answered ida f1.grab "refused the carrier stopped while it served this, and whether it acted is not known"
   check "[C57] follow-up of 4a: its line stands in the record, and the journal is removed" \
-    eventually bash -c '[[ ! -e $1 && $(jq -r "select(.request == \"f1.grab\") | .outcome" "$2") == refused ]]' _ "$s/floors/lodge/comms/serving" "$s/comms/record"
+    eventually bash -c '[[ ! -e $1 && $(jq -r "select(.request == \"f1.grab\") | .outcome" "$2") == refused ]]' _ "$s/floors/lodge/comms/serving" "$s/floors/lodge/comms/record"
   sleep 2
   check "[C56] follow-up of 4a: a journal in the shared S/comms is no floor's: neither floor's carrier recovers it, and its request has no answer and no line" \
-    bash -c '[[ -f $1 && ! -e $2/answers/s1.grab ]] && ! grep -qF "\"request\":\"s1.grab\"" "$3"' _ "$s/comms/serving" "$s/comms/Lodge Ida" "$s/comms/record"
+    bash -c '[[ -f $1 && ! -e $2/answers/s1.grab ]] && ! grep -qF "\"request\":\"s1.grab\"" "$3"' _ "$s/comms/serving" "$s/comms/Lodge Ida" "$s/floors/lodge/comms/record"
   rm -f -- "$s/comms/serving"
   check "down deck" exit_is 0 wp down deck
   check "down lodge" exit_is 0 wp down lodge
@@ -4143,7 +4146,7 @@ t_floors_readers() {
   rc=$?
   check "[C75] review of 4a: with floors, record verify reads the seat's floor's records" bash -c '[[ $1 != 2 ]] && ! grep -q "keeps no record" "$2"' _ "$rc" "$scratch/out"
   check "[C75] with floors, record verify --requests is refused, with exit 2" exit_is 2 wp record verify --requests
-  check "[C75] saying when it comes" said "with floors, record verify --requests comes with the record of requests of each floor, in S2's stop 4b"
+  check "[C75] saying when it comes" said "with floors, record verify --requests names its floor"
   check "[C57] the carrier's unit with floors names the workplace and the floor" \
     test "$(jq -r '.unit' "$clone/BUILD/$(sed -n 's|^[0-9a-f]\{64\}  \(floors/deck/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")/records.json")" = "workplace-carrier-$label-deck.service"
   local holder
@@ -5745,7 +5748,13 @@ answered_ok() {
 # the line, so the missing line itself fails the test.
 line_recorded() {
   local file seat i
-  file=$(state_of)/comms/record seat=$(box_of "$1")
+  seat=$(box_of "$1")
+  file=$(state_of)/comms/record
+  if [[ -d $clone/BUILD/shared ]]; then
+    local record_floor
+    record_floor=$(jq -r --arg n "$seat" '.seats[] | select(.name == $n) | .floor' "$clone/BUILD/shared/$(top_gen)/mail.json")
+    file="$(state_of)/floors/$record_floor/comms/record"
+  fi
   for (( i = 0; i < 1200; i++ )); do
     jq -R -e --arg s "$seat" --arg r "$2" 'fromjson? | objects | select(.seat == $s and .request == $r)' "$file" > /dev/null 2>&1 && return 0
     sleep 0.05

@@ -81,9 +81,28 @@ floor_state_slots() {
     '.slots[(["floor-default"] | tojson)] = $v' <<< "$state")
 }
 
+floor_scope_readback() {
+  local kind=$1 hooks options
+  shift
+  hooks=$(floor_client show-hooks "$@" 2>/dev/null) || { warn "cannot read the floor $run_floor's $kind hooks"; return 1; }
+  [[ -z $(printf '%s\n' "$hooks" | sed -n '/^[^[:space:]]*[[:space:]]/p') ]] \
+    || { warn "the floor $run_floor declares $kind hooks, which the frame refuses"; return 1; }
+  if (( floor_hook_monitors )); then
+    hooks=$(floor_client show-hooks -B "$@" 2>/dev/null) || { warn "cannot read the floor $run_floor's $kind monitor hooks"; return 1; }
+    [[ -z $hooks ]] || { warn "the floor $run_floor declares $kind monitor hooks, which the frame refuses"; return 1; }
+  fi
+  if (( ! floor_unenforced )); then
+    options=$(floor_client show-options -H "$@" 2>/dev/null) || return 1
+    [[ $options != *'#('* ]] || { warn "the enforced floor $run_floor has a shell expansion in an option"; return 1; }
+  fi
+}
+
 floor_readback() {
-  local existing=${1:-0} key value hooks options sessions pane
+  local existing=${1:-0} key value options sessions pane target targets commands
   local failed=0
+  local floor_hook_monitors=0
+  commands=$(floor_client list-commands 2>/dev/null) || return 1
+  [[ $(printf '%s\n' "$commands" | sed -n '/^show-hooks /p') != *B* ]] || floor_hook_monitors=1
   for key in exit-unattached destroy-unattached; do
     if [[ $key == exit-unattached ]]; then value=$(floor_client show-options -sv "$key" 2>/dev/null)
     else value=$(floor_client show-options -gv "$key" 2>/dev/null); fi
@@ -91,15 +110,21 @@ floor_readback() {
   done
   value=$(floor_client show-options -gv history-limit 2>/dev/null)
   [[ $value =~ ^[0-9]+$ && $value -ge 5000 ]] || { warn "the floor $run_floor's history-limit is below 5000 or unreadable"; failed=1; }
-  hooks=$(floor_client show-hooks -g 2>/dev/null) || { warn "cannot read the floor $run_floor's session hooks"; return 1; }
-  [[ -z $(printf '%s\n' "$hooks" | sed -n '/^[^[:space:]]*[[:space:]]/p') ]] || { warn "the floor $run_floor declares session hooks, which the frame refuses"; failed=1; }
-  hooks=$(floor_client show-hooks -gw 2>/dev/null) || { warn "cannot read the floor $run_floor's window hooks"; return 1; }
-  [[ -z $(printf '%s\n' "$hooks" | sed -n '/^[^[:space:]]*[[:space:]]/p') ]] || { warn "the floor $run_floor declares window hooks, which the frame refuses"; failed=1; }
+  value=$(floor_client show-options -gwv synchronize-panes 2>/dev/null)
+  [[ $value == off ]] || { warn "the floor $run_floor's global synchronized input is not off"; failed=1; }
+  floor_scope_readback session -g || return 1
+  floor_scope_readback window -gw || return 1
+  floor_scope_readback pane -gp || return 1
   if (( ! floor_unenforced )); then
     value=$(floor_client show-options -sv set-clipboard 2>/dev/null)
     [[ $value == external ]] || { warn "the floor $run_floor's set-clipboard is not external"; failed=1; }
-    options=$(floor_client show-options -s \; show-options -g \; show-options -gw 2>/dev/null) || return 1
+    options=$(floor_client show-options -sH 2>/dev/null) || return 1
     [[ $options != *'#('* ]] || { warn "the enforced floor $run_floor has a shell expansion in an option"; failed=1; }
+    for key in alternate-screen allow-passthrough; do
+      value=$(floor_client show-options -gwv "$key" 2>/dev/null)
+      [[ $key == alternate-screen && $value == on || $key == allow-passthrough && $value == off ]] \
+        || { warn "the enforced floor $run_floor's global $key differs from the frame"; failed=1; }
+    done
   fi
   if (( ! existing )); then
     sessions=$(floor_client display-message -p '#{server_sessions}' 2>/dev/null)
@@ -108,18 +133,48 @@ floor_readback() {
   if (( existing )); then
     value=$(floor_client show-options -sv exit-empty 2>/dev/null)
     [[ $value == on ]] || { warn "the floor $run_floor's exit-empty is not on"; failed=1; }
+    value=$(floor_client show-options -s command-alias 2>/dev/null) || return 1
+    key=$(floor_client show-options -gqv @workplace-aliases 2>/dev/null) || return 1
+    [[ -n $key && $key == "$(sha_of <(printf '%s\n' "$value"))" ]] \
+      || { warn "the floor $run_floor's command aliases differ from the recorded frame baseline"; failed=1; }
     if [[ -n ${floor_aliases-} ]]; then
       value=$(floor_client show-options -s command-alias 2>/dev/null)
       [[ $value == "$floor_aliases" ]] || { warn "the floor $run_floor's command aliases differ from the frame"; failed=1; }
+    fi
+    targets=$(floor_client list-sessions -F '#{session_id}' 2>/dev/null) || return 1
+    while IFS= read -r target; do
+      [[ -n $target ]] || continue
+      floor_scope_readback 'local session' -t "$target" || return 1
+    done <<< "$targets"
+    targets=$(floor_client list-windows -a -F '#{window_id}' 2>/dev/null) || return 1
+    while IFS= read -r target; do
+      [[ -n $target ]] || continue
+      floor_scope_readback 'local window' -w -t "$target" || return 1
+    done <<< "$targets"
+    if [[ -f $run_dir/state.json ]]; then
+      targets=$(jq -r '.slots | to_entries[] | select((.key | fromjson)[0] == "session") | .value' "$run_dir/state.json") || return 1
+      while IFS= read -r target; do
+        [[ -n $target ]] || continue
+        value=$(floor_client show-options -Av -t "$target" destroy-unattached 2>/dev/null)
+        [[ $value == off ]] || { warn "the floor $run_floor's session $target has destroy-unattached enabled or unreadable"; failed=1; }
+      done <<< "$targets"
     fi
     local rows line
     rows=$(floor_client list-panes -a -F '#{pane_id} #{history_limit} #{synchronize-panes}' 2>/dev/null) || return 1
     while IFS= read -r line; do
       [[ -n $line ]] || continue
       read -r pane value key <<< "$line"
+      floor_scope_readback 'local pane' -p -t "$pane" || return 1
       [[ $value =~ ^[0-9]+$ && $value -ge 5000 && $key == 0 ]] || {
         warn "the floor $run_floor's pane $pane has insufficient history or synchronized input"; failed=1;
       }
+      if (( ! floor_unenforced )); then
+        for key in alternate-screen allow-passthrough; do
+          value=$(floor_client show-options -pAv -t "$pane" "$key" 2>/dev/null)
+          [[ $key == alternate-screen && $value == on || $key == allow-passthrough && $value == off ]] \
+            || { warn "the enforced floor $run_floor's pane $pane has $key differing from the frame"; failed=1; }
+        done
+      fi
     done <<< "$rows"
   fi
   (( failed == 0 ))
@@ -133,7 +188,7 @@ floor_after_term() {
       || { warn "the floor $run_floor's configuration does not parse: $(jq_message "$run_dir/config-check")"; return 1; }
     floor_readback "$floor_existing" || return 1
     local scope options option
-    for scope in -s -g -gw; do
+    for scope in -s -g -gw -gp; do
       options=$(floor_client show-options "$scope" 2>/dev/null) || return 1
       while IFS=' ' read -r option _; do
         [[ $option == @workplace* ]] || continue
@@ -143,6 +198,7 @@ floor_after_term() {
     floor_client set-option -g @workplace-clone "$clone" \; set-option -g @workplace-floor "$run_floor" \
       \; set-option -g @workplace-conf "$(sha_of "$f_gen/floor.conf")" > /dev/null || return 1
     floor_aliases=$(floor_client show-options -s command-alias 2>/dev/null) || return 1
+    floor_client set-option -g @workplace-aliases "$(sha_of <(printf '%s\n' "$floor_aliases"))" > /dev/null || return 1
     state=$(jq -c --arg aliases "$floor_aliases" '.floorAliases = $aliases' <<< "$state") || return 1
   fi
 }
@@ -229,6 +285,12 @@ floor_refresh() {
     [[ -n $target ]] || continue
     floor_client set-option -w -t "$target" synchronize-panes off > /dev/null 2>&1 || return 1
   done < <(jq -r '.slots | to_entries[] | select((.key | fromjson)[0] == "window") | .value' "$run_dir/state.json")
+  if (( ! floor_unenforced )); then
+    while IFS= read -r target; do
+      [[ -n $target ]] || continue
+      floor_client set-option -p -t "$target" alternate-screen on \; set-option -p -t "$target" allow-passthrough off > /dev/null 2>&1 || return 1
+    done < <(jq -r '.slots | to_entries[] | select((.key | fromjson)[0] == "pane") | .value' "$run_dir/state.json")
+  fi
   floor_readback 1 || return 1
   if [[ -n ${comms_record-} ]]; then
     refreshed=$(jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg f "$run_floor" \

@@ -2358,6 +2358,14 @@ run_server() {
     server_verdict="gone    the server: none answers"
     return 3
   elif [[ $server_mark == "$clone" ]]; then
+    if [[ -n $run_floor ]]; then
+      local floor_unenforced=0 where="the server"
+      [[ $(jq -r '.slots[(["unenforced"] | tojson)] // ""' "$slots") == 1 ]] && floor_unenforced=1
+      if ! meets floor-server-privileges "$server_pid"; then
+        server_verdict="refused the server, process $server_pid, does not carry the floor's recorded privilege mode"
+        return 1
+      fi
+    fi
     server_verdict="ok      the server, process $server_pid, carries this clone's mark"
     return 0
   elif [[ -n $server_mark ]]; then
@@ -3080,7 +3088,11 @@ carrier_git() {
     git -C "$store" -c core.hooksPath=/dev/null -c core.fsmonitor=false -c commit.gpgSign=false -c gc.auto=0 -c maintenance.auto=false "$@" 9>&-
 }
 
-carrier_tmux() { "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 8>&- 9>&-; }
+carrier_tmux() {
+  local -a prefix=()
+  [[ -z $run_floor ]] || prefix=(timeout --foreground --kill-after=1 10)
+  "${prefix[@]}" "$carrier_setpriv" --no-new-privs "$carrier_tmux_program" -S "$carrier_socket" -u "$@" 6>&- 8>&- 9>&-
+}
 
 carrier_look() {
   local mark
@@ -4716,7 +4728,7 @@ cmd_restart() {
     panes+=("$pane")
   done
   check_values "$(jq -r '.name // "default"' <<< "$report")" || die "restart refuses, as up would, and starts nothing"
-  if ! set_homes || ! set_mail || ! set_records; then
+  if ! set_homes || ! set_mail || ! floor_links || ! set_records; then
     die "restart refuses, as up would, and starts nothing"
   fi
   mapfile -t records < "$run_dir/checks"

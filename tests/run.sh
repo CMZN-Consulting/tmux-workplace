@@ -3417,6 +3417,257 @@ t_floor_runtime() {
   check "[C105] floor runtime: down default floor" exit_is 0 wp down bridge
 }
 
+t_floor_scoped_readback() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C105] scoped readback: plan" exit_is 0 wplan
+  check "[C105] scoped readback: build" exit_is 0 wp build
+  check "[C105] scoped readback: up deck" exit_is 0 wp up deck
+  local session window pane scope target key value commands client control_fd
+  session=$(on deck T list-sessions -F '#{session_id}' | head -1)
+  window=$(on deck T list-windows -a -F '#{window_id}' | head -1)
+  pane=$(on deck T list-panes -a -F '#{pane_id}' | head -1)
+  for scope in global-pane session window pane; do
+    case $scope in
+      global-pane) target=-gp ;;
+      session) target=$session ;;
+      window) target=$window ;;
+      pane) target=$pane ;;
+    esac
+    case $scope in
+      global-pane) on deck T set-hook -gp after-list-clients 'display-message harmless' ;;
+      session) on deck T set-hook -t "$target" after-list-clients 'display-message harmless' ;;
+      window) on deck T set-hook -w -t "$target" after-list-clients 'display-message harmless' ;;
+      pane) on deck T set-hook -p -t "$target" after-list-clients 'display-message harmless' ;;
+    esac
+    check "[C105] $scope hook: status refuses" exit_is 1 wp status deck
+    check "[C105] $scope hook: diagnostic names hooks" said "hooks, which the frame refuses"
+    case $scope in
+      global-pane) on deck T set-hook -gpu after-list-clients ;;
+      session) on deck T set-hook -u -t "$target" after-list-clients ;;
+      window) on deck T set-hook -wu -t "$target" after-list-clients ;;
+      pane) on deck T set-hook -pu -t "$target" after-list-clients ;;
+    esac
+  done
+  commands=$(on deck T list-commands)
+  if [[ $(printf '%s\n' "$commands" | sed -n '/^show-hooks /p') == *B* ]]; then
+    on deck T set-hook -gp -B "@scope-probe:$pane:#{pane_dead}"
+    check "[C105] a monitor with no command body still refuses" exit_is 1 wp status deck
+    check "[C105] the monitor's diagnostic names hooks" said "monitor hooks, which the frame refuses"
+    on deck T set-hook -gpu -B @scope-probe
+  else
+    skip "[C105] this tmux has no hook-monitor subscriptions"
+  fi
+  for scope in session window pane; do
+    case $scope in
+      session) on deck T set-option -t "$session" @scope-probe '#(printf harmless)' ;;
+      window) on deck T set-option -w -t "$window" @scope-probe '#(printf harmless)' ;;
+      pane) on deck T set-option -p -t "$pane" @scope-probe '#(printf harmless)' ;;
+    esac
+    check "[C105] $scope option expansion: status refuses" exit_is 1 wp status deck
+    check "[C105] $scope option expansion: diagnostic" said "shell expansion in an option"
+    case $scope in
+      session) on deck T set-option -u -t "$session" @scope-probe ;;
+      window) on deck T set-option -wu -t "$window" @scope-probe ;;
+      pane) on deck T set-option -pu -t "$pane" @scope-probe ;;
+    esac
+  done
+  for key in alternate-screen allow-passthrough synchronize-panes; do
+    value=on
+    [[ $key != alternate-screen ]] || value=off
+    on deck T set-option -gw "$key" "$value"
+    check "[C106] global $key: status refuses" exit_is 1 wp status deck
+    check "[C22] global $key: status does not repair" test "$(on deck T show-options -gwv "$key")" = "$value"
+    value=off
+    [[ $key != alternate-screen ]] || value=on
+    on deck T set-option -gw "$key" "$value"
+  done
+  for key in alternate-screen allow-passthrough; do
+    value=on
+    [[ $key != alternate-screen ]] || value=off
+    on deck T set-option -p -t "$pane" "$key" "$value"
+    check "[C106] local $key: status refuses" exit_is 1 wp status deck
+    check "[C22] local $key: status does not repair" test "$(on deck T show-options -pAv -t "$pane" "$key")" = "$value"
+    value=off
+    [[ $key != alternate-screen ]] || value=on
+    on deck T set-option -p -t "$pane" "$key" "$value"
+  done
+  mkfifo "$scratch/control-input"
+  exec {control_fd}<> "$scratch/control-input"
+  tmux -S "$run/deck/$label" -C attach-session -t "$session" <&"$control_fd" > "$scratch/control.log" 2>&1 &
+  client=$!
+  check "[C106] local session: synthetic client is attached" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" display-message -p -t "$2" "#{session_attached}") -gt 0 ]]' _ "$run/deck/$label" "$session"
+  on deck T set-option -t "$session" destroy-unattached on
+  check "[C106] local destroy-unattached: status refuses" exit_is 1 wp status deck
+  check "[C22] local destroy-unattached: status does not repair" test "$(on deck T show-options -Av -t "$session" destroy-unattached)" = on
+  on deck T set-option -t "$session" destroy-unattached off
+  kill "$client" 2>/dev/null || :
+  wait "$client" 2>/dev/null || :
+  exec {control_fd}>&-
+  check "[C106] scoped readback: restored settings agree" exit_is 0 wp status deck
+  check "[C105] scoped readback: down deck" exit_is 0 wp down deck
+}
+
+t_floor_refresh_scoped() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","harbor","dock","-","room","mail","harbor","dock","-","room","allowed"]; 22)]'
+  check "[C106] scoped refresh: plan" exit_is 0 wplan
+  check "[C106] scoped refresh: build" exit_is 0 wp build
+  check "[C106] scoped refresh: up deck" exit_is 0 wp up deck
+  local pane session client control_fd
+  pane=$(on deck pane_by_title 'Harbor Keeper')
+  session=$(on deck T list-sessions -F '#{session_id}' | head -1)
+  mkfifo "$scratch/control-input"
+  exec {control_fd}<> "$scratch/control-input"
+  tmux -S "$run/deck/$label" -C attach-session -t "$session" <&"$control_fd" > "$scratch/control.log" 2>&1 &
+  client=$!
+  check "[C106] scoped refresh: a synthetic client keeps the test session attached" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" display-message -p -t "$2" "#{session_attached}") -gt 0 ]]' _ "$run/deck/$label" "$session"
+  on deck T set-option -t "$session" destroy-unattached on
+  on deck T set-option -gw synchronize-panes on
+  on deck T set-option -gw alternate-screen off
+  on deck T set-option -gw allow-passthrough on
+  on deck T set-option -p -t "$pane" alternate-screen off
+  on deck T set-option -p -t "$pane" allow-passthrough on
+  check "[C106] scoped refresh: carrier restores the session's attachment policy" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -Av -t "$2" destroy-unattached) == off ]]' _ "$run/deck/$label" "$session"
+  check "[C106] scoped refresh: carrier restores global synchronized input" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -gwv synchronize-panes) == off ]]' _ "$run/deck/$label"
+  check "[C106] scoped refresh: carrier restores global alternate screen" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -gwv alternate-screen) == on ]]' _ "$run/deck/$label"
+  check "[C106] scoped refresh: carrier restores global passthrough" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -gwv allow-passthrough) == off ]]' _ "$run/deck/$label"
+  check "[C106] scoped refresh: carrier restores pane alternate screen" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -pAv -t "$2" alternate-screen) == on ]]' _ "$run/deck/$label" "$pane"
+  check "[C106] scoped refresh: carrier restores pane passthrough" \
+    on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -pAv -t "$2" allow-passthrough) == off ]]' _ "$run/deck/$label" "$pane"
+  on deck T set-hook -p -t "$pane" after-list-clients 'display-message harmless'
+  request keeper refused.grab 'seat: Harbor Pilot'
+  check "[C106] scoped refresh: a local hook blocks terminal transport" \
+    answered keeper refused.grab "refused the floor's terminal transport settings are refused; try again after repair"
+  request keeper while-refused.md 'to: Harbor Pilot' 'subject: local hook' --- body
+  check "[C106] scoped refresh: mail continues with the local hook present" answered_ok keeper while-refused.md
+  on deck T set-hook -pu -t "$pane" after-list-clients
+  kill "$client" 2>/dev/null || :
+  wait "$client" 2>/dev/null || :
+  exec {control_fd}>&-
+  check "[C106] scoped refresh: down deck" exit_is 0 wp down deck
+}
+
+t_floor_alias_reuse() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "[C105] alias reuse needs an ordinary caller"
+    return 0
+  fi
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C105] alias reuse: plan" exit_is 0 wplan
+  check "[C105] alias reuse: build" exit_is 0 wp build
+  check "[C105] alias reuse: up" exit_is 0 wp up bridge
+  local socket=$TMUX_TMPDIR/tmux-$EUID/default before
+  tmux -S "$socket" new-session -d -s personal
+  check "[C105] alias reuse: initial baseline digest exists" \
+    bash -c '[[ $(tmux -S "$1" show-options -gqv @workplace-aliases) =~ ^[0-9a-f]{64}$ ]]' _ "$socket"
+  check "[C105] alias reuse: down preserves the personal session" exit_is 0 wp down bridge
+  tmux -S "$socket" set-option -s 'command-alias[999]' 'scope-probe=list-sessions'
+  before=$(floor_server_digest "$socket")
+  check "[C105] alias reuse: altered aliases refuse before up" exit_is 1 wp up bridge
+  check "[C105] alias reuse: reason names baseline" said "command aliases differ from the recorded frame baseline"
+  check "[C105] alias reuse: refusal leaves the personal server unchanged" test "$(floor_server_digest "$socket")" = "$before"
+  check "[C105] alias reuse: refusal makes no run" test ! -d "$run/bridge"
+  tmux -S "$socket" set-option -su 'command-alias[999]'
+  check "[C105] alias reuse: restored aliases allow up" exit_is 0 wp up bridge
+  check "[C105] alias reuse: down" exit_is 0 wp down bridge
+}
+
+t_floor_restart_mail_links() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "[C98] admin restart needs an ordinary caller"
+    return 0
+  fi
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"
+  check "[C98] restart links: plan" exit_is 0 wplan
+  check "[C98] restart links: build" exit_is 0 wp build
+  check "[C98] restart links: up bridge" exit_is 0 wp up bridge
+  local pane target link="$root/mailbox/Orchard Grower/out"
+  pane=$(on bridge pane_by_title 'Orchard Grower')
+  on bridge T respawn-pane -k -t "$pane" /usr/bin/true
+  check "[C98] restart links: seat ended" on bridge eventually_long dead_pane 'Orchard Grower'
+  target=$(readlink "$link")
+  rm -- "$link"
+  check "[C98] restart links: missing host mailbox link refuses restart" exit_is 1 wp restart bridge 'Orchard Grower'
+  check "[C98] restart links: diagnostic names missing link" said "the mailbox entry $link is missing"
+  check "[C98] restart links: refused seat stays dead" on bridge dead_pane 'Orchard Grower'
+  ln -s -- "$target" "$link"
+  check "[C98] restart links: restored mailbox allows restart" exit_is 0 wp restart bridge 'Orchard Grower'
+  check "[C98] restart links: down bridge" exit_is 0 wp down bridge
+}
+
+t_floor_call_deadlines() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C105] deadlines: plan" exit_is 0 wplan
+  check "[C105] deadlines: build" exit_is 0 wp build
+  check "[C105] deadlines: up deck" exit_is 0 wp up deck
+  local socket=$run/deck/$label pid kind
+  pid=$(on deck T display-message -p '#{pid}')
+  {
+    printf '%s\n' 'set -o nounset -o pipefail' 'run_floor=deck' 'run_dir=$1' \
+      'carrier_setpriv=$(command -v setpriv)' 'carrier_tmux_program=$(command -v tmux)' 'carrier_socket=$2'
+    sed -n '/^caller_locale() {/,/^} 2> \/dev\/null/p;/^run_call() {/,/^}/p;/^read_server() {/,/^}/p;/^carrier_tmux() {/,/^}/p' "$loop"
+    printf '%s\n' 'if [[ $3 == carrier ]]; then' \
+      '  carrier_tmux display-message -p "#{pid}" && exit 1' \
+      '  result=$?; [[ $result == 124 || $result == 137 ]]' \
+      'else' '  read_server "$carrier_setpriv" "$carrier_tmux_program" "$carrier_socket"' \
+      '  [[ $server_up == 0 ]]' 'fi'
+  } > "$scratch/deadline-driver"
+  trap 'kill -CONT "$pid" 2>/dev/null || :; exit 1' HUP INT TERM
+  kill -STOP "$pid"
+  for kind in carrier read-server; do
+    check "[C105] deadlines: $kind returns before the outer guard with a stopped real server" \
+      exit_is 0 timeout --foreground --kill-after=1 14 "$BASH" "$scratch/deadline-driver" "$scratch" "$socket" "$kind"
+  done
+  kill -CONT "$pid"
+  trap - HUP INT TERM
+  check "[C105] deadlines: down deck" exit_is 0 wp down deck
+}
+
+t_floor_server_privilege_recheck() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "[C10] wrong-privilege replacement needs an ordinary caller"
+    return 0
+  fi
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C10] privilege recheck: plan" exit_is 0 wplan
+  check "[C10] privilege recheck: build" exit_is 0 wp build
+  check "[C10] privilege recheck: up enforced deck" exit_is 0 wp up deck
+  local socket=$run/deck/$label previous
+  previous=$(on deck T display-message -p '#{pid}')
+  tmux -S "$socket" kill-server
+  check "[C10] privilege recheck: original server has ended before replacement" \
+    eventually_long bash -c '! kill -0 "$1" 2>/dev/null' _ "$previous"
+  check "[C10] privilege recheck: replacement server starts" \
+    tmux -S "$socket" -f /dev/null new-session -d -s replacement 'sleep infinity'
+  check "[C10] privilege recheck: replacement receives the old mark" tmux -S "$socket" set-option -g @workplace-clone "$clone"
+  check "[C10] privilege recheck: replacement actually has the wrong privileges" \
+    test "$(nnp_of "$(tmux -S "$socket" display-message -p '#{pid}')")" = NoNewPrivs:0
+  check "[C10] privilege recheck: same mark with wrong privileges refuses restart" exit_is 2 wp restart deck
+  check "[C10] privilege recheck: diagnostic names privilege mode" said "does not carry the floor's recorded privilege mode"
+  tmux -S "$socket" kill-server
+}
+
 t_floor_command_exclusion() {
   scoped_clone
   floors_clone
@@ -7412,6 +7663,12 @@ tests=(
   t_floor_config_refusals
   t_floor_default_refusals
   t_floor_runtime
+  t_floor_scoped_readback
+  t_floor_refresh_scoped
+  t_floor_alias_reuse
+  t_floor_restart_mail_links
+  t_floor_call_deadlines
+  t_floor_server_privilege_recheck
   t_floor_command_exclusion
   t_actual_default_mask_build
   t_alias_access_mask_failure

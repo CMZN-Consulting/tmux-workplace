@@ -3431,24 +3431,24 @@ t_floor_scoped_readback() {
   pane=$(on deck T list-panes -a -F '#{pane_id}' | head -1)
   for scope in pane-via-gp session window pane; do
     case $scope in
-      pane-via-gp) target=-gp ;;
+      pane-via-gp) target=$pane ;;
       session) target=$session ;;
       window) target=$window ;;
       pane) target=$pane ;;
     esac
     case $scope in
-      pane-via-gp) on deck T set-hook -gp after-list-clients 'display-message harmless' ;;
+      pane-via-gp) on deck T set-hook -gp -t "$target" pane-mode-changed 'display-message harmless' ;;
       session) on deck T set-hook -t "$target" after-list-clients 'display-message harmless' ;;
-      window) on deck T set-hook -w -t "$target" after-list-clients 'display-message harmless' ;;
-      pane) on deck T set-hook -p -t "$target" after-list-clients 'display-message harmless' ;;
+      window) on deck T set-hook -w -t "$target" pane-mode-changed 'display-message harmless' ;;
+      pane) on deck T set-hook -p -t "$target" pane-mode-changed 'display-message harmless' ;;
     esac
     check "[C105] $scope hook: status refuses" exit_is 1 wp status deck
     check "[C105] $scope hook: diagnostic names hooks" said "hooks, which the frame refuses"
     case $scope in
-      pane-via-gp) on deck T set-hook -gpu after-list-clients ;;
+      pane-via-gp) on deck T set-hook -gpu -t "$target" pane-mode-changed ;;
       session) on deck T set-hook -u -t "$target" after-list-clients ;;
-      window) on deck T set-hook -wu -t "$target" after-list-clients ;;
-      pane) on deck T set-hook -pu -t "$target" after-list-clients ;;
+      window) on deck T set-hook -wu -t "$target" pane-mode-changed ;;
+      pane) on deck T set-hook -pu -t "$target" pane-mode-changed ;;
     esac
   done
   commands=$(on deck T list-commands)
@@ -3548,13 +3548,13 @@ t_floor_refresh_scoped() {
     on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -pAv -t "$2" alternate-screen) == on ]]' _ "$run/deck/$label" "$pane"
   check "[C106] scoped refresh: carrier restores pane passthrough" \
     on deck eventually_long bash -c '[[ $(tmux -S "$1" show-options -pAv -t "$2" allow-passthrough) == off ]]' _ "$run/deck/$label" "$pane"
-  on deck T set-hook -p -t "$pane" after-list-clients 'display-message harmless'
+  on deck T set-hook -p -t "$pane" pane-mode-changed 'display-message harmless'
   request keeper refused.grab 'seat: Harbor Pilot'
   check "[C106] scoped refresh: a local hook blocks terminal transport" \
     answered keeper refused.grab "refused the floor's terminal transport settings are refused; try again after repair"
   request keeper while-refused.md 'to: Harbor Pilot' 'subject: local hook' --- body
   check "[C106] scoped refresh: mail continues with the local hook present" answered_ok keeper while-refused.md
-  on deck T set-hook -pu -t "$pane" after-list-clients
+  on deck T set-hook -pu -t "$pane" pane-mode-changed
   kill "$client" 2>/dev/null || :
   wait "$client" 2>/dev/null || :
   exec {control_fd}>&-

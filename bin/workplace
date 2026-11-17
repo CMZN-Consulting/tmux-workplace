@@ -3135,6 +3135,50 @@ carrier_type_hold() {
   return 1
 }
 
+carrier_destination() (
+  local i=$1 context floor_call_timeout=3 server where="the destination floor's server"
+  if [[ -z $run_floor ]]; then
+    jq -nc --arg socket "$carrier_socket" --arg run "$carrier_run" --arg pane "${seat_pane[i]-}" \
+      --arg tmux "$carrier_tmux_program" --arg setpriv "$carrier_setpriv" '{socket:$socket,run:$run,pane:$pane,tmux:$tmux,setpriv:$setpriv}'
+    return
+  fi
+  run_floor=${seat_fl[i]}
+  [[ -n $run_floor && -n ${b_floor[$run_floor]+x} ]] || return 1
+  run_dir=$build_dir/RUN/$run_floor
+  [[ -f $run_dir/state.json ]] || return 1
+  context=$(jq -ce --arg floor "$run_floor" --argjson key "${seat_keys[i]}" '
+    .slots as $s | select($s[(["floor-key"]|tojson)] == $floor)
+    | {socket:$s[(["socket-path"]|tojson)],run:$s[(["run"]|tojson)],pane:$s[(["pane"]+$key|tojson)],
+       tmux:$s[(["program","tmux"]|tojson)],setpriv:$s[(["program","setpriv"]|tojson)]}
+    | select(all(.[]; type == "string" and length > 0))' "$run_dir/state.json") || return 1
+  floor_resume_context || return 1
+  server=$(floor_client display-message -p '#{pid} #{@workplace-clone}' 2> /dev/null) || return 1
+  [[ ${server#* } == "$clone" && ${server%% *} =~ ^[0-9]+$ ]] || return 1
+  meets floor-server-privileges "${server%% *}" || return 1
+  floor_readback 1 > /dev/null 2>&1 || return 1
+  printf '%s\n' "$context"
+)
+
+carrier_serve_turn() {
+  local i=$1 checked target j carrier_reserved_floor=""
+  exec 5>&-
+  if [[ -n $run_floor ]] && carrier_eligible "$i" && [[ $eligible_entry == *.write && -f $eligible_entry && ! -L $eligible_entry ]]; then
+    if dd if="$eligible_entry" of="$fcomms/.request-check" bs=$(( MAIL_LIMIT + 1 )) count=1 iflag=fullblock,nofollow,nonblock status=none 2> /dev/null; then
+      checked=$(carrier_verdict write "${seat_names[i]}" "${seat_reach[i]}" "$fcomms/.request-check") || checked='{}'
+      if [[ $(jq -r '.ok // false' <<< "$checked") == true ]]; then
+        target=$(jq -r .target <<< "$checked")
+        j=$(carrier_seat_of "$target") || return 1
+        carrier_reserved_floor=${seat_fl[j]}
+        carrier_type_hold "$carrier_reserved_floor" 1 || return 0
+      fi
+    fi
+  fi
+  carrier_serve "$i"
+  local result=$?
+  exec 5>&-
+  return "$result"
+}
+
 carrier_look() {
   local mark
   if [[ -n $run_floor ]] && [[ $(carrier_tmux display-message -p -t "$1" '#{synchronize-panes}' 2>/dev/null) != 0 ]]; then return 2; fi
@@ -3408,7 +3452,8 @@ carrier_eligible() {
 }
 
 carrier_serve() {
-  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied typed why base delivered subject
+  local i=$1 entry name kind action copy size verdict targets file p j pane out mark text key written sum copied typed why base delivered subject destination
+  local carrier_socket=$carrier_socket carrier_run=$carrier_run carrier_tmux_program=$carrier_tmux_program carrier_setpriv=$carrier_setpriv
   local -a readers keep paths
   carrier_eligible "$i" || return 0
   # One hold of the store's lock for one request; its eligibility is read again under the hold (5.162 point 1).
@@ -3493,11 +3538,17 @@ carrier_serve() {
           rm -f -- "$file"
         else
           j=$(carrier_seat_of "$(jq -r '.target' <<< "$verdict")")
-          pane=${seat_pane[j]-}
+          carrier_release
+          destination=$(carrier_destination "$j") || destination=""
+          if [[ -n $destination ]]; then
+            carrier_socket=$(jq -r .socket <<< "$destination") carrier_run=$(jq -r .run <<< "$destination")
+            carrier_tmux_program=$(jq -r .tmux <<< "$destination") carrier_setpriv=$(jq -r .setpriv <<< "$destination")
+            pane=$(jq -r .pane <<< "$destination")
+          else pane=""; fi
           if [[ -n $run_floor && ${carrier_transport_ok-1} == 0 ]]; then
             carrier_refuse "$i" "$name" "$action" "$targets" "the floor's terminal transport settings are refused; try again after repair"
-          elif [[ -n $run_floor && ${seat_fl[j]} != "$run_floor" ]]; then
-            carrier_refuse "$i" "$name" "$action" "$targets" "a grab or a write across floors comes with S2's stop 4b"
+          elif [[ -n $run_floor && $action == write && ${carrier_reserved_floor-} != "${seat_fl[j]}" ]]; then
+            carrier_refuse "$i" "$name" "$action" "$targets" "the request's target changed while its typing slot was reserved; try again"
           elif [[ -z $pane ]]; then
             carrier_refuse "$i" "$name" "$action" "$targets" "the pane of ${seat_names[j]} is not one that this run made"
           elif [[ $action == grab ]] && carrier_release; then
@@ -3533,6 +3584,11 @@ carrier_serve() {
                 why=$(carrier_apart "$typed" "${seat_names[j]}")
                 carrier_answer "${seat_answers[i]}" "$name" "refused $why"
                 carrier_record "${seat_names[i]}" "$name" write "$targets" refused "$why" "$written"
+                ;;
+              9)
+                why="the server did not answer within three seconds; whether the text was typed is not known"
+                carrier_answer "${seat_answers[i]}" "$name" "refused $why"
+                carrier_record "${seat_names[i]}" "$name" write "$targets" unknown "$why" "$written"
                 ;;
               *)
                 carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
@@ -4100,7 +4156,7 @@ cmd_carry() {
     if [[ -n $store && ! -f $fcomms/serving ]]; then
       for i in "${own[@]}"; do
         (( carrier_stop || hold_over )) && break
-        carrier_serve "$i"
+        carrier_serve_turn "$i"
       done
     fi
     (( carrier_stop || hold_over )) || carrier_wake

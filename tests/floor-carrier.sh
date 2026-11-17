@@ -11,6 +11,11 @@ carrier_test_answer() {
   return 1
 }
 
+carrier_test_floor_text() {
+  local pane
+  while IFS= read -r pane; do T capture-pane -p -t "$pane"; done < <(T list-panes -a -F '#{pane_id}')
+}
+
 t_carrier_git_deadlines() {
   scoped_clone
   floors_clone
@@ -20,7 +25,7 @@ t_carrier_git_deadlines() {
     m(["reach", "lodge", "-", "-", "floor", "mail", "harbor", "-", "-", "office", "allowed"]; 3)]'
   check "[C107] two floors with a shared mail store plan" exit_is 0 wplan
   check "[C107] build the throwaway workplace" exit_is 0 wp build
-  local real_git s pid blocked_id mode start
+  local real_git s pid blocked_id mode start worker hook_pid
   real_git=$(command -v git)
   s=$(state_of)
   mkfifo -- "$scratch/git-index-input"
@@ -53,6 +58,16 @@ t_carrier_git_deadlines() {
       pid=$(carrier_pid deck)
       check "[C107] prepared: kill only the source carrier" kill -KILL "$pid"
       check "[C107] prepared: the orphan Git still holds the store lock" bash -c '! flock -n "$1" true' _ "$s/mail"
+      worker=$(cat "$scratch/git-entered")
+      if [[ $mode == prepared ]]; then
+        hook_pid=$worker
+        worker=$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/$hook_pid/status")
+        check "[C107] prepared: kill the actual Git writer and its test hook" kill -KILL "$worker" "$hook_pid"
+        check "[C107] prepared: SIGKILL really leaves a stale ref lock" test -f "$s/mail/.git/refs/heads/mail.lock"
+      else
+        check "[C107] index: kill the actual index writer" kill -KILL "$worker"
+        check "[C107] index: SIGKILL really leaves a stale index lock" test -f "$s/mail/.git/index.lock"
+      fi
     fi
     start=${EPOCHREALTIME/./}
     request ida "$mode.md" "to: Harbor Keeper" "subject: other floor" --- body
@@ -212,4 +227,68 @@ t_carrier_pointer_recovery() {
   check "[C109] settle removes only the pointed ID and preserves later delivery" eventually_long bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.ids,.count]" "$1") == "[[\"$2\"],1]" ]] && [[ ! -e $3 ]]' _ "$s/comms/wake.json" "$other" "$c/.pointing/Lodge Ida"
   check "[C109] stop reader" exit_is 0 wp down lodge
   check "[C109] stop source" exit_is 0 wp down deck
+}
+
+t_carrier_cross_floor() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","orchard","-","-","office","grab","harbor","-","-","office","allowed"];2),
+    m(["reach","orchard","-","-","office","write","harbor","-","-","office","allowed"];3),
+    m(["reach","orchard","barn","picker","seat","write","harbor","-","-","office","banned"];4),
+    m(["record","-","-","-","workplace","pane","kept"];5),
+    m(["record-path","records"];6),m(["record-chain","file"];7)]
+    | (.programs[] | select(.path=="harbor/tower/watch/seat.typify") | .plan[1].term[5]) |=
+      (fromjson + ["typed="+$root+"/harbor/charts/cross-typed"] | tojson)'
+  check "[C110] Administration-to-enforced-floor fixture plans" exit_is 0 wplan
+  check "[C110] fixture builds" exit_is 0 wp build
+  check "[C110] Administration starts on its private test default socket" exit_is 0 wp up bridge
+  check "[C110] destination starts on its own socket" exit_is 0 wp up deck
+  local s pane holder pid before
+  s=$(state_of)
+  pane=$(on deck pane_of "Harbor Watch")
+  check "[C110] destination program is running" eventually_long on deck screen_has "Harbor Watch" "probe watch done"
+  request grower cross.grab "seat: Harbor Watch"
+  check "[C110] authorized grab is answered by the destination floor" answered_ok grower cross.grab
+  check "[C110] capture comes from the actual target, despite reused pane IDs" grep -qF 'probe watch done' "$s/comms/Orchard Grower/answers/cross.grab"
+  request grower cross.write "seat: Harbor Watch" --- "cross-floor-sentinel"
+  check "[C110] authorized write crosses floors" answered_ok grower cross.write
+  check "[C110] only the intended destination receives the literal line" eventually_long grep -qxF 'cross-floor-sentinel' "$root/harbor/charts/cross-typed"
+  check "[C110] the source floor receives no mistaken typing" bash -c '! grep -qF cross-floor-sentinel "$1"' _ <(on bridge carrier_test_floor_text)
+  request picker banned.write "seat: Harbor Watch" --- "forbidden-cross-floor"
+  check "[C110] a denied cross-floor write remains denied" answered picker banned.write "refused the plan does not let Orchard Picker write to Harbor Watch"
+  check "[C110] denied text was never typed" bash -c '! grep -qF forbidden-cross-floor "$1"' _ "$root/harbor/charts/cross-typed"
+  flock -o "$s/floors/deck/type.lock" sleep 60 & holder=$!
+  check "[C110] another carrier holds the destination typing slot" eventually bash -c '! flock -n "$1" true' _ "$s/floors/deck/type.lock"
+  request grower locked.write "seat: Harbor Watch" --- "after-type-reservation"
+  pid=$(carrier_pid bridge)
+  check "[C110] the source actually tries the destination lock before taking the request" eventually_long blocked_in_flock "$pid" "$s/floors/deck/type.lock"
+  check "[C110] busy typing leaves the original request in out with no answer" bash -c '[[ -f $1/out/locked.write && ! -e $1/answers/locked.write ]]' _ "$s/comms/Orchard Grower"
+  request picker meanwhile.md "to: Harbor Watch" "subject: not blocked by typing" --- body
+  check "[C110] another seat can deliver mail while typing is reserved" answered_ok picker meanwhile.md
+  pkill -P "$holder" sleep 2> /dev/null; wait "$holder" 2> /dev/null
+  check "[C110] the waiting write proceeds when its typing slot is free" answered_ok grower locked.write
+  check "[C110] the reserved line reached the destination" eventually_long grep -qxF after-type-reservation "$root/harbor/charts/cross-typed"
+  check "[C110] change the destination pane's run mark for a refusal probe" exit_is 0 on deck T set-option -p -t "$pane" @workplace stale
+  request grower stale.grab "seat: Harbor Watch"
+  check "[C110] stale destination pane is refused" answered grower stale.grab "refused the pane of Harbor Watch does not carry this run's mark, or is gone"
+  check "[C110] restore the actual destination mark" exit_is 0 on deck T set-option -p -t "$pane" @workplace "$(jq -r '.slots[(["run"]|tojson)]' "$run/deck/state.json")"
+  pid=$(on deck T display-message -p '#{pid}')
+  check "[C110] stop only the synthetic destination server" kill -STOP "$pid"
+  trap 'kill -CONT "$pid" 2>/dev/null; cleanup || exit 1' EXIT
+  request grower stopped.grab "seat: Harbor Watch"
+  check "[C110] a stopped destination is refused within a bounded call" carrier_test_answer grower stopped.grab "refused the pane of Harbor Watch is not one that this run made" 8
+  check "[C110] resume the synthetic destination" kill -CONT "$pid"
+  trap 'cleanup || exit 1' EXIT
+  request keeper back.md "to: Orchard Grower" "subject: return path" --- body
+  check "[C110] the destination's own carrier still serves mail" answered_ok keeper back.md
+  check "[C110] stop the destination floor" exit_is 0 wp down deck
+  request grower down.write "seat: Harbor Watch" --- "never-to-a-down-floor"
+  check "[C110] a down destination is refused" answered grower down.write "refused the pane of Harbor Watch is not one that this run made"
+  check "[C110] stop Administration" exit_is 0 wp down bridge
+  check "[C110] verify Administration's own request chain" exit_is 0 wp record verify --requests bridge
+  check "[C110] verify destination's own request chain" exit_is 0 wp record verify --requests deck
+  check "[C110] request verification requires a floor" exit_is 2 wp record verify --requests
+  check "[C110] request verification refuses an unknown floor" exit_is 2 wp record verify --requests missing
 }

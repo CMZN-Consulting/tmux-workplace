@@ -15,7 +15,7 @@ floor_capture() {
 floor_client() {
   local -a prefix=()
   [[ ${floor_unenforced-0} == 1 ]] || prefix=("$(command -v setpriv)" --no-new-privs)
-  floor_capture timeout --foreground --kill-after=1 10 "${prefix[@]}" "$(command -v tmux)" -N -S "$floor_socket" -u "$@" 6>&-
+  floor_capture timeout --foreground --kill-after=1 "${floor_call_timeout:-10}" "${prefix[@]}" "$(command -v tmux)" -N -S "$floor_socket" -u "$@" 5>&- 6>&-
 }
 
 floor_prepare() {

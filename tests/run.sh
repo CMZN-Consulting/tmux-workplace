@@ -3108,7 +3108,7 @@ t_floors_up() {
   check "[C61] build makes what each carrier takes into in its own floor's state, and none in S/comms" \
     bash -c '[[ -d $1/floors/deck/comms/taken && -d $1/floors/lodge/comms/taken && ! -e $1/comms/taken ]]' _ "$s"
   request keeper g1.grab "seat: Lodge Ida"
-  check "[C60] 5.162 point 1: a grab across floors is refused until 4b" answered keeper g1.grab "refused a grab or a write across floors comes with S2's stop 4b"
+  check "[C60] 4b: an authorized grab uses the other floor's server" answered_ok keeper g1.grab
   # A stopped carrier's torn last line, and then a grab, whose line is written after the store's lock is let go. The
   # refusal's line is awaited first, so that the torn bytes stand last.
   check "the refusal's line stands in the record" eventually bash -c 'grep -q "\"request\":\"g1.grab\"" "$1"' _ "$s/floors/deck/comms/record"
@@ -7758,6 +7758,7 @@ tests=(
   t_carrier_git_deadlines
   t_carrier_request_recovery
   t_carrier_pointer_recovery
+  t_carrier_cross_floor
   t_wake_floors
   t_carrier_floors
   t_floors_readers

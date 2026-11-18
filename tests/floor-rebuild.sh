@@ -255,6 +255,35 @@ generation_top_floor() {
   sed -n "\\|^[0-9a-f]\\{64\\}  floors/$1/[0-9]*/MANIFEST$|p" "$clone/BUILD/MANIFEST"
 }
 
+t_generation_large_document() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","orchard","-","-","office","record","harbor","-","-","office","allowed"];20),
+    m(["record","-","-","-","workplace","pane","kept"];21),
+    m(["record-path","records"];22), m(["record-chain","file"];23)]
+    | .programs[-1].recorded += [range(100;1300) as $line | st("-";"-";"-";"workplace";"/";"read-only";$line)]'
+  check "[C122] the large folded-document fixture plans" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
+  check "[C122] its compact folded view exceeds the single-argument limit" bash -c '(( $(jq -c . "$1" | wc -c) > 196608 ))' _ "$clone/PLAN/view.json"
+  check "[C122] a large folded view passes the whole-build equality check" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  check "[C106] a large folded view still produces the exact allowed record link" \
+    test "$(readlink "$root/records/Orchard Grower/Harbor Keeper")" = "$(state_of)/floors/deck/records/Harbor Keeper"
+  check "[C122] a floor rebuild accepts the same large document" exit_is 0 wp build lodge
+  (( test_failed == 0 )) || return 1
+  if [[ $(nnp_of $$) == NoNewPrivs:0 ]]; then
+    check "[C122] the large-document carrier starts on the synthetic default socket" exit_is 0 wp up bridge
+    (( test_failed == 0 )) || return 1
+    printf '%s\n' 'to: Orchard Grower' 'subject: large-document transport' --- body > "$root/mailbox/Orchard Picker/out/large.md"
+    check "[C122] the carrier reads the large shared view and serves a real request" answered_ok picker large.md
+    check "[C122] the synthetic default floor stops" exit_is 0 wp down bridge
+  else
+    skip "[C122] the large-document carrier's default floor requires an unbarred caller"
+  fi
+}
+
 t_generation_floor_rebuild() {
   scoped_clone
   floors_clone

@@ -1671,8 +1671,8 @@ make_records() {
       'any(.view.floors[]?; .key == $f and .enforced == false)' <<< "$folded" > /dev/null; then
     local entry binds sroot=${state_dir%/floors/*}
     while IFS= read -r entry; do
-      binds=$(jq -nc --argjson e "$entry" --argjson v "$folded" --arg s "$sroot" --arg path "$path" '
-        $v.report.names as $names
+      binds=$(jq -nc --argjson e "$entry" --slurpfile folded <(printf '%s\n' "$folded") --arg s "$sroot" --arg path "$path" '
+        $folded[0] as $v | $v.report.names as $names
         | [$v.view.seats[] | {name:$names[.seat|tojson],floor}] as $seats
         | [$e.reads[] as $n | first($seats[] | select(.name == $n)) as $owner
            | [$s + "/floors/" + $owner.floor + "/records/" + $n, $path + "/" + $n]]') \
@@ -1898,8 +1898,8 @@ build_check_plan() {
     [[ -f $plan_dir/view.json ]] || die "the plan holds statements, and PLAN/view.json, its folded view, is missing" 2
     fold_plan "$plan_dir/plan.json" || die "build refuses: the fold refuses PLAN/plan.json"
     local -a differing
-    mapfile -t differing < <(jq -r --argjson now "$(jq -c '.view' <<< "$folded")" '
-      if . == $now then empty
+    mapfile -t differing < <(jq -r --slurpfile folded <(printf '%s\n' "$folded") '
+      $folded[0].view as $now | if . == $now then empty
       else
         ([.seats[]?.seat] + [$now.seats[].seat] | unique[]) as $k
         | select(([.rows[]? | select(.key[0:3] == $k)] != [$now.rows[] | select(.key[0:3] == $k)])
@@ -2086,7 +2086,7 @@ generation_floor_locked() {
     || die "build $floor refuses: the plan names another state directory; a whole build is needed"
   conf=$(generation_plan_conf) || die "cannot read the planned floor configurations" 2
   projection=$(generation_project_plan "$plan_dir/plan.json" "$plan_dir/view.json" "$conf" "$build_state_dir") || die "cannot project the planned floor slices" 2
-  faults=$(jq -nc --argjson old "$old_projection" --argjson new "$projection" --arg f "$floor" '{old:$old,new:$new,floor:$f}' \
+  faults=$(jq -nc --slurpfile old <(printf '%s\n' "$old_projection") --slurpfile new <(printf '%s\n' "$projection") --arg f "$floor" '{old:$old[0],new:$new[0],floor:$f}' \
     | jq -c -L "$tool/libexec" --arg operation compare -f "$tool/libexec/generations.jq") || die "cannot compare the floor generations" 2
   if [[ $(jq length <<< "$faults") != 0 ]]; then
     jq -r --arg f "$floor" '.[] | "build \($f) needs a whole build: \(.kind)\(if .floor then " of floor "+.floor else "" end)\(if .member then " ("+.member+")" else "" end): \(.reason)"' <<< "$faults" >&2
@@ -2102,7 +2102,7 @@ generation_floor_locked() {
       && jq -e '(.pid|type)=="number" and (.generation|type)=="number" and (.at|type)=="string"' "$marker" > /dev/null \
       || die "build $floor refuses: its BUILDING marker is not the frame's private marker"
     if [[ $(jq -r .generation "$marker") == "${b_floor[$floor]##*/}" ]] \
-      && jq -ne --argjson old "$old_projection" --argjson new "$projection" '$old==$new' > /dev/null; then
+      && jq -ne --slurpfile old <(printf '%s\n' "$old_projection") --slurpfile new <(printf '%s\n' "$projection") '$old[0]==$new[0]' > /dev/null; then
       rm -- "$marker" || die "cannot remove the committed generation's marker" 2
       say "generation ${b_floor[$floor]##*/} was committed; its marker is removed"
       return 0
@@ -4800,8 +4800,8 @@ carrier_snapshot() (
     elif [[ -f $b_mail ]]; then continue; fi
     [[ ! -f $b_view ]] || view=$(jq -ce . "$b_view") || continue
     [[ $(sha_of "$build_dir/MANIFEST") == "$b_top_sha" ]] || continue
-    jq -nc --arg top "$b_top" --arg sha "$b_top_sha" --argjson index "$index" --argjson view "$view" \
-      '{top:$top,sha:$sha,index:$index,view:$view}'
+    jq -nc --arg top "$b_top" --arg sha "$b_top_sha" --slurpfile index <(printf '%s\n' "$index") --slurpfile view <(printf '%s\n' "$view") \
+      '{top:$top,sha:$sha,index:$index[0],view:$view[0]}'
     return
   done
   return 1

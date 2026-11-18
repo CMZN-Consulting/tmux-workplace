@@ -54,6 +54,11 @@ def generation_rebuild_faults($new; $floor):
   | ([$old.floors[][1]]) as $old_order
   | ([$new.floors[][1]]) as $new_order
   | [
+      ((["root","state"][]) as $member | select($old[$member]!=$new[$member])
+       | {kind:"global",member:$member,reason:"the root or state directory changed"}),
+      (if ($old.configuration | if type=="object" then .floors |= map(if .key==$floor then del(.smallest) else . end) else . end)
+          !=($new.configuration | if type=="object" then .floors |= map(if .key==$floor then del(.smallest) else . end) else . end)
+       then {kind:"configuration",reason:"workplace.json changed beyond the requested floor's smallest value"} else empty end),
       (if ($old_order|index($floor))==null or ($new_order|index($floor))==null
        then {kind:"floor",reason:"the requested floor must exist in both editions"} else empty end),
       (if $old_order!=$new_order then {kind:"topology",reason:"the set or order of floors changed"} else empty end),

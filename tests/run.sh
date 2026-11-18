@@ -7706,6 +7706,7 @@ tests=(
   t_generation_unpublished_files
   t_generation_key_prerequisites
   t_generation_published_metadata
+  t_generation_floor_rebuild
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

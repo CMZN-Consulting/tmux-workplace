@@ -1534,6 +1534,7 @@ make_mail() {
   [[ -d $state_dir && ! -L $state_dir ]] || die "the state directory $state_dir is missing" 2
   store=$state_dir/mail comms=$state_dir/comms
   if [[ ! -e $store && ! -L $store ]]; then
+    [[ -z ${rebuild_floor-} ]] || die "build $rebuild_floor refuses: the plan holds mail and its store $store is missing; a whole build is needed"
     mkdir -m 0700 -- "$store" || die "cannot make $store" 2
     store_env "$store" git init -q --template= -b mail -- "$store" > "${build_scratch:-$build_dir}/git.out" 2>&1 6>&- 7>&-
     status=$?
@@ -1548,7 +1549,12 @@ make_mail() {
     || die "build refuses: $store is not the mail's repository, a directory of this user's with mode 700 that holds .git"
   # With floors each floor's carrier keeps what it takes in its own state, S/floors/F/comms/taken (5.162 point 1).
   local taken_floor
-  make_dirs "$state_dir" comms || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps its record"
+  if [[ -n ${rebuild_floor-} ]]; then
+    [[ -d $comms && ! -L $comms && $(stat -c %a -- "$comms") == 700 && $(stat -c %u -- "$comms") == "$EUID" ]] \
+      || die "build $rebuild_floor refuses: $comms is not the shared communications directory of this user's with mode 700"
+  else
+    make_dirs "$state_dir" comms || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps its record"
+  fi
   if (( ${#floor_keys[@]} )); then
     for taken_floor in "${floor_keys[@]}"; do
       make_dirs "$state_dir" "floors/$taken_floor/comms/taken" \
@@ -1578,9 +1584,12 @@ make_mail() {
   while IFS= read -r seat; do
     name=$(jq -r '.name' <<< "$seat")
     box=$name
-    for rel in "mail/$box/in" "mail/$box/sent" "comms/$box/out" "comms/$box/answers"; do
-      make_dirs "$state_dir" "$rel" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the mailbox of $name stands"
-    done
+    if [[ -z ${rebuild_floor-} ]] || { [[ $(jq -r '.floor' <<< "$seat") == "$rebuild_floor" ]] \
+      && ! jq -e --arg name "$name" 'any(.seats[]; .name==$name)' "$rebuild_old_mail" > /dev/null; }; then
+      for rel in "mail/$box/in" "mail/$box/sent" "comms/$box/out" "comms/$box/answers"; do
+        make_dirs "$state_dir" "$rel" || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the mailbox of $name stands"
+      done
+    fi
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg store "$store" --arg comms "$comms" \
       '. + [$s + {box: $box, in: "\($store)/\($box)/in", sent: "\($store)/\($box)/sent", out: "\($comms)/\($box)/out", answers: "\($comms)/\($box)/answers"}]' <<< "$entries")
   done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)
@@ -1588,12 +1597,14 @@ make_mail() {
   jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
     '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "${build_out:-$build_dir}/mail.json" \
     || die "cannot write ${build_out:-$build_dir}/mail.json" 2
-  cp -- "$tool/share/seat-page.md" "$build_dir/seat-page.md" && [[ $(sha_of "$tool/share/seat-page.md") == "$(sha_of "$build_dir/seat-page.md")" ]] \
-    || die "cannot copy the frame's page for a seat, $tool/share/seat-page.md, into $build_dir" 2
+  if [[ -z ${rebuild_floor-} ]]; then
+    cp -- "$tool/share/seat-page.md" "$build_dir/seat-page.md" && [[ $(sha_of "$tool/share/seat-page.md") == "$(sha_of "$build_dir/seat-page.md")" ]] \
+      || die "cannot copy the frame's page for a seat, $tool/share/seat-page.md, into $build_dir" 2
+  fi
   local run_floor state='{"slots":{"[\"unenforced\"]":"1"}}' b_mail=${build_out:-$build_dir}/mail.json
   while IFS= read -r run_floor; do
     floor_links make || die "cannot make the unenforced floor $run_floor's mailboxes"
-  done < <(jq -r '.view.floors[]? | select(.enforced == false) | .key' <<< "$folded")
+  done < <(jq -r --arg f "${rebuild_floor-}" '.view.floors[]? | select(.enforced == false and ($f=="" or .key==$f)) | .key' <<< "$folded")
   say "mail: $(jq 'length' <<< "$entries") mailboxes in $store, shown at $path, each with the frame's page for a seat"
 }
 
@@ -1748,7 +1759,7 @@ generation_shared_records() {
 # number is the counter's, and an empty counter gives 1; the build writes the next number back before it makes BUILD,
 # so that a number a stopped build took is never taken again, and the counter outlives unbuild, since S stands.
 build_state_lock() {
-  local workplace=$1 base s name f next d n
+  local workplace=$1 command=${2:-build} floor=${3-} base s name f next d n
   command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
   base=$(state_root) || die "build needs the workplaces' state directory for its locks, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
   s=$base/$workplace
@@ -1765,7 +1776,8 @@ build_state_lock() {
   if ! flock -w 2 7; then
     die "build refuses: another build of this workplace holds its lock, $s/build.lock: $(jq -r '"\(.command // "a build"), process \(.pid // "unnamed"), since \(.at // "an unnamed time")"' "$s/build.holder" 2> /dev/null || printf 'its holder names no process')"
   fi
-  ( umask 077 && jq -n -c --arg c build --argjson p "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{command: $c, pid: $p, at: $at}' > "$s/build.holder.new" ) \
+  ( umask 077 && jq -n -c --arg c "$command" --arg f "$floor" --argjson p "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{command: $c, pid: $p, at: $at} + (if $f=="" then {} else {floor:$f} end)' > "$s/build.holder.new" 7>&- ) \
     && mv -f -- "$s/build.holder.new" "$s/build.holder" || die "cannot write $s/build.holder" 2
   build_state_dir=$s
 }
@@ -1902,8 +1914,172 @@ build_check_plan() {
   (( bad == 0 )) || die "build refuses: a path the plan names is missing or of the wrong kind"
 }
 
+generation_plan_conf() {
+  local conf='{}' floor path sum
+  while IFS= read -r floor && IFS= read -r path; do
+    [[ $path == /* ]] || path=$root/$path
+    sum=$(sha_of "$path") || { warn "cannot hash the floor $floor's configuration $path"; return 1; }
+    conf=$(jq -c --arg f "$floor" --arg sum "$sum" '.[$f]=$sum' <<< "$conf") || return 1
+  done < <(jq -r '.programs[].plan[]? | (if type=="object" then .term else . end)
+    | select(.[0]=="floor") | .[1],.[6]' "$plan_dir/plan.json")
+  printf '%s\n' "$conf"
+}
+
+generation_frame_matches() {
+  local file source
+  for file in "${frame_files[@]}" seat-page.md; do
+    [[ $file != seat-page.md || -f $build_dir/$file ]] || continue
+    source=$tool/$file
+    [[ $file != binding.json ]] || source=$tool/host/binding.json
+    [[ $file != seat-page.md ]] || source=$tool/share/seat-page.md
+    [[ -f $source && $(sha_of "$source") == "$(sha_of "$build_dir/$file")" ]] \
+      || { warn "build $rebuild_floor needs a whole build: the frame's $file differs from the tool's copy"; return 1; }
+  done
+}
+
+generation_floor_commit() {
+  local staged=$1 previous=$2 store=$3 state_dir=$build_state_dir
+  if [[ -n $store ]]; then
+    exec 8< "$store" || die "cannot open the mail store for the build's commit" 2
+    flock -w 30 8 || die "build $rebuild_floor refuses: the mail store's lock was not taken within 30 seconds; the floor stays part-built"
+    ( umask 077 && jq -nc --arg f "$rebuild_floor" --argjson pid "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{floor:$f,pid:$pid,at:$at,command:("build "+$f)}' > "$state_dir/store.holder.new" ) \
+      && mv -fT -- "$state_dir/store.holder.new" "$state_dir/store.holder" || die "cannot write the build's store holder" 2
+  fi
+  [[ $(sha_of "$build_dir/MANIFEST") == "$previous" ]] || die "build $rebuild_floor refuses: the published top changed during its build; the floor stays part-built"
+  mv -fT -- "$staged/TOP" "$build_dir/MANIFEST" || die "cannot publish the floor $rebuild_floor's generation" 2
+  if [[ -n $store ]]; then
+    rm -f -- "$state_dir/store.holder" || die "cannot remove the build's store holder" 2
+    exec 8>&-
+  fi
+}
+
+generation_floor_write() {
+  local projection=$1 previous=$2 floor=$rebuild_floor gen floor_dir shared_dir name sum source target store=''
+  local -a floor_keys=("$floor")
+  build_generation_next
+  gen=$build_generation floor_dir=$build_dir/floors/$floor/$build_generation shared_dir=$build_dir/shared/$build_generation
+  for target in "$floor_dir" "$shared_dir"; do
+    [[ ! -e $target && ! -L $target ]] || die "build $floor refuses: the generation's number is taken at $target"
+    mkdir -- "$target" || die "cannot make $target" 2
+  done
+  ( umask 077 && jq -nc --argjson p "$$" --argjson n "$gen" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{pid:$p,generation:$n,at:$at}' > "$floor_dir/.building" ) \
+    && mv -fT -- "$floor_dir/.building" "$build_dir/floors/$floor/BUILDING" || die "cannot mark the floor $floor part-built" 2
+  floor_sub=floors/$floor build_out=$floor_dir build_scratch=$floor_dir/.work
+  mkdir -- "$build_scratch" || die "cannot make $build_scratch" 2
+  build_floor_seats "$floor"
+  [[ $(sha_of "$floor_dir/floor.conf") == "$(jq -r --arg f "$floor" '.slices[$f].conf' <<< "$projection")" ]] \
+    || die "build $floor refuses: its configuration changed while the generation was being made"
+  generation_private_files "$floor_dir"
+  jq --arg f "$floor" '.slices[$f]' <<< "$projection" > "$floor_dir/slice.json" || die "cannot write the floor $floor's slice" 2
+  rm -rf -- "$build_scratch" || die "cannot remove $build_scratch" 2
+  generation_manifest "$floor_dir" || die "cannot seal the floor $floor's generation" 2
+  for name in plan.json manifest.json facts.json view.json; do
+    source=$plan_dir/$name
+    [[ -f $source ]] || continue
+    case $name in
+      plan.json) target=plan.json ;;
+      manifest.json) target=plan-manifest.json ;;
+      facts.json) target=plan-facts.json ;;
+      view.json) target=plan-view.json ;;
+    esac
+    cp -- "$source" "$shared_dir/$target" && [[ $(sha_of "$source") == "$(sha_of "$shared_dir/$target")" ]] \
+      || die "cannot copy the plan's $name into $shared_dir" 2
+  done
+  printf '%s\n' "$projection" > "$shared_dir/projection.json" || die "cannot write the shared projection" 2
+  generation_shared_records "$shared_dir"
+  floor_sub='' build_out=$shared_dir build_scratch=$shared_dir/.work
+  mkdir -- "$build_scratch" || die "cannot make $build_scratch" 2
+  [[ -z $folded ]] || make_mail "$(jq -r .name <<< "$report")"
+  rm -rf -- "$build_scratch" || die "cannot remove $build_scratch" 2
+  generation_manifest "$shared_dir" || die "cannot seal the shared generation" 2
+  local line path
+  local -a top=()
+  while IFS= read -r line; do
+    [[ -n $line ]] || continue
+    path=${line#*  }
+    if [[ $path == "$b_shared/MANIFEST" ]]; then
+      top+=("$(cd -- "$build_dir" && sha256sum -- "shared/$gen/MANIFEST" | sums_plain)")
+    elif [[ $path == "${b_floor[$floor]}/MANIFEST" ]]; then
+      top+=("$(cd -- "$build_dir" && sha256sum -- "floors/$floor/$gen/MANIFEST" | sums_plain)")
+    else top+=("$line"); fi
+  done <<< "$b_top"
+  printf '%s\n' "${top[@]}" > "$shared_dir/TOP" || die "cannot write the new top" 2
+  [[ ! -f $shared_dir/mail.json ]] || store=$(jq -er '.store | strings' "$shared_dir/mail.json") || die "cannot name the mail store" 2
+  generation_floor_commit "$shared_dir" "$previous" "$store"
+  rm -f -- "$build_dir/floors/$floor/BUILDING" || die "generation $gen committed, but its BUILDING marker could not be removed" 2
+  say "built the floor $floor: generation $gen, shared generation $gen; top $(sha_of "$build_dir/MANIFEST")"
+}
+
+generation_floor_locked() {
+  local floor=$rebuild_floor old_projection projection conf faults marker=$build_dir/floors/$rebuild_floor/BUILDING
+  [[ ! -e $build_dir/RUN/$floor && ! -L $build_dir/RUN/$floor ]] || die "RUN/$floor stands; down $floor first"
+  build_resolve
+  verify_build "$floor" allow-partial || die "build $floor refuses: the top, frame, shared or floor generation does not verify"
+  plan_root_fault || die "build $floor refuses: $root_fault"
+  generation_frame_matches || exit 1
+  old_projection=$(jq -ce . "$build_dir/$b_shared/projection.json") || die "build $floor needs a whole build: this build has no generation projection"
+  [[ $(jq -r .state <<< "$old_projection") == "$build_state_dir" ]] \
+    || die "build $floor refuses: the standing build names another state directory; run from the shell that built it"
+  build_check_plan
+  [[ $(workplace_state "$(jq -r .name <<< "$report")") == "$build_state_dir" ]] \
+    || die "build $floor refuses: the plan names another state directory; a whole build is needed"
+  conf=$(generation_plan_conf) || die "cannot read the planned floor configurations" 2
+  projection=$(generation_project_plan "$plan_dir/plan.json" "$plan_dir/view.json" "$conf" "$build_state_dir") || die "cannot project the planned floor slices" 2
+  faults=$(jq -nc -L "$tool/libexec" --argjson old "$old_projection" --argjson new "$projection" --arg f "$floor" '
+    include "generations"; $old | generation_rebuild_faults($new;$f)') || die "cannot compare the floor generations" 2
+  if [[ $(jq length <<< "$faults") != 0 ]]; then
+    jq -r --arg f "$floor" '.[] | "build \($f) needs a whole build: \(.kind)\(if .floor then " of floor "+.floor else "" end)\(if .member then " ("+.member+")" else "" end): \(.reason)"' <<< "$faults" >&2
+    return 1
+  fi
+  if [[ -n $folded && $(jq -r '.view.mail.path // empty' <<< "$folded") != '' ]]; then
+    need_mail_programs || exit 2
+    [[ -d $build_state_dir/mail && ! -L $build_state_dir/mail && -d $build_state_dir/mail/.git && ! -L $build_state_dir/mail/.git ]] \
+      || die "build $floor refuses: the plan holds mail and its store is missing; a whole build is needed"
+  fi
+  if [[ -e $marker || -L $marker ]]; then
+    [[ -f $marker && ! -L $marker && $(stat -c %a -- "$marker") == 600 && $(stat -c %u -- "$marker") == "$EUID" ]] \
+      && jq -e '(.pid|type)=="number" and (.generation|type)=="number" and (.at|type)=="string"' "$marker" > /dev/null \
+      || die "build $floor refuses: its BUILDING marker is not the frame's private marker"
+    if [[ $(jq -r .generation "$marker") == "${b_floor[$floor]##*/}" ]] \
+      && jq -ne --argjson old "$old_projection" --argjson new "$projection" '$old==$new' > /dev/null; then
+      rm -- "$marker" || die "cannot remove the committed generation's marker" 2
+      say "generation ${b_floor[$floor]##*/} was committed; its marker is removed"
+      return 0
+    fi
+  fi
+  local rebuild_old_mail=$b_mail
+  generation_floor_write "$projection" "$b_top_sha"
+}
+
+cmd_build_floor() {
+  (( $# == 1 )) || die "build takes one floor, or no arguments for a whole build" 2
+  local rebuild_floor=$1 state_dir workplace
+  need_jq
+  locate
+  [[ -d $build_dir && ! -L $build_dir ]] || die "no BUILD stands; run workplace build"
+  [[ $b_layout == generations ]] || die "build $rebuild_floor needs a whole build with generations; build again"
+  if [[ -z $rebuild_floor || -z ${b_floor[$rebuild_floor]+x} ]]; then
+    if [[ -n $rebuild_floor ]] && jq -e --arg f "$rebuild_floor" 'any(.programs[].plan[]?; (if type=="object" then .term else . end) | .[0]=="floor" and .[1]==$f)' "$plan_dir/plan.json" > /dev/null 2>&1; then
+      die "the floor $rebuild_floor was added; a whole build is needed"
+    fi
+    die "neither the build nor plan has the requested floor $rebuild_floor" 2
+  fi
+  [[ -f $build_dir/$b_shared/projection.json ]] || die "build $rebuild_floor needs a whole build with floor slices; build again"
+  state_dir=$(unbuild_state) || die "cannot name the build's state directory" 2
+  workplace=${state_dir##*/}
+  [[ $(workplace_state "$workplace") == "$state_dir" ]] || die "build $rebuild_floor refuses: this shell names another state directory"
+  build_state_lock "$workplace" "build $rebuild_floor" "$rebuild_floor"
+  local report
+  report=$(jq -nc --arg name "$workplace" '{name:$name}') || die "cannot name the workplace" 2
+  floor_scope "$rebuild_floor"
+  floor_lock "$rebuild_floor" "build $rebuild_floor"
+  generation_floor_locked 6>&- 7>&-
+}
+
 cmd_build() {
-  (( $# == 0 )) || die "build takes no arguments; it reads PLAN/ in the configuration's clone" 2
+  if (( $# )); then cmd_build_floor "$@"; return; fi
   need_jq
   locate
   local name i manifest=$plan_dir/manifest.json

@@ -235,3 +235,63 @@ t_generation_published_metadata() {
   done
   check "[C121] the new metadata is covered by generation verification" exit_is 0 wp status
 }
+
+generation_tree_digest() {
+  { find "$@" -printf '%p %i %m %s\n'; find "$@" -type f -exec sha256sum -- '{}' \;; } | sort | sha256sum
+}
+
+generation_top_floor() {
+  sed -n "\\|^[0-9a-f]\\{64\\}  floors/$1/[0-9]*/MANIFEST$|p" "$clone/BUILD/MANIFEST"
+}
+
+t_generation_floor_rebuild() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C122] the floor-rebuild fixture plans" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
+  check "[C122] its initial whole build succeeds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  check "[C122] the witness floor starts" exit_is 0 wp up deck
+  (( test_failed == 0 )) || return 1
+  local s bridge_before deck_before deck_line deck_pid lodge_line lodge_pid generation next_count
+  s=$(state_of)
+  bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")
+  deck_before=$(generation_tree_digest "$clone/BUILD/floors/deck" "$s/floors/deck")
+  deck_line=$(generation_top_floor deck) deck_pid=$(on deck T display-message -p '#{pid}')
+  statements_plan "$floors_terms $lodge_west"
+  check "[C122] adding a room on lodge makes a new plan" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
+  check "[C122] build lodge publishes only its floor and a shared generation" exit_is 0 wp build lodge
+  (( test_failed == 0 )) || return 1
+  check "[C122] the running floor keeps its exact top entry" test "$(generation_top_floor deck)" = "$deck_line"
+  check "[C122] the running floor's generation and state keep their bytes, inodes and modes" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$s/floors/deck")" = "$deck_before"
+  check "[C122] the down floor is also left byte for byte" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
+  check "[C122] the witness server is the same process" test "$(on deck T display-message -p '#{pid}')" = "$deck_pid"
+  check "[C122] unknown floors are a usage error" exit_is 2 wp build unknown
+  check "[C122] rebuilding more than one floor is a usage error" exit_is 2 wp build lodge deck
+  check "[C122] a running floor must be stopped before rebuilding" exit_is 1 wp build deck
+  check "[C122] the refusal names the existing run" said "RUN/deck stands; down deck first"
+  generation=$(generation_top_floor lodge); generation=${generation%/MANIFEST}; generation=${generation##*/}
+  next_count=$(cat "$s/generation.next")
+  ( umask 077; jq -nc --argjson n "$generation" '{pid:1,generation:$n,at:"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  check "[C122] an already-committed matching edition recovers by removing its marker" exit_is 0 wp build lodge
+  check "[C122] that recovery reports its exact operation" said "generation $generation was committed; its marker is removed"
+  check "[C122] marker recovery allocates no new generation" test "$(cat "$s/generation.next")" = "$next_count"
+  check "[C122] the rebuilt rooms floor starts" exit_is 0 wp up lodge
+  (( test_failed == 0 )) || return 1
+  check "[C122] its newly added seat exists" bash -c '"$1" -S "$2" list-panes -a -F "#{pane_title}" | grep -qxF "Lodge Ivo"' _ "$(command -v tmux)" "$run/lodge/$label"
+  check "[C122] stop the floor of offices for its own change" exit_is 0 wp down deck
+  lodge_line=$(generation_top_floor lodge) lodge_pid=$(on lodge T display-message -p '#{pid}')
+  statements_plan "$floors_terms $lodge_west $harbor_yard"
+  check "[C122] an added room on a floor of offices plans" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
+  check "[C122] a floor of offices rebuilds through the same interface" exit_is 0 wp build deck
+  (( test_failed == 0 )) || return 1
+  check "[C122] the rooms floor keeps its top entry" test "$(generation_top_floor lodge)" = "$lodge_line"
+  check "[C122] and its living server" test "$(on lodge T display-message -p '#{pid}')" = "$lodge_pid"
+  check "[C122] the third floor remains byte for byte after both builds" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
+  check "[C122] the rebuilt office floor starts" exit_is 0 wp up deck
+  check "[C122] stop both synthetic servers" exit_is 0 wp down deck
+  check "[C122] stop the rooms floor" exit_is 0 wp down lodge
+}

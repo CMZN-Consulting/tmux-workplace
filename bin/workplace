@@ -3334,7 +3334,7 @@ generation_read() (
   for attempt in 1 2 3; do
     before=$(sha_of "$build_dir/MANIFEST") || before=''
     result=0
-    "${action}_once" "$@" > "$read_tmp/out" 2> "$read_tmp/error" || result=$?
+    ( "${action}_once" "$@" ) > "$read_tmp/out" 2> "$read_tmp/error" || result=$?
     after=$(sha_of "$build_dir/MANIFEST") || after=''
     if [[ $before == "$after" ]]; then
       cat -- "$read_tmp/out"

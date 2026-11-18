@@ -941,3 +941,35 @@ t_generation_state_commit() {
   check "[C130] the recovered generation starts" exit_is 0 wp up lodge
   check "[C130] end the recovered state-commit fixture" exit_is 0 wp down lodge
 }
+
+t_generation_state_busy_store() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"
+  check "[C130] the busy-store entry fixture plans" exit_is 0 wplan
+  check "[C130] its whole build succeeds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s real_stat pid result fd
+  s=$(state_of) real_stat=$(command -v stat)
+  mkdir -- "$scratch/state-busy-bin"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "if [[ \${!#} == '$s/store.holder' ]]; then : > '$scratch/state-busy-probed'; exit 1; fi" \
+    "exec '$real_stat' \"\$@\"" > "$scratch/state-busy-bin/stat"
+  chmod +x -- "$scratch/state-busy-bin/stat"
+  exec {fd}< "$s/mail"
+  flock -x "$fd" || return 1
+  ( umask 077; printf '%s\n' '{"floor":"deck","pid":1,"at":"2026-11-18T00:00:00Z"}' > "$s/store.holder" )
+  timeout --kill-after=1 40 env PATH="$scratch/state-busy-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/state-busy.out" 2>&1 & pid=$!
+  if ! eventually_long test -f "$clone/BUILD/floors/lodge/BUILDING"; then
+    fail "[C130] an active store holder made the early state check refuse or wait"
+    rm -f -- "$s/store.holder"; exec {fd}<&-; wait "$pid" 2>/dev/null
+    cat "$scratch/state-busy.out"; return 1
+  fi
+  check "[C130] the early check does not inspect another holder's volatile metadata" test ! -e "$scratch/state-busy-probed"
+  rm -- "$s/store.holder"
+  exec {fd}<&-
+  result=0; wait "$pid" || result=$?
+  check "[C130] publication succeeds after the active store holder releases it" test "$result" = 0
+  check "[C130] no stale holder probe was used" test ! -e "$scratch/state-busy-probed"
+}

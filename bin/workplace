@@ -1755,9 +1755,9 @@ generation_shared_records() {
 # number is the counter's, and an empty counter gives 1; the build writes the next number back before it makes BUILD,
 # so that a number a stopped build took is never taken again, and the counter outlives unbuild, since S stands.
 generation_state_entries() {
-  local state_dir=$1 floor=${2-} path name
+  local state_dir=$1 floor=${2-} store_held=${3-} path name fd result=0
   local -a files=() dirs=()
-  for name in build.lock build.holder generations.lock generation.next store.holder; do files+=("$state_dir/$name"); done
+  for name in build.lock build.holder generations.lock generation.next; do files+=("$state_dir/$name"); done
   if [[ -n $floor ]]; then
     for name in up.lock up.holder type.lock carrier.lock comms/record comms/serving comms/serving.new; do files+=("$state_dir/floors/$floor/$name"); done
     dirs=("$state_dir/floors/$floor/comms" "$state_dir/floors/$floor/comms/taken" "$state_dir/floors/$floor/comms/.pointing")
@@ -1773,6 +1773,21 @@ generation_state_entries() {
     [[ -f $path && ! -L $path && $(stat -c %a -- "$path") == 600 && $(stat -c %u -- "$path") == "$EUID" ]] \
       || { warn "$path is not a file of this user's with mode 600, where the frame keeps its locks, holders and journals"; return 1; }
   done
+  if [[ $store_held != held && -d $state_dir/mail && ! -L $state_dir/mail ]]; then
+    exec {fd}< "$state_dir/mail" || return 1
+    if ! flock -n "$fd"; then exec {fd}<&-; return 0; fi
+  fi
+  for name in store.holder store.holder.new; do
+    path=$state_dir/$name
+    [[ -e $path || -L $path ]] || continue
+    if [[ ! -f $path || -L $path || $(stat -c %a -- "$path") != 600 || $(stat -c %u -- "$path") != "$EUID" ]]; then
+      warn "$path is not a file of this user's with mode 600, where the frame keeps its store holder"
+      result=1
+      break
+    fi
+  done
+  [[ -z ${fd-} ]] || exec {fd}<&-
+  return "$result"
 }
 
 build_state_lock() {
@@ -1964,7 +1979,7 @@ generation_floor_commit() {
   if [[ -n $store ]]; then
     exec 8< "$store" || die "cannot open the mail store for the build's commit" 2
     flock -w 30 8 || die "build $rebuild_floor refuses: the mail store's lock was not taken within 30 seconds; the floor stays part-built"
-    generation_state_entries "$state_dir" "$rebuild_floor" || die "build $rebuild_floor refuses: a state entry has another kind, owner or mode; the floor stays part-built"
+    generation_state_entries "$state_dir" "$rebuild_floor" held || die "build $rebuild_floor refuses: a state entry has another kind, owner or mode; the floor stays part-built"
     ( umask 077 && jq -nc --arg f "$rebuild_floor" --argjson pid "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{floor:$f,pid:$pid,at:$at,command:("build "+$f)}' > "$state_dir/store.holder.new" ) \
       && mv -fT -- "$state_dir/store.holder.new" "$state_dir/store.holder" || die "cannot write the build's store holder" 2

@@ -535,3 +535,107 @@ t_generation_retention() {
   check "[C126] the other floor's abandoned generation and marker are still untouched" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
   check "[C126] stop the witness and its real key agents" exit_is 0 wp down deck
 }
+
+
+t_generation_phase_reports() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C127] the phase fixture plans" exit_is 0 wplan
+  check "[C127] the phase fixture builds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s current next pid result bridge_before real_mv
+  s=$(state_of)
+  mkdir -p -- "$clone/BUILD/floors/lodge/777/.work"
+  printf '%s\n' abandoned > "$clone/BUILD/floors/lodge/777/.work/data"
+  ( umask 077; printf '%s\n' '{"pid":123,"generation":777,"at":"2026-11-18T00:01:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  check "[C127] bare status refuses an interrupted floor" exit_is 1 wp status
+  check "[C127] the interruption is distinguished from a corrupt manifest" said 'stopped before its commit'
+  check "[C127] a partial marker is not a manifest mismatch" bash -c '! grep -qF "build: does not match its manifest" "$1"' _ "$scratch/out"
+  check "[C127] status of that floor refuses" exit_is 1 wp status lodge
+  check "[C127] status names the exact interrupted generation and start" said 'process 123, generation 777'
+  check "[C127] status of an unaffected floor succeeds" exit_is 0 wp status deck
+  check "[C127] the scoped report hides the other floor interruption" bash -c '! grep -qF "part-built" "$1"' _ "$scratch/out"
+  check "[C127] doctor flags the interrupted floor" exit_is 1 wp doctor
+  check "[C127] doctor names the recovery operation" said 'partial the floor lodge is part-built'
+  check "[C127] up cannot use the interrupted floor" exit_is 1 wp up lodge
+  check "[C127] no interrupted run was made" test ! -e "$run/lodge"
+  current=$(generation_top_floor lodge); current=${current%/MANIFEST}; current=${current##*/}
+  next=$(cat "$s/generation.next")
+  ( umask 077; jq -nc --argjson n "$current" '{pid:123,generation:$n,at:"2026-11-18T00:01:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  check "[C127] status distinguishes a committed marker" exit_is 1 wp status lodge
+  check "[C127] its message names the actual committed generation" said "build committed generation $current and stopped before it removed its marker"
+  check "[C127] its timestamp is identified as the start" said 'it began at 2026-11-18T00:01:00Z'
+  check "[C127] committed-marker recovery succeeds" exit_is 0 wp build lodge
+  check "[C127] marker recovery leaves the counter alone" test "$(cat "$s/generation.next")" = "$next"
+  check "[C127] a stale successful build holder is not a running build" exit_is 0 wp status lodge
+  check "[C127] the old unnamed directory is reported" said "left    $clone/BUILD/floors/lodge/777:"
+  check "[C127] a leftover alone does not make doctor bad" exit_is 0 wp doctor
+  check "[C127] doctor names that leftover as a note" said "note    $clone/BUILD/floors/lodge/777:"
+  mkdir -p -- "$clone/BUILD/floors/bridge/888/.work" "$scratch/phase-bin"
+  printf '%s\n' keep > "$clone/BUILD/floors/bridge/888/.work/data"
+  ( umask 077; printf '%s\n' '{"pid":321,"generation":888,"at":"2026-11-18T00:02:00Z"}' > "$clone/BUILD/floors/bridge/BUILDING" )
+  bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")
+  real_mv=$(command -v mv)
+  printf '%s\n' '#!/usr/bin/env bash' "if [[ \${!#} == '$clone/BUILD/floors/lodge/BUILDING' ]]; then" \
+    "  : > '$scratch/phase-entered'; while [[ -f '$scratch/phase-gate' ]]; do sleep 0.02; done" \
+    'fi' "exec '$real_mv' \"\$@\"" > "$scratch/phase-bin/mv"
+  chmod +x -- "$scratch/phase-bin/mv"
+  : > "$scratch/phase-gate"
+  timeout --kill-after=1 30 env PATH="$scratch/phase-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/phase-build.out" 2>&1 & pid=$!
+  if ! eventually_long test -e "$scratch/phase-entered"; then
+    fail "[C127] the builder did not reach its native marker gate"
+    rm -f -- "$scratch/phase-gate"; wait "$pid" 2>/dev/null
+    cat "$scratch/phase-build.out"; return 1
+  fi
+  check "[C127] status of the running build succeeds before any marker stands" exit_is 0 wp status lodge
+  check "[C127] the lock and holder identify that running build" said 'build: build lodge runs, process '
+  check "[C127] its reserved generation is shown" said "toward generation $(jq -r .generation "$s/build.holder")"
+  check "[C127] bare status still flags the other interrupted floor" exit_is 1 wp status
+  check "[C127] bare status also names the running build" said 'build: build lodge runs, process '
+  check "[C127] the other marker remains an interruption" said 'the floor bridge is part-built'
+  check "[C127] doctor reports both states and refuses for the interruption" exit_is 1 wp doctor
+  check "[C127] doctor identifies the live build as a note" said 'note    build lodge runs'
+  check "[C127] the untouched floor remains healthy during both states" exit_is 0 wp status deck
+  rm -- "$scratch/phase-gate"
+  result=0; wait "$pid" || result=$?
+  check "[C127] the real builder resumes and publishes" test "$result" = 0
+  check "[C127] the other floor's marker and tree remain untouched" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
+  check "[C127] the completed build is no longer reported as running" exit_is 0 wp status lodge
+  check "[C127] a free lock overrides a stale build holder" bash -c '! grep -qF "build lodge runs" "$1"' _ "$scratch/out"
+}
+
+t_generation_store_report() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms | .programs[-1].recorded += [{term:[\"mail\",$root+\"/post\",$root+\"/store\"],origin:at(2)}]"
+  check "[C127] the store-holder fixture plans" exit_is 0 wplan
+  check "[C127] its initial build succeeds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s real_mv pid result
+  s=$(state_of) real_mv=$(command -v mv)
+  mkdir -- "$scratch/store-bin"
+  printf '%s\n' '#!/usr/bin/env bash' "if [[ \${!#} == '$clone/BUILD/MANIFEST' ]]; then" \
+    "  cp -- '$s/store.holder' '$scratch/build-store-holder'; : > '$scratch/store-entered'" \
+    "  while [[ -f '$scratch/store-gate' ]]; do sleep 0.02; done" \
+    'fi' "exec '$real_mv' \"\$@\"" > "$scratch/store-bin/mv"
+  chmod +x -- "$scratch/store-bin/mv"
+  : > "$scratch/store-gate"
+  timeout --kill-after=1 30 env PATH="$scratch/store-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/store-build.out" 2>&1 & pid=$!
+  if ! eventually_long test -e "$scratch/store-entered"; then
+    fail "[C127] the builder did not reach its store-locked top commit"
+    rm -f -- "$scratch/store-gate"; wait "$pid" 2>/dev/null
+    cat "$scratch/store-build.out"; return 1
+  fi
+  check "[C127] the actual store lock is held during publication" bash -c '! flock -n "$1" true' _ "$s/mail"
+  check "[C127] status succeeds during the store hold" exit_is 0 wp status lodge
+  check "[C127] status identifies a build rather than a carrier" said "store   held by build lodge, process $(jq -r .pid "$scratch/build-store-holder"), since "
+  rm -- "$scratch/store-gate"
+  result=0; wait "$pid" || result=$?
+  check "[C127] the store-held publisher completes" test "$result" = 0
+  check "[C127] the publisher removes its holder" test ! -e "$s/store.holder"
+  ( umask 077; cat "$scratch/build-store-holder" > "$s/store.holder" )
+  check "[C127] a stale store holder leaves status successful" exit_is 0 wp status lodge
+  check "[C127] status distinguishes a free lock from the stale named process" said 'but nobody holds the lock; the next hold replaces it'
+  rm -- "$s/store.holder"
+}

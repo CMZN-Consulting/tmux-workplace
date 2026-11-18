@@ -3133,12 +3133,18 @@ t_floors_up() {
       "$(sed -n 's|^[0-9a-f]*  shared/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")" "$(sed -n 's|^[0-9a-f]*  floors/deck/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")"
   check "[C57] 5.162: with no hold of the store's lock, status prints no holder" bash -c '! grep -q "^store " "$1"' _ "$scratch/out"
   printf '%s\n' "{\"floor\": \"deck\", \"pid\": $(carrier_pid deck), \"at\": \"2026-11-14T00:00:00Z\", \"id\": \"20261114T000000Z-000042\"}" > "$s/store.holder"
-  check "[C57] 5.162: a holder that is the running carrier of the floor it names is reported as holding the store's lock" exit_is 0 wp status deck
+  local status_hold
+  exec {status_hold}< "$s/mail"
+  flock -w 30 "$status_hold" || { fail "[C127] cannot hold the synthetic store for status"; return 1; }
+  check "[C57] 5.162: a running carrier named while the store lock is held is reported as its holder" exit_is 0 wp status deck
   check "[C57] naming the floor, the process, the time and the request" \
     said "store   held by the carrier of the floor deck, process $(carrier_pid deck), since 2026-11-14T00:00:00Z, for the request 20261114T000000Z-000042"
   printf '%s\n' "{\"floor\": \"deck\", \"pid\": $(carrier_pid lodge), \"at\": \"2026-11-14T00:00:00Z\", \"id\": null}" > "$s/store.holder"
-  check "[C57] 5.162: a holder that names a process that is no carrier of that floor is reported as a name the next hold replaces, with exit 0" exit_is 0 wp status deck
-  check "[C57] saying so" said "names the carrier of the floor deck, process $(carrier_pid lodge), and no carrier of that floor runs as $(carrier_pid lodge); the next hold replaces it"
+  check "[C57] 5.162: a held lock with a mismatched carrier is not attributed to that carrier" exit_is 0 wp status deck
+  check "[C57] saying so" said "the lock is held; its holder file names floor deck, process $(carrier_pid lodge), whose holding command is not identified"
+  exec {status_hold}<&-
+  check "[C127] a free store lock is recognized even while the named process lives" exit_is 0 wp status deck
+  check "[C127] its stale holder is named without inventing a live hold" said "the holder file names floor deck, process $(carrier_pid lodge), but nobody holds the lock; the next hold replaces it"
   rm -f -- "$s/store.holder"
   local lodge_pid lodge_carrier
   lodge_pid=$(on lodge T display-message -p '#{pid}')
@@ -7712,6 +7718,8 @@ tests=(
   t_generation_reader_retry
   t_generation_exec_values
   t_generation_retention
+  t_generation_phase_reports
+  t_generation_store_report
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

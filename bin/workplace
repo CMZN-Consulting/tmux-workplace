@@ -1797,6 +1797,10 @@ build_generation_next() {
   ( umask 077 && printf '%s\n' "$(( next + 1 ))" > "$s/generation.next.new" ) && mv -f -- "$s/generation.next.new" "$s/generation.next" \
     || die "cannot write $s/generation.next" 2
   build_generation=$next
+  if jq -e '(.floor // "")!=""' "$s/build.holder" > /dev/null 2>&1; then
+    ( umask 077; jq --argjson n "$next" '.generation=$n' "$s/build.holder" > "$s/build.holder.new" ) \
+      && mv -fT -- "$s/build.holder.new" "$s/build.holder" || die "cannot record the reserved generation" 2
+  fi
 }
 
 build_state_begin() {
@@ -3383,8 +3387,74 @@ generation_read() (
 
 cmd_record() { generation_read cmd_record "$@"; }
 cmd_why() { generation_read cmd_why "$@"; }
-cmd_doctor() { generation_read cmd_doctor "$@"; }
+cmd_doctor() {
+  local version
+  if [[ ${WORKPLACE_ROOT-} == /* && -d ${WORKPLACE_ROOT-} && ${WORKPLACE_CONFIG-} == /* && -d ${WORKPLACE_CONFIG-} ]] \
+    && version=$(version_of jq --version) && at_least "$version" "$JQ_FLOOR"; then
+    generation_read cmd_doctor "$@"
+  else cmd_doctor_once "$@"; fi
+}
 cmd_status() { generation_read cmd_status "$@"; }
+
+generation_leftover_report() {
+  local scope=$1 mode=$2 floor dir relative number prefix=left
+  local -a paths=("$build_dir"/shared/*)
+  if [[ -n $scope ]]; then paths+=("$build_dir/floors/$scope"/*)
+  else for floor in "${b_floors[@]}"; do paths+=("$build_dir/floors/$floor"/*); done; fi
+  [[ $mode != doctor ]] || prefix=note
+  for dir in "${paths[@]}"; do
+    [[ -d $dir && ! -L $dir ]] || continue
+    number=${dir##*/}
+    [[ $number =~ ^[0-9]+$ ]] || continue
+    relative=${dir#"$build_dir/"}
+    [[ $relative != "$b_shared" ]] || continue
+    if [[ $relative == floors/* ]]; then
+      floor=${relative#floors/}; floor=${floor%%/*}
+      [[ $relative != "${b_floor[$floor]-}" ]] || continue
+      printf '%-8s%s: a generation no top names; nothing reads it, and a later build of %s removes it when no up holds the generations lock\n' "$prefix" "$dir" "$floor"
+    else
+      printf '%-8s%s: a generation no top names; nothing reads it, and a later build of any floor removes it when no up holds the generations lock\n' "$prefix" "$dir"
+    fi
+  done
+}
+
+generation_phase_report() {
+  local scope=$1 mode=$2 state_dir holder='{}' held=0 fd floor marker record number pid at hfloor hpid hat hnumber bad=0
+  state_dir=$(generation_state_snapshot 2> /dev/null) || { warn "cannot read the published generation's state directory"; return 1; }
+  if [[ -f $state_dir/build.lock && ! -L $state_dir/build.lock ]]; then
+    exec {fd}< "$state_dir/build.lock" || return 1
+    if ! flock -n "$fd"; then held=1; fi
+    if [[ -f $state_dir/build.holder && ! -L $state_dir/build.holder ]]; then holder=$(jq -c . "$state_dir/build.holder" 2> /dev/null) || holder='{}'; fi
+    exec {fd}<&-
+  fi
+  hfloor=$(jq -r '.floor // ""' <<< "$holder") hpid=$(jq -r '.pid // "unnamed"' <<< "$holder")
+  hat=$(jq -r '.at // "an unnamed time"' <<< "$holder") hnumber=$(jq -r '.generation // "not allocated"' <<< "$holder")
+  if (( held )) && [[ -n $hfloor && ( -z $scope || $scope == "$hfloor" ) ]]; then
+    if [[ $mode == doctor ]]; then say "note    build $hfloor runs (process $hpid since $hat), toward generation $hnumber"
+    else say "build: build $hfloor runs, process $hpid since $hat, toward generation $hnumber; up $hfloor and restart $hfloor refuse until it ends"; fi
+  fi
+  for floor in "${b_floors[@]}"; do
+    [[ -z $scope || $scope == "$floor" ]] || continue
+    marker=$build_dir/floors/$floor/BUILDING
+    [[ -e $marker || -L $marker ]] || continue
+    if [[ ! -f $marker || -L $marker ]] || ! record=$(jq -ce 'select((.generation|type)=="number" and (.pid|type)=="number" and (.at|type)=="string")' "$marker" 2> /dev/null); then
+      say "partial the floor $floor has an unreadable BUILDING marker; run workplace build $floor after inspecting it"
+      bad=1
+      continue
+    fi
+    (( ! held )) || [[ $hfloor != "$floor" ]] || continue
+    number=$(jq -r .generation <<< "$record") pid=$(jq -r .pid <<< "$record") at=$(jq -r .at <<< "$record")
+    if [[ $mode == doctor ]]; then
+      say "partial the floor $floor is part-built (generation $number, began at $at); run workplace build $floor"
+    elif [[ $number == "${b_floor[$floor]##*/}" ]]; then
+      say "build: the floor $floor's build committed generation $number and stopped before it removed its marker; it began at $at (process $pid); run workplace build $floor, which removes a matching committed marker alone"
+    else
+      say "build: the floor $floor is part-built: its build began at $at (process $pid, generation $number) and stopped before its commit; up $floor refuses until workplace build $floor runs again"
+    fi
+    bad=1
+  done
+  return "$bad"
+}
 
 cmd_exec() {
   need_jq
@@ -5284,7 +5354,13 @@ cmd_doctor_once() {
   # floor's (C5).
   dplan=$config/BUILD/plan.json
   [[ $config == /* ]] && dhomes=("$config/BUILD/homes.json")
-  if [[ $config == /* && -f $config/BUILD/MANIFEST && ! -L $config/BUILD/MANIFEST ]]; then
+  if [[ $config == /* && ${WORKPLACE_ROOT-} == /* && -d ${WORKPLACE_ROOT-} && -d $config ]]; then
+    locate
+    config=$clone dplan=$b_plan dhomes=()
+    if [[ $b_layout == generations ]]; then
+      for g in "${b_floors[@]}"; do dhomes+=("$build_dir/${b_floor[$g]}/homes.json"); done
+    else dhomes=("$build_dir/homes.json"); fi
+  elif [[ $config == /* && -f $config/BUILD/MANIFEST && ! -L $config/BUILD/MANIFEST ]]; then
     doc_top=$(< "$config/BUILD/MANIFEST")
     g=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' <<< "$doc_top" | head -n 1)
     if [[ -n $g ]]; then
@@ -5311,6 +5387,10 @@ cmd_doctor_once() {
       [[ -f $file ]] || continue
       say "ok      the seats' homes in $(jq -r '.state' "$file")/homes: $(jq -r '[.seats[] | select(.state == "kept")] | length' "$file") kept, $(jq -r '[.seats[] | select(.state == "scratch")] | length' "$file") scratch"
     done
+  fi
+  if (( ${located-0} )) && [[ $b_layout == generations ]]; then
+    generation_phase_report '' doctor || bad=1
+    generation_leftover_report '' doctor
   fi
   return "$bad"
 }
@@ -5365,23 +5445,35 @@ cmd_down() {
   say "down: ${run_floor:+the floor $run_floor, }done"
 }
 
-# The holder of the store's lock, as S/store.holder names it (floors only). status takes no lock: it reads the file,
-# and tells a holder that runs, a carrier of the floor it names, from a name left by a carrier that stopped while it
-# held the lock, which the next hold replaces.
 store_status() {
-  local file=${1%/mail}/store.holder fields cmd=""
+  local store=$1 file=${1%/mail}/store.holder fields cmd='' fd held=0
   [[ -f $file && ! -L $file ]] || return 0
-  fields=$(jq -r '[.floor, .pid, .at, (.id // "")] | map(tostring) | join("\u001f")' "$file" 2> /dev/null) || {
+  if [[ -f $store && ! -L $store ]]; then
+    exec {fd}< "$store" || return 0
+    if ! flock -n "$fd"; then held=1; fi
+  fi
+  fields=$(jq -r '[.floor, .pid, .at, (.id // ""), (.command // "")] | map(tostring) | join("\u001f")' "$file" 2> /dev/null)
+  local result=$?
+  [[ -z ${fd-} ]] || exec {fd}<&-
+  if (( result )); then
     say "store   $file cannot be read; the next hold replaces it"
     return 0
-  }
-  local floor pid at id
-  IFS=$'\x1f' read -r floor pid at id <<< "$fields"
+  fi
+  local floor pid at id command
+  IFS=$'\x1f' read -r floor pid at id command <<< "$fields"
+  if (( ! held )); then
+    say "store   the holder file names floor $floor, process $pid, but nobody holds the lock; the next hold replaces it"
+    return 0
+  fi
+  if [[ $command == "build $floor" ]]; then
+    say "store   held by build $floor, process $pid, since $at"
+    return 0
+  fi
   if [[ $pid =~ ^[1-9][0-9]*$ && -r /proc/$pid/cmdline ]]; then cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2> /dev/null); fi
   if [[ $cmd == *" carry $floor " ]]; then
     say "store   held by the carrier of the floor $floor, process $pid, since $at${id:+, for the request $id}"
   else
-    say "store   $file names the carrier of the floor $floor, process $pid, and no carrier of that floor runs as $pid; the next hold replaces it"
+    say "store   the lock is held; its holder file names floor $floor, process $pid, whose holding command is not identified"
   fi
 }
 
@@ -5549,11 +5641,15 @@ cmd_status_once() {
   report_floors=("${floors[@]}")
   if [[ ! -d $build_dir ]]; then
     say "build: none"
-  elif verify_build ${verify_floor:+"$verify_floor"}; then
+  elif verify_build "$verify_floor" allow-partial; then
     sum=$b_top_sha
     say "build: verified, manifest $sum"
     [[ $b_layout == generations ]] && say "shared  generation ${b_shared##*/}"
     seats_report || bad=1
+    if [[ $b_layout == generations ]]; then
+      generation_phase_report "$verify_floor" status || bad=1
+      generation_leftover_report "$verify_floor" status
+    fi
   else
     say "build: does not match its manifest"
     bad=1

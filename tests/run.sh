@@ -7799,6 +7799,7 @@ tests=(
   t_records_verify
   t_carrier_chain_replay
   t_carrier_index_reload
+  t_carrier_pipe_timeout
   t_records_journal
   t_records_by_day
   t_restart

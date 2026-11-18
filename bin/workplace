@@ -4071,7 +4071,7 @@ carrier_chain() {
 }
 
 carrier_watch() {
-  local out line i set
+  local out line i set result
   local -A piped=()
   out=$(carrier_tmux list-panes -a -F '#{pane_id} #{pane_pipe}#{pane_dead}' 2> /dev/null) || return 0
   while IFS=' ' read -r line i; do piped[$line]=$i; done <<< "$out"
@@ -4080,8 +4080,13 @@ carrier_watch() {
     # The server tests the pane again in the call that sets its pipe, so a pipe set since the listing is never
     # closed (pipe-pane -o would close it), and the gap is written only when this call set one. tmux reads the
     # quoting of sh_quote in a command string as sh does.
+    result=0
     set=$(carrier_tmux if-shell -F -t "${record_pane[i]}" '#{||:#{pane_pipe},#{pane_dead}}' 'display-message -p kept' \
-      "pipe-pane -O -t ${record_pane[i]} $(sh_quote "$(pipe_command "${record_dirs[i]}" "$record_limit")") ; display-message -p set" 2> /dev/null)
+      "pipe-pane -O -t ${record_pane[i]} $(sh_quote "$(pipe_command "${record_dirs[i]}" "$record_limit")") ; display-message -p set" 2> /dev/null) || result=$?
+    if (( result == 124 || result == 137 )); then
+      printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "the carrier set the pipe again or tried to, and tmux did not answer within 3 seconds; a gap may stand here" >> "${record_dirs[i]}/gaps"
+      continue
+    fi
     [[ $set == set ]] || continue
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "the pipe of the pane was gone, and the carrier set it again" >> "${record_dirs[i]}/gaps"
   done

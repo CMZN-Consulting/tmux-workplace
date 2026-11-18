@@ -611,3 +611,31 @@ t_carrier_index_reload() {
   check "[C114] recovery kept the same carrier process" test "$(carrier_pid deck)" = "$pid"
   check "[C114] stop the synthetic floor" exit_is 0 wp down deck
 }
+
+t_carrier_pipe_timeout() {
+  scoped_clone
+  mkdir -p -- "$root/records" "$scratch/pipe-tmux"
+  statements_plan "$records_terms"
+  check "[C115] pipe timeout fixture plans" exit_is 0 wplan
+  check "[C115] fixture builds" exit_is 0 wp build
+  local real_tmux pid pane
+  real_tmux=$(command -v tmux)
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'setting=0; for arg in "$@"; do [[ $arg == if-shell ]] && setting=1; done' \
+    "if (( setting )) && [[ -f '$scratch/pipe-gate' ]]; then" \
+    "  '$real_tmux' \"\$@\" > /dev/null || exit" \
+    "  : > '$scratch/pipe-acted'; exec sleep 30" \
+    'fi' \
+    "exec '$real_tmux' \"\$@\"" > "$scratch/pipe-tmux/tmux"
+  chmod +x -- "$scratch/pipe-tmux/tmux"
+  check "[C115] start the recording fixture with the gated client" exit_is 0 env PATH="$scratch/pipe-tmux:$PATH" "$BASH" "$loop" up
+  pid=$(carrier_pid) pane=$(pane_by_title 'Harbor Keeper')
+  : > "$scratch/pipe-gate"
+  check "[C115] remove the actual keeper pipe to require restoration" exit_is 0 T pipe-pane -t "$pane"
+  check "[C115] the native client restored the pipe before its reply was blocked" eventually_long test -e "$scratch/pipe-acted"
+  check "[C115] the bounded uncertain result leaves an explicit gap record" eventually_long grep -qF 'the carrier set the pipe again or tried to, and tmux did not answer within 3 seconds; a gap may stand here' "$(record_of keeper)/gaps"
+  check "[C115] the carrier survives the timed-out restoration" kill -0 "$pid"
+  rm -- "$scratch/pipe-gate"
+  check "[C115] the native server has a pipe rather than an invented success" test "$(T display-message -p -t "$pane" '#{pane_pipe}')" = 1
+  check "[C115] stop the fixture" exit_is 0 wp down
+}

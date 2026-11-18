@@ -203,7 +203,13 @@ t_carrier_pointer_recovery() {
   printf '%s\n' ready > "$root/screens/screen"
   check "[C109] actual tmux typing reaches the gate" eventually_long test -s "$scratch/pointer-entered"
   check "[C109] carrier stopped after typing, before recording the outcome" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
-  check "[C109] pointer evidence was journalled before the effect" jq -e --arg id "$id" '.ids==[$id] and (.length>0) and (.sha256|length)==64 and (has("outcome")|not)' "$c/.pointing/Lodge Ida"
+  if jq -e --arg id "$id" '.ids==[$id] and (.length>0) and (.sha256|length)==64 and (has("outcome")|not)' "$c/.pointing/Lodge Ida" > /dev/null 2>&1; then
+    check "[C109] pointer evidence was journalled before the effect" true
+  else
+    fail "[C109] pointer evidence was missing before the effect"
+    kill -KILL "$pid" 2>/dev/null
+    return 1
+  fi
   check "[C109] kill only the stopped carrier" kill -KILL "$pid"
   rm -f -- "$scratch/pointer-stop"
   printf '%s\n' busy > "$root/screens/screen"
@@ -253,7 +259,12 @@ t_carrier_cross_floor() {
   pane=$(on deck pane_by_title "Harbor Watch")
   check "[C110] destination program is running" eventually_long on deck screen_has "Harbor Watch" "probe watch done"
   request grower cross.grab "seat: Harbor Watch"
-  check "[C110] authorized grab is answered by the destination floor" answered_ok grower cross.grab
+  if carrier_test_answer grower cross.grab ok; then
+    check "[C110] authorized grab is answered by the destination floor" true
+  else
+    fail "[C110] authorized grab did not reach the destination floor"
+    return 1
+  fi
   check "[C110] capture comes from the actual target, despite reused pane IDs" grep -qF 'probe watch done' "$s/comms/Orchard Grower/answers/cross.grab"
   request grower cross.write "seat: Harbor Watch" --- "cross-floor-sentinel"
   check "[C110] authorized write crosses floors" answered_ok grower cross.write
@@ -426,6 +437,10 @@ PY
   check "[C112] down removes the managed link and its stamp" bash -c '[[ ! -e $1 && ! -L $1 && ! -e $2 ]]' _ "$link" "$stamp"
   check "[C112] down preserves the recorded data" grep -qxF retained "$s/floors/deck/records/Harbor Watch/retained"
   check "[C112] down preserves the unowned view file" grep -qxF local "$sentinel"
+  printf '%s\n' collision > "$link"
+  check "[C112] up refuses an unrelated file in a declared link's place" exit_is 1 wp up bridge
+  check "[C112] that unrelated file remains unchanged" grep -qxF collision "$link"
+  rm -f -- "$link"
   check "[C112] the same built floor starts again without rebuilding" exit_is 0 wp up bridge
   check "[C112] its declared record link is recreated at up" test -L "$link"
   check "[C112] stop the restarted Administration floor" exit_is 0 wp down bridge

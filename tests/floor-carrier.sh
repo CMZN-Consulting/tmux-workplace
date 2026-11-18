@@ -476,3 +476,48 @@ PY
   check "[C112] its declared record link is recreated at up" test -L "$link"
   check "[C112] stop the restarted Administration floor" exit_is 0 wp down bridge
 }
+
+t_carrier_chain_replay() {
+  scoped_clone
+  mkdir -p -- "$root/records"
+  statements_plan "$records_terms"
+  check "[C113] chain replay fixture plans" exit_is 0 wplan
+  check "[C113] fixture builds" exit_is 0 wp build
+  local s d fifo pid day rel length bad_previous forged_hash
+  s=$(state_of) d=$s/records fifo=$s/records/chain.state.new
+  mkfifo -- "$fifo"
+  check "[C113] start a background carrier with its state-save redirect held" exit_is 0 wp up
+  check "[C113] an actual entry reached the file sink before state was saved" eventually_long test -s "$d/chain"
+  check "[C113] the saved state is still absent at the FIFO gate" test ! -e "$d/chain.state"
+  pid=$(carrier_pid)
+  check "[C113] kill the carrier between sending entries and saving state" kill -KILL "$pid"
+  check "[C113] release the orphaned state writer and its life-lock descriptor" exit_is 0 timeout --kill-after=1 5 cat "$fifo"
+  rm -- "$fifo"
+  check "[C113] the orphan did not publish a saved state" test ! -e "$d/chain.state"
+  check "[C113] close the dead run" exit_is 0 wp down
+  check "[C113] a fresh carrier starts with the older saved state" exit_is 0 wp up
+  check "[C113] keeper prints again after the recovery" wait_for_probe "Harbor Keeper" keeper
+  check "[C113] stop and flush the restarted carrier" exit_is 0 wp down
+  day=$(day_written "$(record_of keeper)") rel="Harbor Keeper/$day.pane"
+  check "[C113] the actual sink contains two entries with the same offset and previous hash" bash -c '
+    jq -s -e --arg rel "$2" "[.[] | select(.file==\$rel)] | group_by([.offset,.previous]) | any(.[]; length>1)" "$1" >/dev/null
+  ' _ "$d/chain" "$rel"
+  check "[C113] matching re-sent bytes are accepted" exit_is 0 wp record verify "Harbor Keeper" "$day"
+  check "[C113] verification explicitly names the recovered re-send" said "covers again the bytes from byte 0"
+  cp -- "$d/chain" "$scratch/replay-chain"
+  jq --arg rel "$rel" -sc '
+    [.[] | select(.file==$rel)] | group_by([.offset,.previous]) | first(.[] | select(length>1)) | .[0:2][]
+  ' "$scratch/replay-chain" > "$scratch/replay-pair"
+  length=$(jq -sr '.[1].length' "$scratch/replay-pair")
+  printf -v bad_previous '%064d' 1
+  forged_hash=$({ printf '%s' "$bad_previous"; head -c "$length" "$(record_of keeper)/$day.pane"; } | sha256sum)
+  forged_hash=${forged_hash%% *}
+  jq -sc --arg previous "$bad_previous" --arg hash "$forged_hash" '.[1].previous=$previous | .[1].hash=$hash | .[]' "$scratch/replay-pair" > "$d/chain"
+  check "[C113] an offset alone does not authorize a replay with a forged previous hash" exit_is 1 wp record verify "Harbor Keeper" "$day"
+  check "[C113] the refusal names a backward jump to no earlier starting pair" said "to no place where an earlier entry began"
+  jq -sc '.[1].hash=("f"*64) | .[]' "$scratch/replay-pair" > "$d/chain"
+  check "[C113] replayed bytes are rehashed instead of trusting a repeated offset" exit_is 1 wp record verify "Harbor Keeper" "$day"
+  check "[C113] the replay-hash refusal reports a disagreement with the file" said "differs from its chain"
+  cp -- "$scratch/replay-chain" "$d/chain"
+  check "[C113] restore and verify the complete actual chain" exit_is 0 wp record verify "Harbor Keeper" "$day"
+}

@@ -4325,7 +4325,8 @@ record_entries() {
 cmd_record() {
   [[ ${1-} == verify ]] && (( $# == 2 || $# == 3 )) \
     || die "record takes verify and a seat's name, then a day as YYYY-MM-DD, today by default, or unstored, gaps or signed; or verify --requests" 2
-  local name=$2 day=${3-} records seat file rel since="" until="" size expected=0 prev=0000000000000000000000000000000000000000000000000000000000000000 entry at offset length hash previous got
+  local name=$2 day=${3-} records seat file rel since="" until="" size expected=0 prev=0000000000000000000000000000000000000000000000000000000000000000 entry at offset length hash previous got replayed key began_at
+  local -A began=()
   need_jq
   locate
   if [[ $b_layout == generations ]]; then
@@ -4375,19 +4376,30 @@ cmd_record() {
     at=$(jq -r '.at' <<< "$entry") offset=$(jq -r '.offset' <<< "$entry") length=$(jq -r '.length' <<< "$entry")
     hash=$(jq -r '.hash' <<< "$entry") previous=$(jq -r '.previous' <<< "$entry")
     [[ $offset =~ ^[0-9]+$ && $length =~ ^[0-9]+$ ]] || { say "$rel: the chain's entry of $at is not one the carrier writes"; return 1; }
-    if (( offset != expected )); then say "$rel: the chain skips from byte $expected to byte $offset at its entry of $at: an entry before it is missing"; return 1; fi
-    if [[ $previous != "$prev" ]]; then say "$rel: the chain is broken at its entry of $at: it names another hash before it than the one sent before"; return 1; fi
+    replayed=0 key="$offset $previous"
+    if (( offset < expected )); then
+      if [[ -z ${began[$key]+x} ]]; then
+        say "$rel: the chain goes back from byte $expected to byte $offset at its entry of $at, to no place where an earlier entry began"
+        return 1
+      fi
+      replayed=1 began_at=${began[$key]}
+    elif (( offset != expected )); then say "$rel: the chain skips from byte $expected to byte $offset at its entry of $at: an entry before it is missing"; return 1; fi
+    if (( ! replayed )) && [[ $previous != "$prev" ]]; then say "$rel: the chain is broken at its entry of $at: it names another hash before it than the one sent before"; return 1; fi
     if [[ ! -f $file ]]; then say "$rel is gone; its chain covers $(( offset + length )) bytes, the first of them from its entry of $at"; return 1; fi
     size=$(stat -c %s -- "$file")
     if (( size < offset + length )); then
       say "$rel is cut short at byte $size: its chain's entry of $at covers the $length bytes from byte $offset"
       return 1
     fi
-    got=$({ printf '%s' "$prev"; tail -c "+$(( offset + 1 ))" -- "$file" | head -c "$length"; } | sha256sum)
+    got=$({ printf '%s' "$previous"; tail -c "+$(( offset + 1 ))" -- "$file" | head -c "$length"; } | sha256sum)
     if [[ ${got%% *} != "$hash" ]]; then
       say "$rel differs from its chain in the $length bytes from byte $offset, which its entry of $at covers"
       return 1
     fi
+    if (( replayed )); then
+      say "$rel: its entry of $at covers again the bytes from byte $offset that its entry of $began_at began to cover: a carrier stopped after it sent that entry and before it saved the chain's state; both agree with the file"
+    fi
+    [[ -n ${began[$key]+x} ]] || began[$key]=$at
     prev=$hash expected=$(( offset + length ))
   done < <(record_entries "$records" "$rel" "$since" "$until")
   if [[ ! -f $file ]]; then

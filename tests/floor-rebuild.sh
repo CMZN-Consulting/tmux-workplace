@@ -960,7 +960,7 @@ t_generation_state_busy_store() {
   exec {fd}< "$s/mail"
   flock -x "$fd" || return 1
   ( umask 077; printf '%s\n' '{"floor":"deck","pid":1,"at":"2026-11-18T00:00:00Z"}' > "$s/store.holder" )
-  timeout --kill-after=1 40 env PATH="$scratch/state-busy-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/state-busy.out" 2>&1 & pid=$!
+  timeout --kill-after=1 40 env PATH="$scratch/state-busy-bin:$PATH" "$BASH" "$loop" build lodge {fd}<&- > "$scratch/state-busy.out" 2>&1 & pid=$!
   if ! eventually_long test -f "$clone/BUILD/floors/lodge/BUILDING"; then
     fail "[C130] an active store holder made the early state check refuse or wait"
     rm -f -- "$s/store.holder"; exec {fd}<&-; wait "$pid" 2>/dev/null

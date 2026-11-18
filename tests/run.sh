@@ -4120,7 +4120,11 @@ t_floors_readers() {
            ["orchard", "barn", "grower", "navigator"], ["orchard", "barn", "picker", "navigator"], ["lodge", "east", "ida", "navigator"]])
     | .programs[-1].recorded += [h(["home", "navigator", "WPT_HOME", "kept"]; 20), h(["home-seed", "navigator", "tools/linger"]; 21)]'
   check "plan of floors with kept homes, a seed and records" exit_is 0 wplan
+  exec 6> "$scratch/synthetic-floor.lock"
+  flock 6
   check "build" exit_is 0 wp build
+  exec 6>&-
+  check "[C117] a seeded background child does not keep the caller's floor-lock descriptor" flock -n "$scratch/synthetic-floor.lock" true
   local s rc
   s=$(state_of)
   check "the seed left a process behind" pgrep -f '^sleep 23\.4567$'

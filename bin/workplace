@@ -1161,7 +1161,7 @@ end_key_agent() {
 key_step() {
   local home=$1 who=$2
   shift 2
-  if ! setsid -w "$@" < /dev/null > "$build_dir/key.out" 2>&1 7>&-; then
+  if ! setsid -w "$@" < /dev/null > "$build_dir/key.out" 2>&1 6>&- 7>&-; then
     end_key_agent "$home"
     die "build refuses: the key of $who cannot be made: $(tail -n 2 "$build_dir/key.out" | tr '\n' ' ')" 2
   fi
@@ -1180,7 +1180,7 @@ check_ssh_keys() {
     [[ -n $file ]] || die "cannot find the file of the ssh key $name in the plan's view" 2
     [[ -e $file || -L $file ]] || die "build refuses: the ssh key $name, $file, is missing"
     [[ -f $file ]] || die "build refuses: the ssh key $name, $file, is not a regular file"
-    if ! line=$(setsid -w ssh-keygen -y -P '' -f "$file" < /dev/null 2> "$build_dir/key.out" 7>&-); then
+    if ! line=$(setsid -w ssh-keygen -y -P '' -f "$file" < /dev/null 2> "$build_dir/key.out" 6>&- 7>&-); then
       out=$(tail -n 1 "$build_dir/key.out")
       rm -f -- "$build_dir/key.out"
       [[ $out == *"incorrect passphrase"* ]] && die "build refuses: the ssh key $name, $file, asks for a passphrase, and build loads only a key that asks for none"
@@ -1216,14 +1216,14 @@ load_ssh_keys() {
   for name in "$@"; do
     printf '%s\n' "${ssh_line[$name]}" > "$home/ssh/$name.pub" && chmod 0444 -- "$home/ssh/$name.pub" || die "cannot write $home/ssh/$name.pub" 2
   done
-  if ! setsid -w gpg-agent --homedir "$home" --daemon --batch < /dev/null > "$build_dir/key.out" 2>&1 7>&-; then
+  if ! setsid -w gpg-agent --homedir "$home" --daemon --batch < /dev/null > "$build_dir/key.out" 2>&1 6>&- 7>&-; then
     end_key_agent "$home"
     die "build refuses: the agent that loads the ssh keys of $who did not start: $(tail -n 1 "$build_dir/key.out")" 2
   fi
   socket=$(gpgconf --homedir "$home" --list-dirs agent-ssh-socket)
   for name in "$@"; do
     if ! env -u DISPLAY -u WAYLAND_DISPLAY -u SSH_ASKPASS SSH_ASKPASS_REQUIRE=never SSH_AUTH_SOCK="$socket" \
-      setsid -w ssh-add -q - < "${ssh_file[$name]}" > "$build_dir/key.out" 2>&1 7>&-; then
+      setsid -w ssh-add -q - < "${ssh_file[$name]}" > "$build_dir/key.out" 2>&1 6>&- 7>&-; then
       end_key_agent "$home"
       die "build refuses: the ssh key $name, ${ssh_file[$name]}, cannot be loaded for $who: $(tail -n 1 "$build_dir/key.out")"
     fi
@@ -1464,7 +1464,7 @@ make_homes() {
           environment=()
           for out in "${inherit[@]}"; do [[ -n ${!out+x} ]] && environment+=("$out=${!out}"); done
           mapfile -t -O "${#environment[@]}" environment < <(jq -r '.[] | "\(.[0])=\(.[1])"' <<< "$pairs")
-          ( cd -- "$path" && "$setpriv_program" --no-new-privs "$env_program" -i "${environment[@]}" "PWD=$path" "$seed" "${words[@]}" 7>&- ) \
+          ( cd -- "$path" && "$setpriv_program" --no-new-privs "$env_program" -i "${environment[@]}" "PWD=$path" "$seed" "${words[@]}" 6>&- 7>&- ) \
             < /dev/null > "$build_dir/seed.out" 2>&1
           status=$?
           if (( status != 0 )); then
@@ -1531,7 +1531,7 @@ make_mail() {
   store=$state_dir/mail comms=$state_dir/comms
   if [[ ! -e $store && ! -L $store ]]; then
     mkdir -m 0700 -- "$store" || die "cannot make $store" 2
-    store_env "$store" git init -q --template= -b mail -- "$store" > "$build_dir/git.out" 2>&1 7>&-
+    store_env "$store" git init -q --template= -b mail -- "$store" > "$build_dir/git.out" 2>&1 6>&- 7>&-
     status=$?
     if (( status != 0 )); then
       rm -rf -- "$store"

@@ -1751,15 +1751,8 @@ build_state_begin() {
   build_generation=$next
 }
 
-cmd_build() {
-  (( $# == 0 )) || die "build takes no arguments; it reads PLAN/ in the configuration's clone" 2
-  need_jq
-  locate
+build_check_plan() {
   local name
-  for name in "${ALWAYS[@]}"; do command -v "$name" > /dev/null || die "build needs $name, and $name is not on PATH" 2; done
-  if [[ -e $build_dir || -L $build_dir ]]; then
-    die "$build_dir exists; build refuses until it is removed"
-  fi
   for name in plan.json manifest.json; do
     [[ -f $plan_dir/$name ]] || die "PLAN/$name is missing from $clone" 2
   done
@@ -1864,6 +1857,18 @@ cmd_build() {
     meets "${tests[i]}" "${tests[i + 1]}" || bad=1
   done
   (( bad == 0 )) || die "build refuses: a path the plan names is missing or of the wrong kind"
+}
+
+cmd_build() {
+  (( $# == 0 )) || die "build takes no arguments; it reads PLAN/ in the configuration's clone" 2
+  need_jq
+  locate
+  local name i manifest=$plan_dir/manifest.json
+  for name in "${ALWAYS[@]}"; do command -v "$name" > /dev/null || die "build needs $name, and $name is not on PATH" 2; done
+  if [[ -e $build_dir || -L $build_dir ]]; then
+    die "$build_dir exists; build refuses until it is removed"
+  fi
+  build_check_plan
   # The floors, in the order of their terms: the fold's where the plan is folded, else the plan's floor terms. With
   # floors BUILD is laid out in generations (5.160 point 2): BUILD/shared/N holds the plan's copies and mail.json,
   # BUILD/floors/F/N a floor's keys, homes and records, each generation with its own MANIFEST, and BUILD/MANIFEST, the

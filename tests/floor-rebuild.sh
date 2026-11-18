@@ -94,6 +94,7 @@ t_generation_slices() {
   check "[C118] floor projection fixture plans" exit_is 0 wplan
   local plan=$clone/PLAN/plan.json view=$clone/PLAN/view.json base=$scratch/slices-base next=$scratch/slices-next
   check "[C118] project the accepted plan and folded view" generation_test_project "$plan" "$view" "$base"
+  [[ -s $base ]] || return 1
   check "[C118] every declared floor has a slice" jq -e '.slices|keys==["bridge","deck","lodge"]' "$base"
   jq 'walk(if type=="object" and has("origin") then .origin={path:"moved.typify",line:900} else . end)' "$plan" > "$scratch/origin-plan"
   jq 'walk(if type=="object" and has("origins") then .origins=[{path:"moved.typify",line:900}] else . end)' "$view" > "$scratch/origin-view"
@@ -131,6 +132,7 @@ t_generation_admission_model() {
   check "[C118] admission component fixture plans" exit_is 0 wplan
   local base=$scratch/admission-base next=$scratch/admission-next faults=$scratch/admission-faults
   generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
+  [[ -s $base ]] || { fail "[C118] the admission fixture has no projected model"; return 1; }
   jq '.slices.deck.terms += [["start","harbor","dock","extra",".",["/usr/bin/true"]]]' "$base" > "$next"
   generation_test_faults "$base" "$next" deck "$faults"
   check "[C118] the component permits a change confined to the requested floor" jq -e 'length==0' "$faults"
@@ -185,9 +187,11 @@ t_generation_unpublished_files() {
 t_generation_key_prerequisites() {
   scoped_clone
   floors_clone
-  statements_plan "$floors_terms"' | .programs[-1].recorded += [m(["key","lodge","east","-","room","held"];2)]'
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [{term:["key","lodge","east","-","room","held"],origin:at(2)}]'
   check "[C120] the key prerequisite fixture plans" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
   check "[C120] the initial build makes a real synthetic key" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
   local s before after
   s=$(state_of)
   before=$(find "$s/floors/lodge/keys" -type f -printf '%P %i %m %s\n' -exec sha256sum -- '{}' \; | sha256sum)

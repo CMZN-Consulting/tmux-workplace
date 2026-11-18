@@ -608,7 +608,7 @@ t_generation_phase_reports() {
 t_generation_store_report() {
   scoped_clone
   floors_clone
-  statements_plan "$floors_terms | .programs[-1].recorded += [{term:[\"mail\",$root+\"/post\",$root+\"/store\"],origin:at(2)}]"
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [{term:["mail",$root+"/post",$root+"/store"],origin:at(2)}]'
   check "[C127] the store-holder fixture plans" exit_is 0 wplan
   check "[C127] its initial build succeeds" exit_is 0 wp build
   (( test_failed == 0 )) || return 1

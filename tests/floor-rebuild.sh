@@ -34,7 +34,8 @@ t_generations_entry_lock() {
   check "[C117] fixture builds" exit_is 0 wp build
   local real_tmux s action pid kind selected_locale=C
   real_tmux=$(command -v tmux) s=$(state_of)
-  if env LC_ALL=C.UTF-8 "$BASH" -c : >/dev/null 2>&1; then selected_locale=C.UTF-8; fi
+  if [[ -z $(env LC_ALL=C.UTF-8 "$BASH" -c : 2>&1) ]]; then selected_locale=C.UTF-8
+  else skip "[C117] no C.UTF-8 caller locale is installed; lock lifetime is still measured with C"; fi
   mkdir -- "$scratch/generations-tmux"
   printf '%s\n' '#!/usr/bin/env bash' \
     "if [[ -f '$scratch/generations-gate' ]]; then" \

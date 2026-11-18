@@ -7798,6 +7798,7 @@ tests=(
   t_records_keys_that_tmux_expands
   t_records_verify
   t_carrier_chain_replay
+  t_carrier_index_reload
   t_records_journal
   t_records_by_day
   t_restart

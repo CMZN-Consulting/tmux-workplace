@@ -527,3 +527,87 @@ t_carrier_chain_replay() {
   cp -- "$scratch/replay-chain" "$d/chain"
   check "[C113] restore and verify the complete actual chain" exit_is 0 wp record verify "Harbor Keeper" "$day"
 }
+
+carrier_test_publish_shared() {
+  local next=$1 number=$2 old line hash name
+  old=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
+  [[ -n $old && ! -e $clone/BUILD/shared/$number ]] || return 1
+  hash=$(sha256sum < "$next/MANIFEST");hash=${hash%% *}
+  while IFS= read -r line; do
+    if [[ ${line#*  } == "$old/MANIFEST" ]]; then printf '%s  shared/%s/MANIFEST\n' "$hash" "$number"
+    else printf '%s\n' "$line"; fi
+  done < "$clone/BUILD/MANIFEST" > "$scratch/publish-top-$number"
+  flock -o "$(state_of)/mail" "$BASH" -c '
+    mv -- "$1" "$2/shared/$3" &&
+    mv -- "$2/$4" "$5/retired-shared-$3" &&
+    mv -fT -- "$5/publish-top-$3" "$2/MANIFEST"
+  ' _ "$next" "$clone/BUILD" "$number" "$old" "$scratch"
+}
+
+carrier_test_shared_manifest() {
+  local dir=$1 file
+  (
+    cd -- "$dir" || exit
+    for file in *; do [[ $file == MANIFEST || ! -f $file ]] || sha256sum -- "$file"; done
+  ) > "$dir/MANIFEST"
+}
+
+t_carrier_index_reload() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","harbor","-","-","office","mail","lodge","-","-","floor","allowed"];2),
+    m(["record","-","-","-","workplace","pane","kept"];3),
+    m(["record-path","records"];4),m(["record-chain","file"];5)]'
+  check "[C114] index reload fixture plans" exit_is 0 wplan
+  check "[C114] fixture builds" exit_is 0 wp build
+  check "[C114] start only the source floor" exit_is 0 wp up deck
+  local s old next pid id day file expected
+  s=$(state_of) pid=$(carrier_pid deck)
+  request keeper unknown.md "to: Lodge Ivo" "subject: unknown before publication" --- body
+  check "[C114] the original index does not invent a new name" answered keeper unknown.md "refused name 1 of its to line is not a seat the plan makes, by its exact name, so the mail goes to none"
+  old=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
+  next=$scratch/shared-next-50;cp -a -- "$clone/BUILD/$old" "$next"
+  mkdir -m 0700 -p -- "$s/mail/Lodge Ivo/in" "$s/mail/Lodge Ivo/sent" "$s/comms/Lodge Ivo/out" "$s/comms/Lodge Ivo/answers"
+  jq --arg s "$s" '
+    (.seats[] | select(.name=="Lodge Ida")) as $base
+    | .seats = [($base | .name="Lodge Ivo" | .box="Lodge Ivo" | .seat[2]="ivo"
+      | .in=($s+"/mail/Lodge Ivo/in") | .sent=($s+"/mail/Lodge Ivo/sent")
+      | .out=($s+"/comms/Lodge Ivo/out") | .answers=($s+"/comms/Lodge Ivo/answers"))]
+      + (.seats | map(if .name=="Harbor Keeper" then .reach.mail=["Lodge Ivo"] else . end))
+  ' "$next/mail.json" > "$scratch/new-mail.json"
+  mv -f -- "$scratch/new-mail.json" "$next/mail.json"
+  carrier_test_shared_manifest "$next"
+  check "[C114] synthetic publisher commits a sealed replacement shared index under the store lock" carrier_test_publish_shared "$next" 50
+  request keeper added.md "to: Lodge Ivo" "subject: added peer" --- body
+  check "[C114] the live carrier admits the new name and route" answered_ok keeper added.md
+  id=$(answer_of keeper added.md);id=${id#ok }
+  check "[C114] array positions still identify the original writer and the new reader" bash -c '[[ -f $1/mail/"Lodge Ivo"/in/$2.md && -f $1/mail/"Harbor Keeper"/sent/$2.md ]]' _ "$s" "$id"
+  request keeper removed.md "to: Lodge Ida" "subject: removed route" --- body
+  check "[C114] the previous route is no longer authorized" answered keeper removed.md "refused the plan does not let Harbor Keeper mail Lodge Ida, so the mail goes to none"
+  check "[C114] reloading keeps the same live carrier process" test "$(carrier_pid deck)" = "$pid"
+  next=$scratch/shared-next-51;cp -a -- "$clone/BUILD/shared/50" "$next"
+  cp -- "$next/mail.json" "$scratch/repair-mail.json"
+  carrier_test_shared_manifest "$next"
+  printf '%s\n' corrupt >> "$next/mail.json"
+  check "[C114] publish a shared generation whose mail bytes fail its sealed hash" carrier_test_publish_shared "$next" 51
+  request keeper held.md "to: Lodge Ivo" "subject: retained during invalid snapshot" --- body
+  check "[C114] the carrier reports the invalid snapshot" eventually_long grep -qF 'the carrier could not verify the changed build' "$run/deck/carrier.log"
+  sleep 2
+  check "[C114] a failed snapshot leaves the request untaken and unanswered" bash -c '[[ -f $1/out/held.md && ! -e $1/answers/held.md ]]' _ "$s/comms/Harbor Keeper"
+  check "[C114] the carrier remains alive while the index is refused" kill -0 "$pid"
+  check "[C114] an owned pane still accepts a literal line during the refusal" exit_is 0 on deck T send-keys -l -t "$(on deck pane_by_title 'Harbor Keeper')" -- index-refusal-output
+  check "[C114] the pane receives Enter" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" Enter
+  day=$(day_written "$s/floors/deck/records/Harbor Keeper")
+  file="$s/floors/deck/records/Harbor Keeper/$day.pane"
+  check "[C114] pane recording continues while the index is refused" eventually_long grep -qF index-refusal-output "$file"
+  expected=$(stat -c %s -- "$file")
+  check "[C114] the record chain continues while the index is refused" eventually_long bash -c '
+    jq -e --arg rel "$2" --argjson offset "$3" ".files[\$rel].offset>=\$offset" "$1" >/dev/null
+  ' _ "$s/floors/deck/records/chain.state" "Harbor Keeper/$day.pane" "$expected"
+  cp -- "$scratch/repair-mail.json" "$clone/BUILD/shared/51/mail.json"
+  check "[C114] repairing the snapshot resumes the retained request" answered_ok keeper held.md
+  check "[C114] recovery kept the same carrier process" test "$(carrier_pid deck)" = "$pid"
+  check "[C114] stop the synthetic floor" exit_is 0 wp down deck
+}

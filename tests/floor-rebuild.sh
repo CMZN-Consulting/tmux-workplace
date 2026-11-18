@@ -419,7 +419,8 @@ t_generation_reader_retry() {
       return 1
     fi
     check "[C125] publish during the $command read" exit_is 0 wp build lodge
-    mv -- "$clone/BUILD/$old" "$scratch/reader-retired-$number"
+    if [[ -d $clone/BUILD/$old ]]; then mv -- "$clone/BUILD/$old" "$scratch/reader-retired-$number"; fi
+    check "[C125] the blocked reader's shared directory is retired" test ! -e "$clone/BUILD/$old"
     rm -- "$scratch/reader-gate"
     result=0; wait "$pid" || result=$?
     check "[C125] $command retries and preserves its native result" test "$result" = "$expected"
@@ -467,4 +468,70 @@ t_generation_exec_values() {
   check "[C125] it runs in the declared directory" test "${observed[1]-}" = "$root/harbor/berth"
   check "[C125] its value retains spaces, tabs, quotes and dollar signs" test "${observed[2]-}" = "$payload"
   check "[C125] stop the value-bearing fixture" exit_is 0 wp down bridge
+}
+
+t_generation_retention() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [{term:["key","harbor","dock","-","room","held"],origin:at(2)}]'
+  check "[C126] the retention fixture plans" exit_is 0 wplan
+  check "[C126] its whole build succeeds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s real_connect action pid old middle top bridge_before result
+  s=$(state_of) real_connect=$(command -v gpg-connect-agent)
+  mkdir -p -- "$clone/BUILD/floors/bridge/99/.work" "$scratch/retention-bin"
+  printf '%s\n' bridge-leftover > "$clone/BUILD/floors/bridge/99/.work/data"
+  ( umask 077; printf '%s\n' '{"pid":1,"generation":99,"at":"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/bridge/BUILDING" )
+  bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")
+  printf '%s\n' '#!/usr/bin/env bash' 'for word in "$@"; do' \
+    "  if [[ \$word == 'GETINFO pid' && -f '$scratch/retention-gate' ]]; then" \
+    "    : > '$scratch/retention-entered'; while [[ -f '$scratch/retention-gate' ]]; do sleep 0.02; done" \
+    '    break; fi' 'done' "exec '$real_connect' \"\$@\"" > "$scratch/retention-bin/gpg-connect-agent"
+  chmod +x -- "$scratch/retention-bin/gpg-connect-agent"
+  for action in up restart; do
+    local -a call=(up deck)
+    if [[ $action == restart ]]; then
+      check "[C126] end the selected program before restart" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" C-c
+      check "[C126] its program has ended" eventually_long on deck dead_pane 'Harbor Keeper'
+      call=(restart deck 'Harbor Keeper')
+    fi
+    old=$(top_gen) top=$(sha256sum < "$clone/BUILD/MANIFEST"); top=${top%% *}
+    : > "$scratch/retention-gate"
+    rm -f -- "$scratch/retention-entered"
+    timeout --kill-after=1 30 env PATH="$scratch/retention-bin:$PATH" "$BASH" "$loop" "${call[@]}" > "$scratch/retention-$action.out" 2>&1 & pid=$!
+    if ! eventually_long test -e "$scratch/retention-entered"; then
+      fail "[C126] $action did not reach its native GnuPG gate"
+      rm -f -- "$scratch/retention-gate"
+      wait "$pid" 2>/dev/null
+      cat "$scratch/retention-$action.out"
+      return 1
+    fi
+    check "[C126] the blocked $action holds the shared generation lock" bash -c '! flock -n -x "$1" true' _ "$s/generations.lock"
+    check "[C126] publish once while $action is blocked" exit_is 0 wp build lodge
+    middle=$(top_gen)
+    check "[C126] publish again while $action is blocked" exit_is 0 wp build lodge
+    check "[C126] $action retains the shared generation it began reading" test -d "$clone/BUILD/shared/$old"
+    check "[C126] its hold also retains the intervening shared generation" test -d "$clone/BUILD/shared/$middle"
+    rm -- "$scratch/retention-gate"
+    result=0; wait "$pid" || result=$?
+    check "[C126] $action completes from its retained snapshot" test "$result" = 0
+    if (( result )); then cat "$scratch/retention-$action.out"; return 1; fi
+    check "[C126] $action records exactly its starting top and paths" jq -e --arg sha "$top" --arg shared "shared/$old" \
+      '.top==$sha and .generations.shared==$shared and (.generations.floor|startswith("floors/deck/"))' "$run/deck/state.json"
+    check "[C126] status names retained shared generations" exit_is 0 wp status deck
+    check "[C126] status identifies the old shared directory" said "shared/$old"
+    check "[C126] cleanup runs after the reader releases its hold" exit_is 0 wp build lodge
+    check "[C126] the old shared generation is now removed" test ! -e "$clone/BUILD/shared/$old"
+    check "[C126] the intervening generation is also removed" test ! -e "$clone/BUILD/shared/$middle"
+    check "[C126] living server and key-agent children retain no generations lock" flock -n -x "$s/generations.lock" true
+    check "[C126] cleanup leaves the other down floor's tree and state unchanged" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
+  done
+  mkdir -p -- "$clone/BUILD/floors/lodge/900/.work"
+  printf '%s\n' abandoned > "$clone/BUILD/floors/lodge/900/.work/data"
+  rm -- "$s/generation.next"
+  check "[C126] allocation reads an abandoned number before cleanup can remove it" exit_is 0 wp build lodge
+  check "[C126] the published generation is above that abandoned number" test "$(top_gen)" -gt 900
+  check "[C126] the abandoned generation was cleaned after reservation" test ! -e "$clone/BUILD/floors/lodge/900"
+  check "[C126] the other floor's abandoned generation and marker are still untouched" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
+  check "[C126] stop the witness and its real key agents" exit_is 0 wp down deck
 }

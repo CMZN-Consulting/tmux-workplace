@@ -1949,10 +1949,29 @@ generation_floor_commit() {
   fi
 }
 
+generation_cleanup_files() {
+  local floor=$1 dir relative number
+  for dir in "$build_dir"/shared/* "$build_dir/floors/$floor"/*; do
+    [[ -d $dir && ! -L $dir ]] || continue
+    number=${dir##*/}
+    [[ $number =~ ^[0-9]+$ ]] || continue
+    relative=${dir#"$build_dir/"}
+    [[ $relative != "$b_shared" && $relative != "${b_floor[$floor]}" ]] || continue
+    rm -rf -- "$dir" || die "cannot remove the unnamed generation $dir" 2
+  done
+}
+
+generation_cleanup() {
+  local floor=$1 result=0
+  exec 5< "$build_state_dir/generations.lock" || die "cannot open the generations lock for cleanup" 2
+  if flock -n -x 5; then generation_cleanup_files "$floor" 5<&- || result=$?; fi
+  exec 5<&-
+  return "$result"
+}
+
 generation_floor_write() {
   local projection=$1 previous=$2 floor=$rebuild_floor gen floor_dir shared_dir name sum source target store=''
   local -a floor_keys=("$floor")
-  build_generation_next
   gen=$build_generation floor_dir=$build_dir/floors/$floor/$build_generation shared_dir=$build_dir/shared/$build_generation
   for target in "$floor_dir" "$shared_dir"; do
     [[ ! -e $target && ! -L $target ]] || die "build $floor refuses: the generation's number is taken at $target"
@@ -2004,6 +2023,8 @@ generation_floor_write() {
   [[ ! -f $shared_dir/mail.json ]] || store=$(jq -er '.store | strings' "$shared_dir/mail.json") || die "cannot name the mail store" 2
   generation_floor_commit "$shared_dir" "$previous" "$store"
   rm -f -- "$build_dir/floors/$floor/BUILDING" || die "generation $gen committed, but its BUILDING marker could not be removed" 2
+  build_resolve
+  generation_cleanup "$floor" || return $?
   say "built the floor $floor: generation $gen, shared generation $gen; top $(sha_of "$build_dir/MANIFEST")"
 }
 
@@ -2045,6 +2066,8 @@ generation_floor_locked() {
     fi
   fi
   local rebuild_old_mail=$b_mail
+  build_generation_next
+  generation_cleanup "$floor" || return $?
   generation_floor_write "$projection" "$b_top_sha"
 }
 
@@ -3130,16 +3153,28 @@ generation_lock_file() {
     || { warn "$file is not a file of this user's with mode 600"; return 1; }
 }
 
+generation_state_snapshot() {
+  if [[ $b_layout == generations && -f $build_dir/libexec/generations.jq ]]; then
+    [[ -f $build_dir/$b_shared/projection.json ]] || return 1
+    jq -er '.state | strings | select(startswith("/"))' "$build_dir/$b_shared/projection.json"
+  else unbuild_state; fi
+}
+
 generation_entry() {
-  local action=$1 state result=0
+  local action=$1 state='' result=0 attempt
   shift
   need_jq
   need_tmux
   locate
   if [[ $b_layout != generations ]]; then "cmd_${action}_locked" "$@"; return; fi
   floor_word "$action" $# "${1-}"
-  verify_build "$1" || { warn "$action starts only a verified build"; return 1; }
-  state=$(unbuild_state) || { warn "$action needs the build's state directory for its generations lock"; return 2; }
+  state_root > /dev/null || { warn "$action needs the workplaces' state directory, and neither XDG_STATE_HOME nor HOME is an absolute path"; return 2; }
+  for attempt in 1 2 3; do
+    if state=$(generation_state_snapshot 2> /dev/null) && [[ $(sha_of "$build_dir/MANIFEST" 2> /dev/null) == "$b_top_sha" ]]; then break; fi
+    state=''
+    build_resolve
+  done
+  [[ -n $state ]] || { warn "the build changed while $action named its state; run it again"; return 1; }
   generation_lock_file "$state" || return $?
   command -v flock > /dev/null || { warn "$action with floors needs flock"; return 2; }
   ( caller_locale; exec flock -s -w 10 -E 75 -o "$state/generations.lock" "$BASH" "$tool/bin/workplace" generation-run "$action" "$state" "$@" ) || result=$?
@@ -3156,8 +3191,8 @@ generation_entry() {
 generation_check_state() {
   [[ -n ${generation_expected_state-} ]] || return 0
   local current
-  current=$(unbuild_state) || return 1
-  [[ $current == "$generation_expected_state" ]] \
+  current=$(generation_state_snapshot) || return 1
+  [[ $current == "$generation_expected_state" && $(workplace_state "${current##*/}") == "$generation_expected_state" ]] \
     || { warn "the build's state changed before the generations lock was taken; run $generation_action again"; return 1; }
 }
 
@@ -5703,6 +5738,11 @@ cmd_restart_locked() {
     [[ -n $dir ]] && printf '%s %s\n' "$at" "the pane's program had ended, and restart started it again, asked by $user (uid $EUID) at $terminal" >> "$dir/gaps"
     say "restart: $name is started again in its pane $pane, asked by $user (uid $EUID) at $terminal"
   done
+  if [[ -n $run_floor ]]; then
+    jq --arg top "$b_top_sha" --arg shared "$b_shared" --arg floor "${b_floor[$run_floor]}" \
+      '.top=$top | .generations={shared:$shared,floor:$floor}' "$run_dir/state.json" > "$run_dir/state.json.new" \
+      && mv -fT -- "$run_dir/state.json.new" "$run_dir/state.json" || die "cannot record restart's generation snapshot" 2
+  fi
 }
 
 unbuild_state() {

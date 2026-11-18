@@ -4379,7 +4379,7 @@ carrier_settle() {
     pend_box=$(jq -r .box <<< "$journal")
     pend_ids=$(jq -r '.ids | join(" ")' <<< "$journal")
     pend_outcome=$(jq -r '.outcome // "unknown"' <<< "$journal")
-    pend_last=$(jq -r .start <<< "$journal")
+    pend_last=$EPOCHSECONDS
     if ! carrier_wake_put "" "" '
     $ARGS.positional as [$b, $last, $outcome, $typed]
     | if $outcome == "closed" then del(.seats[$b])

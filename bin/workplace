@@ -3800,6 +3800,15 @@ carrier_settle() {
   return "$failed"
 }
 
+carrier_closed_claimed() {
+  local box=$1 journal
+  for journal in "$state_dir"/floors/*/comms/.pointing/"$box"; do
+    [[ -f $journal && ! -L $journal ]] || continue
+    if jq -e --arg box "$box" '.box==$box and .outcome=="closed"' "$journal" > /dev/null 2>&1; then return 0; fi
+  done
+  return 1
+}
+
 carrier_close_wakes() {
   [[ -n $comms && -f $comms/wake.json ]] || return 0
   local box entry j reason target kind old_floor
@@ -3820,6 +3829,7 @@ carrier_close_wakes() {
     carrier_hold || return 1
     entry=$(jq -c --arg box "$box" '.seats[$box] // empty' "$comms/wake.json") || { carrier_release; return 1; }
     if [[ -z $entry || -e $fcomms/.pointing/$box ]]; then carrier_release; continue; fi
+    if carrier_closed_claimed "$box"; then carrier_release; continue; fi
     old_floor=$(jq -r '.floor // ""' <<< "$entry")
     if [[ -n $old_floor && -z ${b_floor[$old_floor]+x} ]]; then reason="no build makes the floor $old_floor"; fi
     jq -nc --arg box "$box" --arg reason "$reason" --argjson entry "$entry" --argjson start "$EPOCHSECONDS" --argjson rec "$(stat -c %s -- "$comms_record")" \

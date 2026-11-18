@@ -352,10 +352,12 @@ t_carrier_closed_wakes() {
   check "[C111] removed pattern has an explicit kind reason" jq -se 'any(.[]; .target==["Harbor Pilot"] and .reason=="the kind none of Harbor Pilot has no wake now")' "$record"
   check "[C111] this floor closes only its own entries; a down peer keeps its due ID" eventually_long bash -c '[[ $(jq -c ".seats | keys" "$1") == "[\"Lodge Ida\"]" && $(jq -c ".seats[\"Lodge Ida\"].ids" "$1") == "[\"other-floor\"]" ]]' _ "$s/comms/wake.json"
   check "[C111] stop to plant the claim-before-delete window" exit_is 0 wp down deck
-  jq -c '.seats["Gone Again"]={name:"Gone Again",ids:["gone-2"],count:1,since:"2026-11-18T00:00:00Z",last:0}' "$s/comms/wake.json" > "$scratch/wake-new"
+  jq -c '.seats["Gone Again"]={name:"Gone Again",ids:["gone-2"],count:1,since:"2026-11-18T00:00:00Z",last:0} | .seats["Bridge Canary"]={name:"Bridge Canary",ids:["canary"],count:1,since:"2026-11-18T00:00:00Z",last:0}' "$s/comms/wake.json" > "$scratch/wake-new"
   cp -- "$scratch/wake-new" "$s/comms/wake.json"
   rec=$(stat -c %s -- "$record")
   jq -nc --argjson rec "$rec" '{box:"Gone Again",target:"Gone Again",ids:["gone-2"],start:0,rec:$rec,outcome:"closed",reason:"no build makes the seat Gone Again"}' > "$c/.pointing/Gone Again"
+  check "[C111] another floor starts before the interrupted claimant recovers" exit_is 0 wp up bridge
+  check "[C111] the second carrier completes a later closure in the same pass" eventually_long bash -c 'jq -e "select(.covers==[\"canary\"] and .outcome==\"closed\")" "$1" >/dev/null' _ "$s/floors/bridge/comms/record"
   check "[C111] recover a closure already claimed in the local journal" exit_is 0 wp up deck
   check "[C111] recovery both records and removes the claimed entry" eventually_long bash -c '[[ $(jq -c ".seats | keys" "$1") == "[\"Lodge Ida\"]" && ! -e $2 ]] && jq -e "select(.covers==[\"gone-2\"] and .outcome==\"closed\")" "$3" >/dev/null' _ "$s/comms/wake.json" "$c/.pointing/Gone Again" "$record"
   check "[C111] stop after recovered closure" exit_is 0 wp down deck
@@ -363,6 +365,8 @@ t_carrier_closed_wakes() {
   sleep 2
   check "[C111] no closing line is duplicated across another restart" test "$(jq -s '[.[] | select(.outcome=="closed")] | length' "$record")" = 3
   check "[C111] stop fixture" exit_is 0 wp down deck
+  check "[C111] stop the second carrier" exit_is 0 wp down bridge
+  check "[C111] an interrupted claim closes in exactly one floor record" bash -c '''[[ $(jq -s "[.[] | select(.covers==[\"gone-2\"] and .outcome==\"closed\")] | length" "$1" "$2") == 1 ]]''' _ "$record" "$s/floors/bridge/comms/record"
 }
 
 t_carrier_recovery_decisions() {

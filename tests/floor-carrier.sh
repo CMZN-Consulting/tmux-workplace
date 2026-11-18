@@ -592,7 +592,12 @@ t_carrier_index_reload() {
   carrier_test_shared_manifest "$next"
   check "[C114] synthetic publisher commits a sealed replacement shared index under the store lock" carrier_test_publish_shared "$next" 50
   request keeper added.md "to: Lodge Ivo" "subject: added peer" --- body
-  check "[C114] the live carrier admits the new name and route" answered_ok keeper added.md
+  if carrier_test_answer keeper added.md ok; then
+    check "[C114] the live carrier admits the new name and route" true
+  else
+    fail "[C114] the live carrier did not reload the new name and route"
+    return 1
+  fi
   id=$(answer_of keeper added.md);id=${id#ok }
   check "[C114] array positions still identify the original writer and the new reader" bash -c '[[ -f $1/mail/"Lodge Ivo"/in/$2.md && -f $1/mail/"Harbor Keeper"/sent/$2.md ]]' _ "$s" "$id"
   request keeper removed.md "to: Lodge Ida" "subject: removed route" --- body
@@ -616,7 +621,8 @@ t_carrier_index_reload() {
   next=$scratch/shared-next-52;cp -a -- "$clone/BUILD/shared/51" "$next"
   cp -- "$next/mail.json" "$scratch/repair-mail.json"
   carrier_test_shared_manifest "$next"
-  printf '%s\n' corrupt >> "$next/mail.json"
+  jq '. + {unverified:true}' "$next/mail.json" > "$scratch/unverified-mail.json"
+  mv -f -- "$scratch/unverified-mail.json" "$next/mail.json"
   check "[C114] publish a shared generation whose mail bytes fail its sealed hash" carrier_test_publish_shared "$next" 52
   request keeper held.md "to: Lodge Ida" "subject: retained during invalid snapshot" --- body
   check "[C114] the carrier reports the invalid snapshot" eventually_long grep -qF 'the carrier could not verify the changed build' "$run/deck/carrier.log"

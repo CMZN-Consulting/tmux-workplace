@@ -310,8 +310,9 @@ t_generation_floor_rebuild() {
 t_generation_floor_admission() {
   scoped_clone
   floors_clone
-  mkdir -p -- "$root/mailbox"
-  statements_plan "$floors_terms | $comms_terms"
+  mkdir -p -- "$root/mailbox" "$root/records"
+  local admission_terms="$floors_terms | $comms_terms"' | .programs[-1].recorded += [m(["record-path","records"];20)]'
+  statements_plan "$admission_terms"
   check "[C123] the admission fixture plans" exit_is 0 wplan
   check "[C123] its initial whole build succeeds" exit_is 0 wp build
   (( test_failed == 0 )) || return 1
@@ -328,7 +329,7 @@ t_generation_floor_admission() {
   )
   for entry in "${changes[@]}"; do
     title=${entry%%|*} entry=${entry#*|} change=${entry%|*} expected=${entry##*|}
-    statements_plan "$floors_terms | $comms_terms | $change"
+    statements_plan "$admission_terms | $change"
     check "[C123] $title is a valid plan before floor admission" exit_is 0 wplan
     (( test_failed == 0 )) || return 1
     if [[ $title == 'unrelated mail' ]]; then
@@ -342,18 +343,18 @@ t_generation_floor_admission() {
     check "[C123] refusal of $title allocates no generation" test "$(cat "$s/generation.next")" = "$count"
   done
   printf '%s\n' 'set -g status-left changed' > "$clone/floors/deck.conf"
-  statements_plan "$floors_terms | $comms_terms"
+  statements_plan "$admission_terms"
   check "[C123] a changed peer configuration plans" exit_is 0 wplan
   check "[C123] the peer configuration requires a whole build" exit_is 1 wp build lodge
   check "[C123] that refusal identifies the configuration slice" said "slice of floor deck (conf)"
   : > "$clone/floors/deck.conf"
   jq '.floors |= reverse' <<< "$original" > "$clone/workplace.json"
-  statements_plan "$floors_terms | $comms_terms"' | .programs[0].plan = [.programs[0].plan[0]] + ([.programs[0].plan[] | select(.[0]=="floor")]|reverse)'
+  statements_plan "$admission_terms"' | .programs[0].plan = [.programs[0].plan[0]] + ([.programs[0].plan[] | select(.[0]=="floor")]|reverse)'
   check "[C123] a reordered floor edition plans" exit_is 0 wplan
   check "[C123] changing floor order requires a whole build" exit_is 1 wp build lodge
   check "[C123] that refusal identifies topology" said "topology"
   printf '%s\n' "$original" > "$clone/workplace.json"
-  statements_plan "$floors_terms | $comms_terms"
+  statements_plan "$admission_terms"
   check "[C123] restore the source edition" exit_is 0 wplan
   check "[C123] every admission refusal left BUILD unchanged" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
   check "[C123] every admission refusal left the counter unchanged" test "$(cat "$s/generation.next")" = "$count"
@@ -382,6 +383,7 @@ t_generation_label_admission() {
     check "[C123] that refusal identifies the global labels" said 'global (labels)'
     check "[C123] rejecting a $value label preserves BUILD" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
     check "[C123] rejecting a $value label allocates no generation" test "$(cat "$s/generation.next")" = "$count"
+    (( test_failed == 0 )) || return 1
   done
   baseline="$floors_terms $policy"' | .programs[-1].recorded += [lb("harbor/private";"1";3),lb("orchard/private";"closed";4)]'
   statements_plan "$baseline"
@@ -395,6 +397,10 @@ t_generation_label_admission() {
   statements_plan "$baseline"
   check "[C123] the labelled whole-build edition plans" exit_is 0 wplan
   check "[C123] the labelled edition builds as a whole" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  statements_plan "$baseline"' | .programs[-1].recorded |= (map(if .term[0]=="label" then .term[1]=($root+"/"+.term[1]) | .origin=at(999) else . end) | reverse) | .programs[-1].recorded += [.programs[-1].recorded[0]]'
+  check "[C123] the same labels with absolute paths and duplicates plan" exit_is 0 wplan
+  check "[C123] unchanged normalized labels permit a floor build" exit_is 0 wp build lodge
   (( test_failed == 0 )) || return 1
   count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
   for change in 'map(select(.term[0]!="label"))' 'map(if .term[0]=="label" and .term[2]=="1" then .term[2]="2" else . end)'; do

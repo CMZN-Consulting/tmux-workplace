@@ -28,7 +28,7 @@ def generation_slices:
       floors:$floors,
       globals:{workplace:[$terms[] | select(.term[0]=="workplace" or .term[0]=="server") | .term],
                 mail:($view.mail // null),records:($view.records // null),
-                labels:([$terms[] | select(.term[0]=="label")
+                labels:([$plan.programs[]?.recorded[]? | select(.term[0]?=="label")
                          | {path:(.term[1]|joined_path($root)),
                             value:(if .term[2]=="closed" then "closed" else (.term[2]|tonumber) end)}]
                         | unique_by([.path,.value])),

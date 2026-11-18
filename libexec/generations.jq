@@ -79,3 +79,17 @@ def generation_rebuild_faults($new; $floor):
           !=([$new.relations[] | select(.action=="mail" and .from_floor!=$floor and .to_floor!=$floor)])
        then {kind:"unrelated-mail",reason:"a mail pair with neither end on the requested floor changed"} else empty end)
     ];
+
+if $operation=="project" then
+  . as $input
+  | generation_slices
+  | if $input | has("root")
+    then . + {root:$input.root,state:$input.state,configuration:$input.configuration}
+    else . end
+elif $operation=="compare" then
+  . as $input | .old | generation_rebuild_faults($input.new;$input.floor)
+elif $operation=="private" then
+  generation_semantic
+  | if $ARGS.named.role=="records.json" then .seats |= map(del(.reads)) else . end
+elif $operation=="semantic" then generation_semantic
+else error("unknown generation operation") end

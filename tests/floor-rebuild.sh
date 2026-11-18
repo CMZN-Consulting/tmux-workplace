@@ -75,9 +75,10 @@ t_generations_entry_lock() {
 }
 
 generation_test_project() {
-  jq -c -L "$tool/libexec" --slurpfile binding "$tool/host/binding.json" --slurpfile view "$2" \
+  jq -c --slurpfile binding "$tool/host/binding.json" --slurpfile view "$2" \
     --argjson conf '{"deck":"deck-conf","bridge":"bridge-conf","lodge":"lodge-conf"}' \
-    'include "generations"; {plan:.,binding:$binding[0],view:$view[0],conf:$conf} | generation_slices' "$1" > "$3"
+    '{plan:.,binding:$binding[0],view:$view[0],conf:$conf}' "$1" \
+    | jq -c -L "$tool/libexec" --arg operation project -f "$tool/libexec/generations.jq" > "$3"
 }
 
 generation_test_changes() {
@@ -119,8 +120,8 @@ t_generation_slices() {
 }
 
 generation_test_faults() {
-  jq -n -L "$tool/libexec" --slurpfile old "$1" --slurpfile new "$2" --arg floor "$3" \
-    'include "generations"; $old[0] | generation_rebuild_faults($new[0];$floor)' > "$4"
+  jq -n --slurpfile old "$1" --slurpfile new "$2" --arg floor "$3" '{old:$old[0],new:$new[0],floor:$floor}' \
+    | jq -L "$tool/libexec" --arg operation compare -f "$tool/libexec/generations.jq" > "$4"
 }
 
 t_generation_admission_model() {

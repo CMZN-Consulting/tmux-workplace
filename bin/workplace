@@ -1725,22 +1725,17 @@ generation_project_plan() {
   local plan=$1 view=$2 conf=$3 state_dir=$4 config=/dev/null
   [[ -f $view ]] || view=/dev/null
   [[ ! -f $clone/workplace.json ]] || config=$clone/workplace.json
-  jq -c -L "$tool/libexec" --slurpfile binding "$tool/host/binding.json" --slurpfile view "$view" \
+  jq -c --slurpfile binding "$tool/host/binding.json" --slurpfile view "$view" \
     --slurpfile config "$config" --argjson conf "$conf" --arg root "$root" --arg state "$state_dir" '
-    include "generations";
-    {plan:.,binding:$binding[0],view:($view[0] // {}),conf:$conf}
-    | generation_slices
-    | . + {root:$root,state:$state,configuration:($config[0] // null)}' "$plan"
+    {plan:.,binding:$binding[0],view:($view[0] // {}),conf:$conf,root:$root,state:$state,configuration:($config[0] // null)}' "$plan" \
+    | jq -c -L "$tool/libexec" --arg operation project -f "$tool/libexec/generations.jq"
 }
 
 generation_private_files() {
   local dir=$1 name
   for name in keys.json homes.json records.json; do
     [[ -f $dir/$name ]] || continue
-    jq -L "$tool/libexec" --arg name "$name" '
-      include "generations";
-      generation_semantic
-      | if $name=="records.json" then .seats |= map(del(.reads)) else . end' "$dir/$name" > "$dir/$name.new" \
+    jq -L "$tool/libexec" --arg operation private --arg role "$name" -f "$tool/libexec/generations.jq" "$dir/$name" > "$dir/$name.new" \
       && mv -fT -- "$dir/$name.new" "$dir/$name" || die "cannot write the origin-free floor file $dir/$name" 2
   done
 }
@@ -2027,8 +2022,8 @@ generation_floor_locked() {
     || die "build $floor refuses: the plan names another state directory; a whole build is needed"
   conf=$(generation_plan_conf) || die "cannot read the planned floor configurations" 2
   projection=$(generation_project_plan "$plan_dir/plan.json" "$plan_dir/view.json" "$conf" "$build_state_dir") || die "cannot project the planned floor slices" 2
-  faults=$(jq -nc -L "$tool/libexec" --argjson old "$old_projection" --argjson new "$projection" --arg f "$floor" '
-    include "generations"; $old | generation_rebuild_faults($new;$f)') || die "cannot compare the floor generations" 2
+  faults=$(jq -nc --argjson old "$old_projection" --argjson new "$projection" --arg f "$floor" '{old:$old,new:$new,floor:$f}' \
+    | jq -c -L "$tool/libexec" --arg operation compare -f "$tool/libexec/generations.jq") || die "cannot compare the floor generations" 2
   if [[ $(jq length <<< "$faults") != 0 ]]; then
     jq -r --arg f "$floor" '.[] | "build \($f) needs a whole build: \(.kind)\(if .floor then " of floor "+.floor else "" end)\(if .member then " ("+.member+")" else "" end): \(.reason)"' <<< "$faults" >&2
     return 1

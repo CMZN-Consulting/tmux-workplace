@@ -973,3 +973,78 @@ t_generation_state_busy_store() {
   check "[C130] publication succeeds after the active store holder releases it" test "$result" = 0
   check "[C130] no stale holder probe was used" test ! -e "$scratch/state-busy-probed"
 }
+
+t_generation_wake_handoff() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  local base="$floors_terms $lodge_west | $comms_terms"'
+    | .programs[-1].recorded += [
+      m(["reach","harbor","-","-","office","mail","lodge","-","-","floor","allowed"];2),
+      m(["wake","clerk","^waiting>$"];3)]'
+  statements_plan "$base"' | kinds([["lodge","west","ivo","clerk"]])'
+  check "[C131] the wake-change fixture plans" exit_is 0 wplan
+  check "[C131] it builds" exit_is 0 wp build
+  check "[C131] its unchanged sending floor starts" exit_is 0 wp up deck
+  (( test_failed == 0 )) || return 1
+  local s first second carrier
+  s=$(state_of) carrier=$(carrier_pid deck)
+  request keeper old-wake.md 'to: Lodge Ivo' 'subject: before kind change' --- body
+  check "[C131] mail to the down reader is delivered" carrier_test_answer keeper old-wake.md ok
+  first=$(answer_of keeper old-wake.md); first=${first#ok }
+  check "[C131] the registered wake leaves its exact id due" eventually_long jq -e --arg id "$first" \
+    'any(.seats[]; .name=="Lodge Ivo" and (.ids|index($id))!=null)' "$s/comms/wake.json"
+  statements_plan "$base"' | kinds([["lodge","west","ivo","courier"]])'
+  check "[C131] the reader kind change plans" exit_is 0 wplan
+  check "[C131] a real floor build publishes that kind change" exit_is 0 wp build lodge
+  (( test_failed == 0 )) || return 1
+  request keeper new-wake.md 'to: Lodge Ivo' 'subject: after kind change' --- body
+  check "[C131] the same live sending carrier delivers after publication" carrier_test_answer keeper new-wake.md ok
+  second=$(answer_of keeper new-wake.md); second=${second#ok }
+  check "[C131] the new no-pattern kind is decided none, not due" eventually_long jq -R -s -e --arg id "$second" \
+    '[split("\n")[]|fromjson?|objects|select(.seat=="the frame" and .covers==[$id] and .target==["Lodge Ivo"] and .outcome=="none")]|length>0' "$s/floors/deck/comms/record"
+  check "[C131] the new id is absent from the due set" jq -e --arg id "$second" 'all(.seats[]; (.ids|index($id))==null)' "$s/comms/wake.json"
+  check "[C131] the sending carrier retained its process across the actual kind change" test "$(carrier_pid deck)" = "$carrier"
+  check "[C131] the changed destination floor starts" exit_is 0 wp up lodge
+  check "[C131] its carrier closes the old now-inapplicable wake" eventually_long jq -R -s -e --arg id "$first" \
+    '[split("\n")[]|fromjson?|objects|select(.seat=="the frame" and .covers==[$id] and .target==["Lodge Ivo"] and .outcome=="closed")]|length>0' "$s/floors/lodge/comms/record"
+  check "[C131] the closed old id no longer stands due" eventually_long jq -e --arg id "$first" 'all(.seats[]; (.ids|index($id))==null)' "$s/comms/wake.json"
+  check "[C131] stop the changed destination" exit_is 0 wp down lodge
+  check "[C131] stop the unchanged sender" exit_is 0 wp down deck
+}
+
+t_generation_bridge_handoff() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then skip "[C132] unenforced bridge handoff needs an unbarred caller"; return 0; fi
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  local base="$floors_terms | $comms_terms"'
+    | terms_of("harbor/dock/keeper/seat.typify"; if .[0]=="start" then .[5]=(.[5]|fromjson|.+["typed="+$root+"/harbor/berth/bridge-typed"]|tojson) else . end)
+    | .programs[-1].recorded += [
+      m(["reach","orchard","-","-","office","grab","harbor","-","-","office","allowed"];2),
+      m(["reach","orchard","-","-","office","write","harbor","dock","keeper","seat","allowed"];3)]'
+  statements_plan "$base"
+  check "[C132] the bridge handoff fixture plans" exit_is 0 wplan
+  check "[C132] it builds" exit_is 0 wp build
+  check "[C132] its destination starts" exit_is 0 wp up deck
+  check "[C132] its unenforced bridge starts on the synthetic default socket" exit_is 0 wp up bridge
+  (( test_failed == 0 )) || return 1
+  local carrier
+  carrier=$(carrier_pid bridge)
+  request grower before.grab 'seat: Harbor Keeper'
+  check "[C132] the bridge grabs its initial target" carrier_test_answer grower before.grab ok
+  check "[C132] the existing target goes down for a real rebuild" exit_is 0 wp down deck
+  statements_plan "$base $harbor_yard"
+  check "[C132] an office-floor addition plans" exit_is 0 wplan
+  check "[C132] its real floor build publishes while the bridge stays up" exit_is 0 wp build deck
+  check "[C132] the rebuilt office floor starts" exit_is 0 wp up deck
+  (( test_failed == 0 )) || return 1
+  request grower added.grab 'seat: Harbor Sentry'
+  check "[C132] the old bridge carrier grabs the newly published seat" carrier_test_answer grower added.grab ok
+  request grower after.write 'seat: Harbor Keeper' --- 'bridge-after-publication'
+  check "[C132] the bridge writes through the rebuilt floor server" carrier_test_answer grower after.write ok
+  check "[C132] the text reached the actual destination program" eventually_long grep -qF 'bridge-after-publication' "$root/harbor/berth/bridge-typed"
+  check "[C132] the bridge retained its own carrier process" test "$(carrier_pid bridge)" = "$carrier"
+  check "[C132] end the rebuilt office floor" exit_is 0 wp down deck
+  check "[C132] end the synthetic unenforced bridge" exit_is 0 wp down bridge
+}

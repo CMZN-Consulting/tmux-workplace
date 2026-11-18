@@ -25,3 +25,47 @@ BASH
   ' _ "$scratch/counter-driver" "$tool/bin/workplace" "$state" "$scratch/counter-build"
   check "[C116] saving the next count preserves its private mode" test "$(stat -c %a -- "$state/specimen/generation.next")" = 600
 }
+
+t_generations_entry_lock() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"' | (.programs[] | select(.path=="harbor/dock/keeper/seat.typify") | .plan[1].term[5])=(["/usr/bin/true"]|tojson)'
+  check "[C117] generations lock fixture plans" exit_is 0 wplan
+  check "[C117] fixture builds" exit_is 0 wp build
+  local real_tmux s action pid kind
+  real_tmux=$(command -v tmux) s=$(state_of)
+  mkdir -- "$scratch/generations-tmux"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "if [[ -f '$scratch/generations-gate' ]]; then" \
+    "  kind=\$(cat '$scratch/generations-gate')" \
+    '  for arg in "$@"; do if [[ $arg == "$kind" ]]; then' \
+    "    : > '$scratch/generations-entered'; while [[ -e '$scratch/generations-gate' ]]; do sleep 0.05; done" \
+    '    break; fi; done' \
+    'fi' \
+    "exec '$real_tmux' \"\$@\"" > "$scratch/generations-tmux/tmux"
+  chmod +x -- "$scratch/generations-tmux/tmux"
+  for action in up restart; do
+    kind=new-session
+    local -a arguments=(up deck)
+    if [[ $action == restart ]]; then
+      check "[C117] the selected program has ended before restart" eventually_long on deck dead_pane "Harbor Keeper"
+      kind=respawn-pane arguments=(restart deck "Harbor Keeper")
+    fi
+    rm -f -- "$scratch/generations-entered"
+    printf '%s\n' "$kind" > "$scratch/generations-gate"
+    timeout --kill-after=1 20 env PATH="$scratch/generations-tmux:$PATH" "$BASH" "$loop" "${arguments[@]}" > "$scratch/generations-$action.log" 2>&1 & pid=$!
+    if ! eventually_long test -e "$scratch/generations-entered"; then
+      fail "[C117] $action did not reach its native gate"
+      rm -f -- "$scratch/generations-gate"
+      wait "$pid" 2>/dev/null
+      cat "$scratch/generations-$action.log"
+      return 1
+    fi
+    check "[C117] $action holds the shared generations lock through its native work" bash -c '! flock -n -x "$1" true' _ "$s/generations.lock"
+    rm -- "$scratch/generations-gate"
+    if wait "$pid"; then check "[C117] $action completes after its gate opens" true
+    else fail "[C117] $action failed after its gate opened"; cat "$scratch/generations-$action.log"; return 1; fi
+    check "[C117] $action leaves no generations lock inherited by its living children" flock -n -x "$s/generations.lock" true
+  done
+  check "[C117] stop the synthetic floor" exit_is 0 wp down deck
+}

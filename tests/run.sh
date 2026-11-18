@@ -7696,6 +7696,7 @@ source "$here/floor-rebuild.sh"
 
 tests=(
   t_generation_counter_leftovers
+  t_generations_entry_lock
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

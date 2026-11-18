@@ -2826,10 +2826,62 @@ start_carrier() {
   say "up: the carrier, pid $pid"
 }
 
-cmd_up() {
+generation_lock_file() {
+  local state=$1 file=$1/generations.lock
+  [[ -d $state && ! -L $state && $(stat -c %u -- "$state") == "$EUID" && $(stat -c %a -- "$state") == 700 ]] \
+    || { warn "the build's state $state is not a private directory of this user's; build again"; return 1; }
+  if [[ ! -e $file && ! -L $file ]]; then ( umask 077 && : >> "$file" ) || return 2; fi
+  [[ -f $file && ! -L $file && $(stat -c %u -- "$file") == "$EUID" && $(stat -c %a -- "$file") == 600 ]] \
+    || { warn "$file is not a file of this user's with mode 600"; return 1; }
+}
+
+generation_entry() {
+  local action=$1 state result=0
+  shift
   need_jq
   need_tmux
   locate
+  if [[ $b_layout != generations ]]; then "cmd_${action}_locked" "$@"; return; fi
+  floor_word "$action" $# "${1-}"
+  verify_build "$1" || { warn "$action starts only a verified build"; return 1; }
+  state=$(unbuild_state) || { warn "$action needs the build's state directory for its generations lock"; return 2; }
+  generation_lock_file "$state" || return $?
+  command -v flock > /dev/null || { warn "$action with floors needs flock"; return 2; }
+  flock -s -w 10 -E 75 -o "$state/generations.lock" "$BASH" "$tool/bin/workplace" generation-run "$action" "$state" "$@" || result=$?
+  if (( result == 75 )); then
+    warn "a build is removing old generations; run $action again"
+    return 1
+  elif (( result >= 64 && result <= 78 )); then
+    warn "cannot take $state/generations.lock"
+    return 2
+  fi
+  return "$result"
+}
+
+generation_check_state() {
+  [[ -n ${generation_expected_state-} ]] || return 0
+  local current
+  current=$(unbuild_state) || return 1
+  [[ $current == "$generation_expected_state" ]] \
+    || { warn "the build's state changed before the generations lock was taken; run $generation_action again"; return 1; }
+}
+
+cmd_generation_run() {
+  (( $# >= 3 )) || die "generation-run is used by up and restart" 2
+  local generation_action=$1 generation_expected_state=$2
+  shift 2
+  [[ $generation_action == up || $generation_action == restart ]] || die "generation-run is used by up and restart" 2
+  "cmd_${generation_action}_locked" "$@"
+}
+
+cmd_up() { generation_entry up "$@"; }
+cmd_restart() { generation_entry restart "$@"; }
+
+cmd_up_locked() {
+  need_jq
+  need_tmux
+  locate
+  generation_check_state || return 1
   # With floors, up stands one floor up, F, on its own server and run directory RUN/F (5.160 point 8).
   if [[ $b_layout == generations ]]; then
     (( $# <= 1 )) || die "up takes one floor" 2
@@ -5160,10 +5212,11 @@ restart_state_dir() {
   workplace_state "$(jq -r '.name // "default"' <<< "$report")"
 }
 
-cmd_restart() {
+cmd_restart_locked() {
   need_jq
   need_tmux
   locate
+  generation_check_state || return 1
   # With floors, restart F [SEAT ...] starts again seats of the floor F, holding the floor's lock (5.160 point 8).
   if [[ $b_layout == generations ]]; then
     floor_word restart $# "${1-}"
@@ -5382,6 +5435,7 @@ case $command in
   unbuild) cmd_unbuild "$@" ;;
   restart) cmd_restart "$@" ;;
   up) cmd_up "$@" ;;
+  generation-run) cmd_generation_run "$@" ;;
   exec) cmd_exec "$@" ;;
   down) cmd_down "$@" ;;
   status | doctor)

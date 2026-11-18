@@ -5448,7 +5448,7 @@ cmd_down() {
 store_status() {
   local store=$1 file=${1%/mail}/store.holder fields cmd='' fd held=0
   [[ -f $file && ! -L $file ]] || return 0
-  if [[ -f $store && ! -L $store ]]; then
+  if [[ -d $store && ! -L $store ]]; then
     exec {fd}< "$store" || return 0
     if ! flock -n "$fd"; then held=1; fi
   fi

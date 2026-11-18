@@ -310,7 +310,7 @@ t_generation_floor_admission() {
   local -a changes=(
     'another floor command|terms_of("harbor/dock/keeper/seat.typify"; if .[0]=="start" then .[5]=(["/usr/bin/true"]|tojson) else . end)|slice of floor deck (terms)'
     'another floor environment|.state.environment += [{key:["harbor","dock","keeper","WPT_ADMISSION"],value:["changed"],masked:false,origin:at(22)}]|slice of floor deck (environment)'
-    'unrelated mail|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","mail","harbor","dock","keeper","seat","allowed"];23)]|unrelated-mail'
+    'unrelated mail|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","mail","harbor","dock","keeper","seat","banned"];23)]|unrelated-mail'
   )
   for entry in "${changes[@]}"; do
     title=${entry%%|*} entry=${entry#*|} change=${entry%|*} expected=${entry##*|}

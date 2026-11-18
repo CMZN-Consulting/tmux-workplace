@@ -115,3 +115,41 @@ t_generation_slices() {
   generation_test_project "$plan" "$scratch/global-view" "$next"
   check "[C118] repeated global record settings are compared outside private slices" jq -ne --slurpfile a "$base" --slurpfile b "$next" '$a[0].globals!=$b[0].globals'
 }
+
+generation_test_faults() {
+  jq -n -L "$tool/libexec" --slurpfile old "$1" --slurpfile new "$2" --arg floor "$3" \
+    'include "generations"; $old[0] | generation_rebuild_faults($new[0];$floor)' > "$4"
+}
+
+t_generation_admission_model() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","orchard","barn","grower","seat","mail","-","-","-","workplace","banned"];2)]'
+  check "[C118] admission component fixture plans" exit_is 0 wplan
+  local base=$scratch/admission-base next=$scratch/admission-next faults=$scratch/admission-faults
+  generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
+  jq '.slices.deck.terms += [["start","harbor","dock","extra",".",["/usr/bin/true"]]]' "$base" > "$next"
+  generation_test_faults "$base" "$next" deck "$faults"
+  check "[C118] the component permits a change confined to the requested floor" jq -e 'length==0' "$faults"
+  jq '.slices.bridge.environment += [{key:["orchard","barn","grower","WPT_SLICE"],value:["different"],masked:false}]' "$base" > "$next"
+  generation_test_faults "$base" "$next" deck "$faults"
+  check "[C118] a different floor's environment requires a whole build" jq -e 'any(.[]; .kind=="slice" and .floor=="bridge" and .member=="environment")' "$faults"
+  jq '.relations += [{from:"Orchard Grower",from_floor:"bridge",to:"Harbor Keeper",to_floor:"deck",action:"mail"}] | .relations |= sort_by([.from,.action,.to])' "$base" > "$next"
+  generation_test_faults "$base" "$next" deck "$faults"
+  check "[C118] a shared mail pair touching the requested floor is permitted" jq -e 'length==0' "$faults"
+  generation_test_faults "$base" "$next" lodge "$faults"
+  check "[C118] that same pair is refused for an unrelated requested floor" jq -e 'any(.[]; .kind=="unrelated-mail")' "$faults"
+  jq '.slices.deck.conf="new-conf"' "$base" > "$next"
+  generation_test_faults "$base" "$next" deck "$faults"
+  check "[C118] the requested floor may replace its own configuration bytes" jq -e 'length==0' "$faults"
+  generation_test_faults "$base" "$next" lodge "$faults"
+  check "[C118] another floor's configuration bytes cannot change" jq -e 'any(.[]; .kind=="slice" and .floor=="deck" and .member=="conf")' "$faults"
+  jq '(.floors[] | select(.[1]=="deck"))[7]="new-smallest"' "$base" > "$next"
+  generation_test_faults "$base" "$next" deck "$faults"
+  check "[C118] the requested smallest value is the admitted floor-line change" jq -e 'length==0' "$faults"
+  jq '(.floors[] | select(.[1]=="deck"))[2]="renamed"' "$base" > "$next"
+  generation_test_faults "$base" "$next" deck "$faults"
+  check "[C118] changing another field of that floor line requires a whole build" jq -e 'any(.[]; .kind=="floor-line")' "$faults"
+}

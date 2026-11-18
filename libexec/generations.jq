@@ -43,3 +43,29 @@ def generation_slices($binding; $view; $conf):
                   | select(any($view.seats[]?; .floor==$f and any(.ssh.granted[]?; .name==$key.name))) | $key]}
             | generation_semantic)}] | from_entries)
     };
+
+def generation_rebuild_faults($new; $floor):
+  . as $old
+  | ([$old.floors[][1]]) as $old_order
+  | ([$new.floors[][1]]) as $new_order
+  | [
+      (if ($old_order|index($floor))==null or ($new_order|index($floor))==null
+       then {kind:"floor",reason:"the requested floor must exist in both editions"} else empty end),
+      (if $old_order!=$new_order then {kind:"topology",reason:"the set or order of floors changed"} else empty end),
+      (if ($old.floors|map(if .[1]==$floor then .[7]=null else . end))
+          !=($new.floors|map(if .[1]==$floor then .[7]=null else . end))
+       then {kind:"floor-line",reason:"a floor line changed beyond the requested floor's smallest value"} else empty end),
+      (($old.names|keys[]) as $name | select($new.names|has($name))
+       | select($old.names[$name]!=$new.names[$name])
+       | {kind:"name-moved",name:$name,reason:"a name moved between floors"}),
+      (($old.globals|keys[]) as $member | select($old.globals[$member]!=$new.globals[$member])
+       | {kind:"global",member:$member,reason:"a value repeated by every floor changed"}),
+      (($old.slices|keys[]) as $other | select($other!=$floor)
+       | select($old.slices[$other]!=$new.slices[$other])
+       | first(($old.slices[$other]|keys[]) as $member
+               | select($old.slices[$other][$member]!=$new.slices[$other][$member])
+               | {kind:"slice",floor:$other,member:$member,reason:"another floor's slice changed"})),
+      (if ([$old.relations[] | select(.action=="mail" and .from_floor!=$floor and .to_floor!=$floor)])
+          !=([$new.relations[] | select(.action=="mail" and .from_floor!=$floor and .to_floor!=$floor)])
+       then {kind:"unrelated-mail",reason:"a mail pair with neither end on the requested floor changed"} else empty end)
+    ];

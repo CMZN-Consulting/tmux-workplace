@@ -311,13 +311,18 @@ t_generation_floor_admission() {
   local -a changes=(
     'another floor command|terms_of("harbor/dock/keeper/seat.typify"; if .[0]=="start" then .[5]=(["/usr/bin/true"]|tojson) else . end)|slice of floor deck (terms)'
     'another floor environment|.state.environment += [{key:["harbor","dock","keeper","WPT_ADMISSION"],value:["changed"],masked:false,origin:at(22)}]|slice of floor deck (environment)'
-    'unrelated mail|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","mail","harbor","dock","keeper","seat","banned"];23)]|unrelated-mail'
+    'unrelated mail|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","mail","harbor","dock","keeper","seat","allowed"];23)]|unrelated-mail'
   )
   for entry in "${changes[@]}"; do
     title=${entry%%|*} entry=${entry#*|} change=${entry%|*} expected=${entry##*|}
     statements_plan "$floors_terms | $comms_terms | $change"
     check "[C123] $title is a valid plan before floor admission" exit_is 0 wplan
     (( test_failed == 0 )) || return 1
+    if [[ $title == 'unrelated mail' ]]; then
+      check "[C123] the unrelated mail case really adds its previously banned route" jq -e \
+        'any(.seats[]; .seat==["orchard","barn","grower"] and (.reach.mail|index("Harbor Keeper"))!=null)' "$clone/PLAN/view.json"
+      (( test_failed == 0 )) || return 1
+    fi
     check "[C123] $title requires a whole build" exit_is 1 wp build lodge
     check "[C123] the refusal identifies $title" said "$expected"
     check "[C123] refusal of $title writes no published or staged file" test "$(generation_tree_digest "$clone/BUILD")" = "$before"

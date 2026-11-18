@@ -792,13 +792,13 @@ t_generation_live_handoff() {
   check "[C129] the witness starts" exit_is 0 wp up deck
   check "[C129] the changing floor starts" exit_is 0 wp up lodge
   (( test_failed == 0 )) || return 1
-  local s line server carrier panes agent home private prefix day file gaps edition key previous next id
+  local s line server carrier panes agent key_home private prefix day file gaps edition key previous next id
   s=$(state_of) line=$(generation_top_floor deck) server=$(on deck T display-message -p '#{pid}') carrier=$(carrier_pid deck)
   panes=$(on deck T list-panes -a -F '#{pane_id} #{pane_pid}')
-  home=$s/floors/deck/keys/01
-  agent=$(gpg-connect-agent --homedir "$home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')
+  key_home=$s/floors/deck/keys/01
+  agent=$(gpg-connect-agent --homedir "$key_home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')
   check "[C129] the witness's actual key agent is identified" test -n "$agent"
-  private=$(generation_tree_digest "$clone/BUILD/floors/deck" "$home/private-keys-v1.d")
+  private=$(generation_tree_digest "$clone/BUILD/floors/deck" "$key_home/private-keys-v1.d")
   day=$(date -u +%F) file=$s/floors/deck/records/Harbor\ Keeper/$day.pane
   check "[C129] the witness's pane record stands" eventually_long test -s "$file"
   gaps=$(if [[ -f $s/floors/deck/records/Harbor\ Keeper/gaps ]]; then sha256sum < "$s/floors/deck/records/Harbor Keeper/gaps"; else printf absent; fi)
@@ -830,10 +830,10 @@ t_generation_live_handoff() {
     check "[C129] start the actual $edition edition" exit_is 0 wp up lodge
     check "[C129] the resumed destination carrier serves its waiting writer" carrier_test_answer ira "waiting-$edition.md" ok
     check "[C129] $edition preserves the witness's top entry" test "$(generation_top_floor deck)" = "$line"
-    check "[C129] $edition preserves the witness's immutable tree and private keys" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$home/private-keys-v1.d")" = "$private"
+    check "[C129] $edition preserves the witness's immutable tree and private keys" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$key_home/private-keys-v1.d")" = "$private"
     check "[C129] $edition preserves every witness pane's id and process" test "$(on deck T list-panes -a -F '#{pane_id} #{pane_pid}')" = "$panes"
     check "[C129] $edition preserves the witness server and carrier" test "$(on deck T display-message -p '#{pid}')/$(carrier_pid deck)" = "$server/$carrier"
-    check "[C129] $edition preserves the actual witness key agent" test "$(gpg-connect-agent --homedir "$home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')" = "$agent"
+    check "[C129] $edition preserves the actual witness key agent" test "$(gpg-connect-agent --homedir "$key_home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')" = "$agent"
     check "[C129] $edition retains all previous recorded bytes as a prefix" bash -c 'head -c "$1" -- "$2" | cmp -s -- - "$3"' _ "$prefix" "$file" "$scratch/record-prefix"
     check "[C129] type a witness marker after $edition" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" "handoff-$edition" Enter
     check "[C129] output after $edition is still recorded" eventually_long grep -qF "handoff-$edition" "$file"

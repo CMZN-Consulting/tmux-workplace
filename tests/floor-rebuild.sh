@@ -844,3 +844,61 @@ t_generation_live_handoff() {
   check "[C129] stop the witness and its key agent" exit_is 0 wp down deck
   check "[C129] the complete witness chain verifies after both publications" exit_is 0 wp record verify 'Harbor Keeper' "$day"
 }
+
+t_generation_state_refusals() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [m(["key","lodge","east","-","room","held"];2)]'
+  check "[C130] the state-entry fixture plans" exit_is 0 wplan
+  check "[C130] it builds with keys and communications" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s row relative kind mode path existed count top keys other
+  local -a cases=(
+    'store.holder|file|644' 'store.holder|dir|700' 'build.holder|file|644'
+    'generation.next|file|644' 'generations.lock|file|644'
+    'floors/lodge/up.holder|file|644' 'floors/lodge/type.lock|file|644'
+    'floors/lodge/comms/record|file|644' 'floors/lodge/comms/serving|dir|700'
+    'floors/lodge/comms/serving.new|file|644' 'floors/lodge/comms/.pointing|dir|755'
+    'floors/lodge/comms/taken/bad.copy|link|600' 'floors/lodge/comms/.pointing/bad.json|file|644'
+  )
+  s=$(state_of)
+  count=$(cat "$s/generation.next") top=$(sha256sum < "$clone/BUILD/MANIFEST")
+  keys=$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")
+  other=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")
+  printf '%s\n' 'synthetic outside target' > "$scratch/state-link-target"
+  mkdir -m 0700 -- "$s/floors/lodge/comms/.pointing"
+  for row in "${cases[@]}"; do
+    IFS='|' read -r relative kind mode <<< "$row"
+    path=$s/$relative existed=0
+    if [[ -e $path || -L $path ]]; then mv -- "$path" "$scratch/state-original"; existed=1; fi
+    case $kind in
+      file) ( umask 077; printf '%s\n' '{}' > "$path" ); chmod "$mode" -- "$path" ;;
+      dir) mkdir -m "$mode" -- "$path" ;;
+      link) ln -s -- "$scratch/state-link-target" "$path" ;;
+    esac
+    check "[C130] build refuses the wrong kind or mode of $relative" exit_is 1 wp build lodge
+    check "[C130] the build refusal identifies $relative" said "$path"
+    check "[C130] up refuses the same $relative" exit_is 1 wp up lodge
+    check "[C130] no rejected state starts a run" test ! -e "$run/lodge"
+    if [[ $kind == dir ]]; then rmdir -- "$path"; else rm -- "$path"; fi
+    (( ! existed )) || mv -- "$scratch/state-original" "$path"
+    check "[C130] rejecting $relative consumes no generation" test "$(cat "$s/generation.next")" = "$count"
+    check "[C130] rejecting $relative preserves the published top" test "$(sha256sum < "$clone/BUILD/MANIFEST")" = "$top"
+    check "[C130] rejecting $relative preserves the existing private keys" test "$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")" = "$keys"
+    check "[C130] rejecting $relative leaves the other floor byte for byte" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$other"
+    (( test_failed == 0 )) || return 1
+  done
+  check "[C130] the link target was never written" grep -qxF 'synthetic outside target' "$scratch/state-link-target"
+  check "[C130] valid own-floor state remains usable" exit_is 0 wp up lodge
+  check "[C130] stop the valid state fixture" exit_is 0 wp down lodge
+  mv -- "$clone/BUILD" "$scratch/kept-whole-build"
+  printf '%s\n' '{}' > "$s/store.holder"
+  chmod 0644 -- "$s/store.holder"
+  check "[C130] a whole build also refuses an existing permissive store holder" exit_is 1 wp build
+  check "[C130] that refusal names its holder" said "$s/store.holder"
+  rm -- "$s/store.holder"
+  check "[C130] the whole refusal consumed no generation" test "$(cat "$s/generation.next")" = "$count"
+  check "[C130] it did not remove the preserved private key files" test "$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")" = "$keys"
+  mv -- "$scratch/kept-whole-build" "$clone/BUILD"
+}

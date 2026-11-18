@@ -1557,6 +1557,7 @@ make_mail() {
   fi
   if (( ${#floor_keys[@]} )); then
     for taken_floor in "${floor_keys[@]}"; do
+      generation_state_entries "$state_dir" "$taken_floor" || die "build refuses: a floor's communication entry has another kind, owner or mode"
       make_dirs "$state_dir" "floors/$taken_floor/comms/taken" \
         || die "build refuses: $bad_dir is not a directory of this user's with mode 700, where the carrier keeps what it takes"
       if [[ ! -e $state_dir/floors/$taken_floor/type.lock && ! -L $state_dir/floors/$taken_floor/type.lock ]]; then
@@ -1753,6 +1754,27 @@ generation_shared_records() {
 # generations' lock; and the counter of generations. Each is a file of this user's with mode 0600. A generation's
 # number is the counter's, and an empty counter gives 1; the build writes the next number back before it makes BUILD,
 # so that a number a stopped build took is never taken again, and the counter outlives unbuild, since S stands.
+generation_state_entries() {
+  local state_dir=$1 floor=${2-} path name
+  local -a files=() dirs=()
+  for name in build.lock build.holder generations.lock generation.next store.holder; do files+=("$state_dir/$name"); done
+  if [[ -n $floor ]]; then
+    for name in up.lock up.holder type.lock carrier.lock comms/record comms/serving comms/serving.new; do files+=("$state_dir/floors/$floor/$name"); done
+    dirs=("$state_dir/floors/$floor/comms" "$state_dir/floors/$floor/comms/taken" "$state_dir/floors/$floor/comms/.pointing")
+    for path in "${dirs[@]}"; do
+      [[ -e $path || -L $path ]] || continue
+      [[ -d $path && ! -L $path && $(stat -c %a -- "$path") == 700 && $(stat -c %u -- "$path") == "$EUID" ]] \
+        || { warn "$path is not a directory of this user's with mode 700, where the floor keeps its communications"; return 1; }
+    done
+    files+=("$state_dir/floors/$floor/comms/taken"/* "$state_dir/floors/$floor/comms/.pointing"/*)
+  fi
+  for path in "${files[@]}"; do
+    [[ -e $path || -L $path ]] || continue
+    [[ -f $path && ! -L $path && $(stat -c %a -- "$path") == 600 && $(stat -c %u -- "$path") == "$EUID" ]] \
+      || { warn "$path is not a file of this user's with mode 600, where the frame keeps its locks, holders and journals"; return 1; }
+  done
+}
+
 build_state_lock() {
   local workplace=$1 command=${2:-build} floor=${3-} base s name f next d n
   command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
@@ -1767,6 +1789,7 @@ build_state_lock() {
     [[ -f $f && ! -L $f && $(stat -c %a -- "$f") == 600 && $(stat -c %u -- "$f") == "$EUID" ]] \
       || die "build refuses: $f is not a file of this user's with mode 600, where the frame keeps its locks and its count of generations"
   done
+  generation_state_entries "$s" "$floor" || die "build refuses: a state entry has another kind, owner or mode"
   exec 7>> "$s/build.lock" || die "cannot open $s/build.lock" 2
   if ! flock -w 2 7; then
     die "build refuses: another build of this workplace holds its lock, $s/build.lock: $(jq -r '"\(.command // "a build"), process \(.pid // "unnamed"), since \(.at // "an unnamed time")"' "$s/build.holder" 2> /dev/null || printf 'its holder names no process')"
@@ -1941,6 +1964,7 @@ generation_floor_commit() {
   if [[ -n $store ]]; then
     exec 8< "$store" || die "cannot open the mail store for the build's commit" 2
     flock -w 30 8 || die "build $rebuild_floor refuses: the mail store's lock was not taken within 30 seconds; the floor stays part-built"
+    generation_state_entries "$state_dir" "$rebuild_floor" || die "build $rebuild_floor refuses: a state entry has another kind, owner or mode; the floor stays part-built"
     ( umask 077 && jq -nc --arg f "$rebuild_floor" --argjson pid "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{floor:$f,pid:$pid,at:$at,command:("build "+$f)}' > "$state_dir/store.holder.new" ) \
       && mv -fT -- "$state_dir/store.holder.new" "$state_dir/store.holder" || die "cannot write the build's store holder" 2
@@ -3225,6 +3249,9 @@ cmd_up_locked() {
     (( $# == 0 )) || die "up takes no arguments" 2
   fi
   verify_build ${run_floor:+"$run_floor"} || die "up starts only a verified build, and never builds"
+  if [[ -n $run_floor ]]; then
+    generation_state_entries "${generation_expected_state:-$(generation_state_snapshot)}" "$run_floor" || return 1
+  fi
   plan_root_fault || die "up refuses: $root_fault"
   local view_file=/dev/null
   [[ -f $b_view ]] && view_file=$b_view

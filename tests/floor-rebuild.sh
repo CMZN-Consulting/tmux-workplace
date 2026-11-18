@@ -1,7 +1,7 @@
 t_generation_counter_leftovers() {
   mkdir -p -- "$scratch/counter-build/shared/7" "$scratch/counter-build/floors/deck/11"
   cat > "$scratch/counter-driver" <<'BASH'
-source <(sed -nE '/^build_(state_lock|generation_next|state_begin)\(\) \{$/,/^}$/p' "$1")
+source <(sed -nE '/^(build_(state_lock|generation_next|state_begin)|generation_state_entries)\(\) \{$/,/^}$/p' "$1")
 counter_state=$2 build_dir=$3
 state_root() { printf '%s\n' "$counter_state"; }
 die() { printf '%s\n' "$1" >&2; exit "${2:-1}"; }

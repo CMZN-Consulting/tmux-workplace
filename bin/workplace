@@ -2719,7 +2719,7 @@ set_records() {
     local links_mark links_state
     links_mark=$(jq -r '.slots[(["run"] | tojson)]' <<< "$state")
     links_state=$made_in/links.state
-    floor_record_links_refresh "$run_floor" "$links_mark" || return 1
+    floor_record_links_refresh "$run_floor" "$links_mark" pinned || return 1
     jq -nc --arg what "the record links of floor $run_floor" \
       --argjson call "$(json_list "$BASH" "$build_dir/bin/workplace" record-links-end "$links_state" "$links_mark")" \
       '{what:$what,call:$call}' >> "$run_dir/ledger" || return 1
@@ -4180,8 +4180,8 @@ floor_record_links_refresh() (
   umask 077
   local floor=$1 mark=$2 top records state_home stamp old='[]' desired='[]' where path row link target actual parent temporary effective_records
   [[ -n $floor ]] || return 0
-  top=$(sha_of "$build_dir/MANIFEST") || return 1
-  build_resolve
+  [[ ${3-} == pinned ]] || build_resolve
+  top=$b_top_sha
   floor_scope "$floor"
   records=$f_gen/records.json
   [[ -f $records ]] || return 0

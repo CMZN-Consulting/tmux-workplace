@@ -18,6 +18,15 @@ carrier_test_floor_text() {
 
 t_floor_capture_interruption() {
   mkdir -m 0700 -- "$scratch/capture-files"
+  check "[C105] capture preserves stdout, trailing lines and a nonzero command status" bash -c '
+    source "$1"
+    export TMPDIR=$2
+    floor_capture bash -c '\''printf "first\nlast\n\n"; exit 7'\'' > "$3"
+    result=$?
+    printf "first\nlast\n\n" > "$4"
+    [[ $result == 7 ]] && cmp -s -- "$3" "$4"
+  ' _ "$tool/libexec/floor-runtime.bash" "$scratch/capture-files" "$scratch/capture-normal" "$scratch/capture-expected"
+  check "[C105] ordinary capture leaves no named file" bash -c 'a=("$1"/*); [[ ! -e ${a[0]} ]]' _ "$scratch/capture-files"
   printf '%s\n' '#!/usr/bin/env bash' \
     'source "$1"; export TMPDIR=$2; floor_capture "$BASH" "$3" "$4"' > "$scratch/capture-parent"
   printf '%s\n' '#!/usr/bin/env bash' \

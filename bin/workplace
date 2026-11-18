@@ -2025,10 +2025,10 @@ plan_root_fault() {
 # Verify the build against its MANIFEST. With floors and a floor named, only the top, the frame, the shared generation
 # and that floor's own tree are read; with none named, all of BUILD is walked (5.160 point 3).
 verify_build() {
-  local floor=${1-}
+  local floor=${1-} marker_mode=${2-}
   [[ -d $build_dir ]] || { warn "no build at $build_dir"; return 1; }
   [[ -f $build_dir/MANIFEST && ! -L $build_dir/MANIFEST ]] || { warn "$build_dir has no MANIFEST"; return 1; }
-  local top line name file rel gen g shared_lines=0
+  local top line name file rel gen g shared_lines=0 unused named marker_floor
   # The top is read once, by locate (5.162; the addendum's P4): its bytes, its sha and the generations it names.
   top=$b_top
   [[ -r $build_dir/MANIFEST ]] || { warn "cannot read $build_dir/MANIFEST"; return 1; }
@@ -2088,6 +2088,24 @@ verify_build() {
     fi
     if [[ -L $file ]]; then warn "$build_dir holds a symbolic link: $rel"; return 1; fi
     [[ -d $file ]] && continue
+    if [[ $b_layout == generations ]]; then
+      unused=0
+      if [[ $rel =~ ^(shared/[0-9]+|floors/[^/]+/[0-9]+)(/|$) ]]; then
+        gen=${BASH_REMATCH[1]} named=0
+        [[ $gen != "$b_shared" ]] || named=1
+        for g in "${b_floors[@]}"; do [[ $gen != "${b_floor[$g]}" ]] || named=1; done
+        (( named )) || unused=1
+      fi
+      (( unused )) && continue
+      if [[ $rel =~ ^floors/([^/]+)/BUILDING$ && -n ${b_floor[${BASH_REMATCH[1]}]+x} ]]; then
+        marker_floor=${BASH_REMATCH[1]}
+        if [[ $marker_mode != allow-partial ]]; then
+          warn "the floor $marker_floor is part-built; its BUILDING marker stands; run workplace build $marker_floor before up or restart"
+          return 3
+        fi
+        continue
+      fi
+    fi
     [[ -n ${want[$rel]+x} ]] || { warn "$build_dir holds a file its MANIFEST does not list: $rel"; return 1; }
   done
   local -a sums names=()

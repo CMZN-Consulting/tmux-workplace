@@ -153,3 +153,30 @@ t_generation_admission_model() {
   generation_test_faults "$base" "$next" deck "$faults"
   check "[C118] changing another field of that floor line requires a whole build" jq -e 'any(.[]; .kind=="floor-line")' "$faults"
 }
+
+t_generation_unpublished_files() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C119] generation-side-file fixture plans" exit_is 0 wplan
+  check "[C119] fixture builds" exit_is 0 wp build
+  mkdir -p -- "$clone/BUILD/shared/99/.work" "$clone/BUILD/floors/lodge/99/.work"
+  printf '%s\n' staged > "$clone/BUILD/shared/99/.work/output"
+  printf '%s\n' staged > "$clone/BUILD/floors/lodge/99/.work/output"
+  printf '%s\n' '{"pid":1,"generation":99,"at":"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING"
+  check "[C119] another floor still starts while unnamed generations and a peer marker stand" exit_is 0 wp up deck
+  check "[C119] the unaffected floor stops normally" exit_is 0 wp down deck
+  check "[C119] the part-built floor refuses before starting anything" exit_is 1 wp up lodge
+  check "[C119] the refusal names the partial floor" said "the floor lodge is part-built"
+  check "[C119] no partial run was made" test ! -e "$run/lodge"
+  ln -s -- "$root/harbor/charts" "$clone/BUILD/shared/99/untrusted-link"
+  check "[C119] an unnamed generation does not exempt a symbolic link" exit_is 1 wp up deck
+  check "[C119] the link is named" said "symbolic link: shared/99/untrusted-link"
+  rm -- "$clone/BUILD/shared/99/untrusted-link"
+  printf '%s\n' unexpected > "$clone/BUILD/unknown-file"
+  check "[C119] a file outside generation directories is still refused" exit_is 1 wp up deck
+  check "[C119] the unlisted file is named" said "MANIFEST does not list: unknown-file"
+  rm -- "$clone/BUILD/unknown-file" "$clone/BUILD/floors/lodge/BUILDING"
+  check "[C119] removing the planted marker permits its unchanged published generation" exit_is 0 wp up lodge
+  check "[C119] stop that synthetic floor" exit_is 0 wp down lodge
+}

@@ -16,6 +16,24 @@ carrier_test_floor_text() {
   while IFS= read -r pane; do T capture-pane -p -t "$pane"; done < <(T list-panes -a -F '#{pane_id}')
 }
 
+t_floor_capture_interruption() {
+  mkdir -m 0700 -- "$scratch/capture-files"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'source "$1"; export TMPDIR=$2; floor_capture "$BASH" "$3" "$4"' > "$scratch/capture-parent"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf captured; printf "%s\n" "$PPID" > "$1"; kill -STOP "$PPID"' > "$scratch/capture-child"
+  "$BASH" "$scratch/capture-parent" "$tool/libexec/floor-runtime.bash" "$scratch/capture-files" "$scratch/capture-child" "$scratch/capture-ready" > "$scratch/capture-output" &
+  local pid=$! ready
+  check "[C105] capture interruption: the command entered its capture" eventually_long test -s "$scratch/capture-ready"
+  ready=$(cat "$scratch/capture-ready")
+  check "[C105] capture interruption: the correct capture process is stopped" test "$ready" = "$pid"
+  check "[C105] capture interruption: it is actually stopped" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
+  check "[C105] capture interruption: captured bytes have no filesystem name while the command runs" bash -c 'a=("$1"/*); [[ ! -e ${a[0]} ]]' _ "$scratch/capture-files"
+  check "[C105] capture interruption: kill the stopped capture process" kill -KILL "$pid"
+  wait "$pid" 2>/dev/null
+  check "[C105] capture interruption: no readable capture file survives the kill" bash -c 'a=("$1"/*); [[ ! -e ${a[0]} ]]' _ "$scratch/capture-files"
+}
+
 t_carrier_git_deadlines() {
   scoped_clone
   floors_clone

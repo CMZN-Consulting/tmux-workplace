@@ -4,11 +4,13 @@ floor_spec() {
 }
 
 floor_capture() {
-  local capture result=0
+  local capture capture_fd result=0
   capture=$(mktemp "${TMPDIR:-/tmp}/workplace-tmux.XXXXXXXX") || return 1
-  "$@" > "$capture" || result=$?
-  cat -- "$capture" || result=1
-  rm -f -- "$capture" || result=1
+  exec {capture_fd}<> "$capture" || { rm -f -- "$capture"; return 1; }
+  if ! rm -f -- "$capture"; then exec {capture_fd}>&-; return 1; fi
+  "$@" >&"$capture_fd" || result=$?
+  cat -- "/proc/self/fd/$capture_fd" || result=1
+  exec {capture_fd}>&- || result=1
   return "$result"
 }
 

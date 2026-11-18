@@ -490,6 +490,12 @@ t_carrier_chain_replay() {
   check "[C113] an actual entry reached the file sink before state was saved" eventually_long test -s "$d/chain"
   check "[C113] the saved state is still absent at the FIFO gate" test ! -e "$d/chain.state"
   pid=$(carrier_pid)
+  check "[C113] the actual state-save child is blocked opening the FIFO" eventually_long bash -c '
+    for child in $(cat "/proc/$1/task/$1/children"); do
+      [[ $(cat "/proc/$child/wchan" 2>/dev/null) == wait_for_partner ]] && exit 0
+    done
+    exit 1
+  ' _ "$pid"
   check "[C113] kill the carrier between sending entries and saving state" kill -KILL "$pid"
   check "[C113] release the orphaned state writer and its life-lock descriptor" exit_is 0 timeout --kill-after=1 5 cat "$fifo"
   rm -- "$fifo"

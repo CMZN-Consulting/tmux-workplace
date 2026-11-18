@@ -640,3 +640,131 @@ t_generation_store_report() {
   check "[C127] status distinguishes a free lock from the stale named process" said 'but nobody holds the lock; the next hold replaces it'
   rm -- "$s/store.holder"
 }
+
+generation_interrupt_stubs() {
+  local program real
+  mkdir -- "$scratch/interrupt-bin"
+  for program in mv rm gpg; do
+    real=$(command -v "$program")
+    printf '%s\n' '#!/usr/bin/env bash' \
+      "program='$program'; real='$real'; build='$clone/BUILD'; state='$s'; scratch='$scratch'" \
+      'point=${WORKPLACE_TEST_POINT-}; floor=${WORKPLACE_TEST_FLOOR-lodge}; hit=0' \
+      'case "$point:$program" in' \
+      '  K1:mv) [[ ${!#} == "$build/floors/$floor/BUILDING" ]] && hit=1 ;;' \
+      '  K2:gpg|D1:gpg|PAUSE:gpg) for arg in "$@"; do [[ $arg != --quick-gen-key ]] || hit=1; done ;;' \
+      '  K3:mv) [[ ${!#} == "$build/MANIFEST" ]] && hit=1 ;;' \
+      '  K4:rm) [[ ${!#} == "$build/floors/$floor/BUILDING" ]] && hit=1 ;;' \
+      '  K5:rm) [[ ${!#} =~ ^$build/(shared|floors/$floor)/[0-9]+$ ]] && hit=1 ;;' \
+      'esac' \
+      'if (( hit )); then' \
+      '  printf "%s\n" "$point" > "$scratch/interrupt-hit"' \
+      '  if [[ $point == D1 ]]; then printf "%s\n" "synthetic key generation failure" >&2; exit 1; fi' \
+      '  if [[ $point == PAUSE ]]; then while [[ -f $scratch/interrupt-gate ]]; do sleep 0.02; done' \
+      '  else pid=$(jq -r .pid "$state/build.holder")' \
+      '    [[ $pid =~ ^[1-9][0-9]*$ ]] || exit 2' \
+      '    kill -KILL "$pid"; exit 137' \
+      '  fi' \
+      'fi' 'exec "$real" "$@"' > "$scratch/interrupt-bin/$program"
+    chmod +x -- "$scratch/interrupt-bin/$program"
+  done
+}
+
+t_generation_interruptions() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["key","lodge","east","-","room","held"];2),
+    m(["key","harbor","dock","-","room","held"];3)]'
+  check "[C128] the interruption fixture plans" exit_is 0 wplan
+  check "[C128] its whole build succeeds with real keys and mail" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s point result bridge_before bridge_line bridge_box deck_before deck_line deck_pid next before hold
+  s=$(state_of)
+  generation_interrupt_stubs
+  rm -f -- "$scratch/interrupt-hit"
+  timeout --kill-after=2 45 env PATH="$scratch/interrupt-bin:$PATH" WORKPLACE_TEST_POINT=K3 WORKPLACE_TEST_FLOOR=bridge \
+    "$BASH" "$loop" build bridge > "$scratch/bridge-interruption.out" 2>&1
+  result=$?
+  check "[C128] a real bridge build is killed before its top commit" test "$result" = 137
+  check "[C128] that builder reached the named top operation" test "$(cat "$scratch/interrupt-hit")" = K3
+  check "[C128] the down bridge really remains part-built" test -f "$clone/BUILD/floors/bridge/BUILDING"
+  (( test_failed == 0 )) || { cat "$scratch/bridge-interruption.out"; return 1; }
+  bridge_box=$s/comms/Orchard\ Grower
+  check "[C128] the down floor's answers directory existed" test -d "$bridge_box/answers"
+  rmdir -- "$bridge_box/answers"
+  bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge" "$s/mail/Orchard Grower" "$bridge_box")
+  bridge_line=$(generation_top_floor bridge)
+  check "[C128] the witness deck starts while bridge is interrupted" exit_is 0 wp up deck
+  (( test_failed == 0 )) || return 1
+  deck_line=$(generation_top_floor deck) deck_pid=$(on deck T display-message -p '#{pid}')
+  deck_before=$(generation_tree_digest "$clone/BUILD/floors/deck" "$s/floors/deck/keys/01/private-keys-v1.d")
+  for point in K1 K2 K3 K4 K5 D1; do
+    rm -f -- "$scratch/interrupt-hit"
+    if [[ $point == K1 ]]; then
+      exec {hold}< "$s/generations.lock"
+      flock -s "$hold" || return 1
+    fi
+    timeout --kill-after=2 45 env PATH="$scratch/interrupt-bin:$PATH" WORKPLACE_TEST_POINT="$point" WORKPLACE_TEST_FLOOR=lodge \
+      "$BASH" "$loop" build lodge > "$scratch/interruption-$point.out" 2>&1
+    result=$?
+    [[ $point != K1 ]] || exec {hold}<&-
+    if [[ $point == D1 ]]; then check "[C128] D1 is a native key-generation refusal" test "$result" = 2
+    else check "[C128] $point kills the actual publishing builder" test "$result" = 137; fi
+    check "[C128] $point reached its named operation" test "$(cat "$scratch/interrupt-hit" 2>/dev/null)" = "$point"
+    check "[C128] $point keeps the witness floor healthy" exit_is 0 wp status deck
+    check "[C128] $point preserves the witness top entry" test "$(generation_top_floor deck)" = "$deck_line"
+    check "[C128] $point preserves its immutable tree and private-key files" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$s/floors/deck/keys/01/private-keys-v1.d")" = "$deck_before"
+    check "[C128] $point preserves the witness server process" test "$(on deck T display-message -p '#{pid}')" = "$deck_pid"
+    check "[C128] $point preserves the other interrupted floor and its mailboxes" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge" "$s/mail/Orchard Grower" "$bridge_box")" = "$bridge_before"
+    check "[C128] $point does not change bridge's published entry" test "$(generation_top_floor bridge)" = "$bridge_line"
+    check "[C128] $point does not recreate the other floor's removed answers" test ! -e "$bridge_box/answers"
+    if [[ $point == K2 || $point == K3 || $point == K4 || $point == D1 ]]; then
+      check "[C128] $point refuses up of its interrupted floor" exit_is 1 wp up lodge
+      check "[C128] $point explains that the marker stands" said 'BUILDING marker stands'
+      check "[C128] $point leaves no partial run" test ! -e "$run/lodge"
+    fi
+    if [[ $point == K4 ]]; then before=$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d"); next=$(cat "$s/generation.next"); fi
+    check "[C128] recovery after $point succeeds" exit_is 0 wp build lodge
+    if (( test_failed )); then cat "$scratch/interruption-$point.out"; return 1; fi
+    if [[ $point == K4 ]]; then
+      check "[C128] committed-marker recovery keeps private-key bytes, inodes and modes" test "$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")" = "$before"
+      check "[C128] committed-marker recovery allocates no generation" test "$(cat "$s/generation.next")" = "$next"
+    fi
+    check "[C128] recovery after $point still leaves bridge byte for byte" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge" "$s/mail/Orchard Grower" "$bridge_box")" = "$bridge_before"
+    check "[C128] recovery after $point makes lodge usable" exit_is 0 wp up lodge
+    check "[C128] end lodge after $point" exit_is 0 wp down lodge
+  done
+  check "[C128] end the unchanged witness" exit_is 0 wp down deck
+}
+
+t_generation_pause_isolation() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [m(["key","lodge","east","-","room","held"];2)]'
+  check "[C128] the pause fixture plans" exit_is 0 wplan
+  check "[C128] its whole build succeeds" exit_is 0 wp build
+  check "[C128] start the witness before pausing another build" exit_is 0 wp up deck
+  (( test_failed == 0 )) || return 1
+  local s pid result
+  s=$(state_of)
+  generation_interrupt_stubs
+  : > "$scratch/interrupt-gate"
+  timeout --kill-after=2 60 env PATH="$scratch/interrupt-bin:$PATH" WORKPLACE_TEST_POINT=PAUSE \
+    "$BASH" "$loop" build lodge > "$scratch/interruption-pause.out" 2>&1 & pid=$!
+  if ! eventually_long test -e "$scratch/interrupt-hit"; then
+    fail "[C128] the builder did not reach its native key-generation pause"
+    rm -f -- "$scratch/interrupt-gate"; wait "$pid" 2>/dev/null
+    cat "$scratch/interruption-pause.out"; return 1
+  fi
+  check "[C128] the other floor's status does not wait for the paused build" exit_is 0 wp status deck
+  check "[C128] end a witness program for restart" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" C-c
+  check "[C128] the program really ended" eventually_long on deck dead_pane 'Harbor Keeper'
+  check "[C128] restarting another floor does not wait for the paused build" exit_is 0 wp restart deck 'Harbor Keeper'
+  check "[C128] down of another floor does not wait" exit_is 0 wp down deck
+  check "[C128] up of another floor does not wait" exit_is 0 wp up deck
+  rm -- "$scratch/interrupt-gate"
+  result=0; wait "$pid" || result=$?
+  check "[C128] the key generation resumes and publishes" test "$result" = 0
+  check "[C128] end the restarted witness" exit_is 0 wp down deck
+}

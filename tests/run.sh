@@ -7720,6 +7720,8 @@ tests=(
   t_generation_retention
   t_generation_phase_reports
   t_generation_store_report
+  t_generation_interruptions
+  t_generation_pause_isolation
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

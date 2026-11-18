@@ -295,3 +295,47 @@ t_generation_floor_rebuild() {
   check "[C122] stop both synthetic servers" exit_is 0 wp down deck
   check "[C122] stop the rooms floor" exit_is 0 wp down lodge
 }
+
+t_generation_floor_admission() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"
+  check "[C123] the admission fixture plans" exit_is 0 wplan
+  check "[C123] its initial whole build succeeds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local original count s entry title change expected before
+  original=$(cat "$clone/workplace.json") s=$(state_of)
+  count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
+  local -a changes=(
+    'another floor command|terms_of("harbor/dock/keeper/seat.typify"; if .[0]=="start" then .[5]=(["/usr/bin/true"]|tojson) else . end)|slice of floor deck (terms)'
+    'another floor environment|.state.environment += [{key:["harbor","dock","keeper","WPT_ADMISSION"],value:["changed"],masked:false,origin:at(22)}]|slice of floor deck (environment)'
+    'unrelated mail|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","mail","harbor","dock","keeper","seat","allowed"];23)]|unrelated-mail'
+  )
+  for entry in "${changes[@]}"; do
+    title=${entry%%|*} entry=${entry#*|} change=${entry%|*} expected=${entry##*|}
+    statements_plan "$floors_terms | $comms_terms | $change"
+    check "[C123] $title is a valid plan before floor admission" exit_is 0 wplan
+    (( test_failed == 0 )) || return 1
+    check "[C123] $title requires a whole build" exit_is 1 wp build lodge
+    check "[C123] the refusal identifies $title" said "$expected"
+    check "[C123] refusal of $title writes no published or staged file" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
+    check "[C123] refusal of $title allocates no generation" test "$(cat "$s/generation.next")" = "$count"
+  done
+  printf '%s\n' 'set -g status-left changed' > "$clone/floors/deck.conf"
+  statements_plan "$floors_terms | $comms_terms"
+  check "[C123] a changed peer configuration plans" exit_is 0 wplan
+  check "[C123] the peer configuration requires a whole build" exit_is 1 wp build lodge
+  check "[C123] that refusal identifies the configuration slice" said "slice of floor deck (conf)"
+  : > "$clone/floors/deck.conf"
+  jq '.floors |= reverse' <<< "$original" > "$clone/workplace.json"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[0].plan = [.programs[0].plan[0]] + ([.programs[0].plan[] | select(.[0]=="floor")]|reverse)'
+  check "[C123] a reordered floor edition plans" exit_is 0 wplan
+  check "[C123] changing floor order requires a whole build" exit_is 1 wp build lodge
+  check "[C123] that refusal identifies topology" said "topology"
+  printf '%s\n' "$original" > "$clone/workplace.json"
+  statements_plan "$floors_terms | $comms_terms"
+  check "[C123] restore the source edition" exit_is 0 wplan
+  check "[C123] every admission refusal left BUILD unchanged" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
+  check "[C123] every admission refusal left the counter unchanged" test "$(cat "$s/generation.next")" = "$count"
+}

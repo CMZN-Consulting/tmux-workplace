@@ -7724,6 +7724,7 @@ tests=(
   t_generation_pause_isolation
   t_generation_live_handoff
   t_generation_state_refusals
+  t_generation_state_commit
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

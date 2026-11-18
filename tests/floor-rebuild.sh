@@ -902,3 +902,42 @@ t_generation_state_refusals() {
   check "[C130] it did not remove the preserved private key files" test "$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")" = "$keys"
   mv -- "$scratch/kept-whole-build" "$clone/BUILD"
 }
+
+t_generation_state_commit() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"
+  check "[C130] the state-commit fixture plans" exit_is 0 wplan
+  check "[C130] its whole build succeeds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s real_flock pid result top
+  s=$(state_of) real_flock=$(command -v flock) top=$(sha256sum < "$clone/BUILD/MANIFEST")
+  mkdir -- "$scratch/state-commit-bin"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "if [[ \$* == '-w 30 8' && -f '$scratch/state-commit-gate' ]]; then" \
+    "  : > '$scratch/state-commit-entered'; while [[ -f '$scratch/state-commit-gate' ]]; do sleep 0.02; done" \
+    'fi' "exec '$real_flock' \"\$@\"" > "$scratch/state-commit-bin/flock"
+  chmod +x -- "$scratch/state-commit-bin/flock"
+  : > "$scratch/state-commit-gate"
+  timeout --kill-after=1 30 env PATH="$scratch/state-commit-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/state-commit.out" 2>&1 & pid=$!
+  if ! eventually_long test -e "$scratch/state-commit-entered"; then
+    fail "[C130] the builder did not reach its native store-lock gate"
+    rm -f -- "$scratch/state-commit-gate"; wait "$pid" 2>/dev/null
+    cat "$scratch/state-commit.out"; return 1
+  fi
+  ( umask 077; printf '%s\n' '{}' > "$s/store.holder" )
+  chmod 0644 -- "$s/store.holder"
+  rm -- "$scratch/state-commit-gate"
+  result=0; wait "$pid" || result=$?
+  check "[C130] the store-locked recheck refuses the late invalid holder" test "$result" = 1
+  check "[C130] the refusal identifies its kind or mode" grep -qF "$s/store.holder is not a file" "$scratch/state-commit.out"
+  check "[C130] the rejected commit preserves the old published top" test "$(sha256sum < "$clone/BUILD/MANIFEST")" = "$top"
+  check "[C130] the rejected floor remains marked part-built" test -f "$clone/BUILD/floors/lodge/BUILDING"
+  check "[C130] the invalid holder was not silently replaced" test "$(stat -c %a -- "$s/store.holder")" = 644
+  check "[C130] up refuses the rejected partially built floor" exit_is 1 wp up lodge
+  rm -- "$s/store.holder"
+  check "[C130] recovery succeeds after the state fault is removed" exit_is 0 wp build lodge
+  check "[C130] the recovered generation starts" exit_is 0 wp up lodge
+  check "[C130] end the recovered state-commit fixture" exit_is 0 wp down lodge
+}

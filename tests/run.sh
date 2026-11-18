@@ -2425,7 +2425,7 @@ t_floors() {
   g=$(top_gen)
   floors_named=$(jq -r --arg g "$g" '[.programs[].plan[] | (if type == "object" then .term else . end) | select(.[0] == "floor") | "floors/\(.[1])/\($g)/MANIFEST"] | join(" ")' "$clone/PLAN/plan.json")
   check "[C5] 5.160 point 2: the top names the frame, one shared generation and one generation for each floor, in the order of the floor terms, and nothing else" \
-    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq libexec/floor-runtime.bash share/floor-set-enforced.conf share/floor-set-unenforced.conf shared/$g/MANIFEST $floors_named "
+    test "$(sed 's/^[0-9a-f]\{64\}  //' "$clone/BUILD/MANIFEST" | tr '\n' ' ')" = "binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/generations.jq libexec/alias-access.jq libexec/floor-runtime.bash share/floor-set-enforced.conf share/floor-set-unenforced.conf shared/$g/MANIFEST $floors_named "
   check "[C2] 5.160 point 2: the plan's copies stand in the shared generation, PLAN's plan byte for byte, and no plan, view, mail, keys, homes or records stands beside the top" \
     bash -c 'cmp -s "$1/PLAN/plan.json" "$1/BUILD/shared/$2/plan.json" && [[ -f $1/BUILD/shared/$2/plan-view.json && -f $1/BUILD/shared/$2/plan-manifest.json ]] \
       && ! ls -- "$1/BUILD" | grep -qxE "(plan|plan-view|plan-manifest|plan-facts|mail|keys|homes|records)[.]json"' _ "$clone" "$g"
@@ -7705,6 +7705,7 @@ tests=(
   t_generation_admission_model
   t_generation_unpublished_files
   t_generation_key_prerequisites
+  t_generation_published_metadata
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

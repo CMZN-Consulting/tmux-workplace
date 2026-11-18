@@ -1671,7 +1671,7 @@ make_records() {
   say "records: $(jq '[.[] | select(.pane == "kept")] | length' <<< "$entries") panes kept in $dir$([[ -n $chain ]] && printf ', chained to the %s' "$chain")"
 }
 
-frame_files=(binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/alias-access.jq libexec/floor-runtime.bash share/floor-set-enforced.conf share/floor-set-unenforced.conf)
+frame_files=(binding.json bin/workplace libexec/resolve.jq libexec/check.jq libexec/table.jq libexec/fold.jq libexec/generations.jq libexec/alias-access.jq libexec/floor-runtime.bash share/floor-set-enforced.conf share/floor-set-unenforced.conf)
 manifest_files=(plan.json plan-manifest.json "${frame_files[@]}")
 
 # A generation's MANIFEST: a hash and a name for each file in its directory, in the C locale's order.
@@ -1708,6 +1708,38 @@ build_floor_seats() {
     cp -- "$config" "${build_out:-$build_dir}/floor.conf" || die "cannot copy the floor $floor's configuration"
   fi
   return 0
+}
+
+generation_project_plan() {
+  local plan=$1 view=$2 conf=$3 state_dir=$4 config=/dev/null
+  [[ -f $view ]] || view=/dev/null
+  [[ ! -f $clone/workplace.json ]] || config=$clone/workplace.json
+  jq -c -L "$tool/libexec" --slurpfile binding "$tool/host/binding.json" --slurpfile view "$view" \
+    --slurpfile config "$config" --argjson conf "$conf" --arg root "$root" --arg state "$state_dir" '
+    include "generations";
+    {plan:.,binding:$binding[0],view:($view[0] // {}),conf:$conf}
+    | generation_slices
+    | . + {root:$root,state:$state,configuration:($config[0] // null)}' "$plan"
+}
+
+generation_private_files() {
+  local dir=$1 name
+  for name in keys.json homes.json records.json; do
+    [[ -f $dir/$name ]] || continue
+    jq -L "$tool/libexec" --arg name "$name" '
+      include "generations";
+      generation_semantic
+      | if $name=="records.json" then .seats |= map(del(.reads)) else . end' "$dir/$name" > "$dir/$name.new" \
+      && mv -fT -- "$dir/$name.new" "$dir/$name" || die "cannot write the origin-free floor file $dir/$name" 2
+  done
+}
+
+generation_shared_records() {
+  local out=$1
+  if [[ -n $folded ]] && jq -e '.view.records | type=="object"' <<< "$folded" > /dev/null; then
+    jq '.view.records + {origins:(.report.record_path_origins // [])}' <<< "$folded" > "$out/records.json" \
+      || die "cannot write the shared record settings in $out" 2
+  fi
 }
 
 # With floors a build first takes its state (5.160 point 2, 5.162; the addendum's P5 and Q8): S itself, mode 0700;
@@ -1894,9 +1926,13 @@ cmd_build() {
     build_state_begin "$(jq -r '.name // "default"' <<< "$report")"
     gen=$build_generation shared=shared/$build_generation
   fi
+  build_whole_write 6>&- 7>&-
+}
+
+build_whole_write() {
   local copies=$build_dir${shared:+/$shared}
   local -a sources=("$plan_dir/plan.json" "$plan_dir/manifest.json" "$tool/host/binding.json"
-    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq" "$tool/libexec/floor-runtime.bash"
+    "$tool/bin/workplace" "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/generations.jq" "$tool/libexec/alias-access.jq" "$tool/libexec/floor-runtime.bash"
     "$tool/share/floor-set-enforced.conf" "$tool/share/floor-set-unenforced.conf")
   local -a listed=("${shared:+$shared/}plan.json" "${shared:+$shared/}plan-manifest.json" "${frame_files[@]}")
   if [[ -f $plan_dir/facts.json ]]; then
@@ -1919,7 +1955,7 @@ cmd_build() {
       cp -- "$plan_dir/manifest.json" "$copies/plan-manifest.json" &&
       cp -- "$tool/host/binding.json" "$build_dir/binding.json" &&
       cp -- "$tool/bin/workplace" "$build_dir/bin/workplace" &&
-      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/alias-access.jq" "$tool/libexec/floor-runtime.bash" "$build_dir/libexec/" &&
+      cp -- "$tool/libexec/resolve.jq" "$tool/libexec/check.jq" "$tool/libexec/table.jq" "$tool/libexec/fold.jq" "$tool/libexec/generations.jq" "$tool/libexec/alias-access.jq" "$tool/libexec/floor-runtime.bash" "$build_dir/libexec/" &&
       cp -- "$tool/share/floor-set-enforced.conf" "$tool/share/floor-set-unenforced.conf" "$build_dir/share/"
   }; then
     rm -rf -- "$build_dir"
@@ -1952,6 +1988,20 @@ cmd_build() {
     [[ -n $folded ]] && make_mail "$(jq -r '.name // "default"' <<< "$report")"
     rm -rf -- "$build_scratch" || die "cannot remove $build_scratch" 2
     build_out="" build_scratch=""
+    local conf='{}' projection
+    for fk in "${floor_keys[@]}"; do
+      conf=$(jq -c --arg f "$fk" --arg sha "$(sha_of "$build_dir/floors/$fk/$gen/floor.conf")" '.[$f]=$sha' <<< "$conf") \
+        || die "cannot collect the floor configuration hashes" 2
+    done
+    projection=$(generation_project_plan "$copies/plan.json" "$copies/plan-view.json" "$conf" "$build_state_dir") \
+      || die "cannot project the generation's floor slices" 2
+    printf '%s\n' "$projection" > "$copies/projection.json" || die "cannot write $copies/projection.json" 2
+    generation_shared_records "$copies"
+    for fk in "${floor_keys[@]}"; do
+      generation_private_files "$build_dir/floors/$fk/$gen"
+      jq --arg f "$fk" '.slices[$f]' <<< "$projection" > "$build_dir/floors/$fk/$gen/slice.json" \
+        || die "cannot write the floor $fk's slice" 2
+    done
     local -a top=()
     for name in "${frame_files[@]}" seat-page.md; do
       [[ -f $build_dir/$name ]] && top+=("$(cd -- "$build_dir" && sha256sum -- "$name")")

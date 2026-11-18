@@ -205,3 +205,33 @@ t_generation_key_prerequisites() {
   after=$(find "$s/floors/lodge/keys" -type f -printf '%P %i %m %s\n' -exec sha256sum -- '{}' \; | sha256sum)
   check "[C120] the existing floor's key files retain their bytes, inodes and modes" test "$before" = "$after"
 }
+
+t_generation_published_metadata() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["record","-","-","-","workplace","pane","kept"];2),
+    m(["record-path","records"];3),m(["record-chain","file"];4),
+    m(["key","lodge","east","-","room","held"];5)]'
+  check "[C121] the metadata fixture plans" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
+  check "[C121] its whole build publishes the three floor slices" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local generation shared floor name
+  generation=$(top_gen) shared=$clone/BUILD/shared/$(top_gen)
+  check "[C121] the shared projection pins the root, state and configuration edition" jq -e --arg root "$root" --arg state "$(state_of)" \
+    '.root==$root and .state==$state and (.configuration.floors|length)==3 and (.slices|keys)==["bridge","deck","lodge"]' "$shared/projection.json"
+  check "[C121] record-path origins stay in the shared settings" jq -e '.path!=null and (.origins|length)>0' "$shared/records.json"
+  for floor in bridge deck lodge; do
+    check "[C121] $floor has its own origin-free sealed slice" jq -e --arg floor "$floor" \
+      '.floor[1]==$floor and ([paths | select(.[-1]=="origin" or .[-1]=="origins")]|length)==0' "$clone/BUILD/floors/$floor/$generation/slice.json"
+    for name in keys.json homes.json records.json; do
+      [[ -f $clone/BUILD/floors/$floor/$generation/$name ]] || continue
+      check "[C121] $floor/$name carries no source origins" jq -e \
+        '([paths | select(.[-1]=="origin" or .[-1]=="origins")]|length)==0' "$clone/BUILD/floors/$floor/$generation/$name"
+    done
+    check "[C121] $floor keeps cross-floor record reads in the shared view" jq -e 'all(.seats[]; has("reads")|not)' "$clone/BUILD/floors/$floor/$generation/records.json"
+  done
+  check "[C121] the new metadata is covered by generation verification" exit_is 0 wp status
+}

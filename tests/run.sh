@@ -5685,7 +5685,7 @@ export LC_ALL=C'
     bash -c '[[ $(grep -oE "The fold'"'"'s version is \`[^\`]+\`" "$1/CONTRACT.md" | grep -c .) == 1 && $(grep -oE "The fold'"'"'s version is \`[^\`]+\`" "$1/CONTRACT.md" | cut -d"\`" -f2) == "$(sed -n "s/^FOLD_DERIVATION=//p" "$1/bin/workplace")" ]]' _ "$tool"
   local n missing=""
   for n in $(grep -oE '\*\*C[0-9]+\.\*\*' "$tool/CONTRACT.md" | tr -d '*.'); do
-    grep -qE "^[[:space:]]*check \"\\[$n\\]" "$here/run.sh" "$here/floor-carrier.sh" || missing+=" $n"
+    grep -qE "^[[:space:]]*check \"\\[$n\\]" "$here/run.sh" "$here/floor-carrier.sh" "$here/floor-rebuild.sh" || missing+=" $n"
   done
   check "every sentence of the contract is shown by a check that carries its number${missing:+ (missing:$missing)}" test -z "$missing"
 }
@@ -7692,8 +7692,10 @@ t_alias_access_key_sources() {
 }
 
 source "$here/floor-carrier.sh"
+source "$here/floor-rebuild.sh"
 
 tests=(
+  t_generation_counter_leftovers
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

@@ -982,7 +982,7 @@ t_generation_wake_handoff() {
     | .programs[-1].recorded += [
       m(["reach","harbor","-","-","office","mail","lodge","-","-","floor","allowed"];2),
       m(["wake","clerk","^waiting>$"];3)]'
-  statements_plan "$base"' | kinds([["lodge","west","ivo","clerk"]])'
+  statements_plan "$base"' | kinds([["harbor","dock","keeper","clerk"],["lodge","west","ivo","clerk"]])'
   check "[C131] the wake-change fixture plans" exit_is 0 wplan
   check "[C131] it builds" exit_is 0 wp build
   check "[C131] its unchanged sending floor starts" exit_is 0 wp up deck
@@ -994,8 +994,9 @@ t_generation_wake_handoff() {
   first=$(answer_of keeper old-wake.md); first=${first#ok }
   check "[C131] the registered wake leaves its exact id due" eventually_long jq -e --arg id "$first" \
     'any(.seats[]; .name=="Lodge Ivo" and (.ids|index($id))!=null)' "$s/comms/wake.json"
-  statements_plan "$base"' | kinds([["lodge","west","ivo","courier"]])'
+  statements_plan "$base"' | kinds([["harbor","dock","keeper","clerk"],["lodge","west","ivo","courier"]])'
   check "[C131] the reader kind change plans" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
   check "[C131] a real floor build publishes that kind change" exit_is 0 wp build lodge
   (( test_failed == 0 )) || return 1
   request keeper new-wake.md 'to: Lodge Ivo' 'subject: after kind change' --- body
@@ -1036,6 +1037,7 @@ t_generation_bridge_handoff() {
   check "[C132] the existing target goes down for a real rebuild" exit_is 0 wp down deck
   statements_plan "$base $harbor_yard"' | terms_of("harbor/yard/sentry/seat.typify"; if .[0]=="start" then .[5]=(.[5]|fromjson|.[1]="sentinel"|tojson) else . end)'
   check "[C132] an office-floor addition plans" exit_is 0 wplan
+  (( test_failed == 0 )) || return 1
   check "[C132] its real floor build publishes while the bridge stays up" exit_is 0 wp build deck
   check "[C132] the rebuilt office floor starts" exit_is 0 wp up deck
   (( test_failed == 0 )) || return 1

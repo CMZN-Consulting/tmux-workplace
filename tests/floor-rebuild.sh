@@ -741,7 +741,7 @@ t_generation_interruptions() {
 t_generation_pause_isolation() {
   scoped_clone
   floors_clone
-  statements_plan "$floors_terms"' | .programs[-1].recorded += [m(["key","lodge","east","-","room","held"];2)]'
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [{term:["key","lodge","east","-","room","held"],origin:at(2)}]'
   check "[C128] the pause fixture plans" exit_is 0 wplan
   check "[C128] its whole build succeeds" exit_is 0 wp build
   check "[C128] start the witness before pausing another build" exit_is 0 wp up deck

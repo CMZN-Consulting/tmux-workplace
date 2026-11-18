@@ -32,15 +32,16 @@ def generation_slices($binding; $view; $conf):
                  | sort_by([.from,.action,.to])),
       slices:([$floors[] as $floor | $floor[1] as $f
         | [$names[] | select(.floor==$f) | .name] as $local_names
+        | [$view.seats[]? | select(.floor==$f)] as $own_seats
+        | [$own_seats[].ssh.granted[]?.name] as $grants
         | {key:$f,value:({floor:$floor,conf:($conf[$f] // null),
              terms:[$terms[] | select((.term|term_floor($binding;$ix))==$f) | .term | generation_term($binding)],
-             seats:[$view.seats[]? | select(.floor==$f) | . + {name:$by_key[.seat|tojson]}
+             seats:[$own_seats[] | . + {name:$by_key[.seat|tojson]}
                     | if .reach==null then . else .reach |= map_values(map(select(. as $n | $local_names|index($n)!=null))) end],
              rows:[table_rows($plan;$view;$binding.tables.view)[] | select(generation_floor_of($ix;.key[0])==$f)],
              environment:[$plan.state[$binding.tables.environment.cell][]?
                           | select(generation_floor_of($ix;.key[0])==$f)],
-             ssh:[$view.ssh.keys[]? as $key
-                  | select(any($view.seats[]?; .floor==$f and any(.ssh.granted[]?; .name==$key.name))) | $key]}
+             ssh:[$view.ssh.keys[]? | select(.name as $name | $grants | index($name)!=null)]}
             | generation_semantic)}] | from_entries)
     };
 

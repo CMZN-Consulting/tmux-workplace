@@ -361,10 +361,11 @@ t_generation_key_identity() {
   check "[C124] the donor and recipient are distinct identities" test "$expected" != "$(jq -r '.seats[0].fingerprint' "$clone/BUILD/floors/deck/$generation/keys.json")"
   mv -- "$home" "$scratch/kept-key-home"
   cp -a -- "$s/floors/deck/keys/01" "$home"
+  check "[C124] no agent answers for the substituted home before up" bash -c 'reply=$(gpg-connect-agent --homedir "$1" --no-autostart "GETINFO pid" /bye 2>/dev/null); [[ $reply != D\ * ]]' _ "$home"
   check "[C124] a swapped key home refuses up" exit_is 1 wp up lodge
   check "[C124] the refusal names the mismatched fingerprints" said "does not hold the signing and authentication fingerprints of this build"
   check "[C124] the rejected key leaves no run" test ! -e "$run/lodge"
-  check "[C124] the rejected key starts no GnuPG agent" bash -c '! gpg-connect-agent --homedir "$1" --no-autostart "GETINFO pid" /bye >/dev/null 2>&1' _ "$home"
+  check "[C124] the rejected key starts no GnuPG agent" bash -c 'reply=$(gpg-connect-agent --homedir "$1" --no-autostart "GETINFO pid" /bye 2>/dev/null); [[ $reply != D\ * ]]' _ "$home"
   rm -rf -- "$home"
   mv -- "$scratch/kept-key-home" "$home"
   check "[C124] the restored genuine key starts" exit_is 0 wp up lodge

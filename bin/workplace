@@ -2819,7 +2819,10 @@ values_problems() {
 
 value_places() {
   local plan=$b_plan name
-  [[ -f $plan ]] || plan=$clone/PLAN/plan.json
+  if [[ ! -f $plan ]]; then
+    [[ ! -d $build_dir ]] || return 1
+    plan=$clone/PLAN/plan.json
+  fi
   name=$(jq -r --argjson k "$2" 'def term: if type == "object" then .term else . end;
     [.programs[].plan[] | term | select(.[0] == "pane" and .[1:4] == $k) | .[4]][0] // ""' "$plan" 2> /dev/null)
   jq --raw-output0 --argjson k "$2" --arg name "$name" --argjson names "$3" --argjson with "$4" '
@@ -3318,7 +3321,95 @@ cmd_up_locked() {
   say "up: ${run_floor:+the floor $run_floor, }$applied terms applied; run $run"
 }
 
+generation_read() (
+  local action=$1 read_tmp before after result attempt
+  shift
+  need_jq
+  locate
+  if [[ $b_layout != generations ]]; then "${action}_once" "$@"; return; fi
+  read_tmp=$(mktemp -d) || { warn "cannot make temporary output for $action"; return 2; }
+  trap 'rm -rf -- "$read_tmp"' EXIT
+  trap 'exit 130' INT TERM
+  umask 077
+  for attempt in 1 2 3; do
+    before=$(sha_of "$build_dir/MANIFEST") || before=''
+    result=0
+    "${action}_once" "$@" > "$read_tmp/out" 2> "$read_tmp/error" || result=$?
+    after=$(sha_of "$build_dir/MANIFEST") || after=''
+    if [[ $before == "$after" ]]; then
+      cat -- "$read_tmp/out"
+      cat -- "$read_tmp/error" >&2
+      return "$result"
+    fi
+  done
+  warn "the build changed during ${action#cmd_} three times; run it again"
+  return 1
+)
+
+cmd_record() { generation_read cmd_record "$@"; }
+cmd_why() { generation_read cmd_why "$@"; }
+cmd_doctor() { generation_read cmd_doctor "$@"; }
+cmd_status() { generation_read cmd_status "$@"; }
+
 cmd_exec() {
+  need_jq
+  locate
+  if [[ $b_layout != generations ]]; then exec_data run "$@"; return; fi
+  local exec_tmp before after result attempt prepare_fd prepare_pid print directory count i split
+  local -a prepared argv
+  exec_tmp=$(mktemp -d) || { warn "cannot make temporary diagnostics for exec"; return 2; }
+  : > "$exec_tmp/error"
+  chmod 0600 -- "$exec_tmp/error" || { rm -rf -- "$exec_tmp"; return 2; }
+  trap 'rm -rf -- "$exec_tmp"' EXIT
+  trap 'exit 130' INT TERM
+  for attempt in 1 2 3; do
+    before=$(sha_of "$build_dir/MANIFEST") || before=''
+    exec {prepare_fd}< <( located=0; exec_data prepare "$@" 2> "$exec_tmp/error" )
+    prepare_pid=$!
+    prepared=()
+    mapfile -d '' -t prepared <&"$prepare_fd"
+    exec {prepare_fd}<&-
+    result=0
+    wait "$prepare_pid" || result=$?
+    after=$(sha_of "$build_dir/MANIFEST") || after=''
+    [[ $before == "$after" ]] || continue
+    if (( result )); then
+      cat -- "$exec_tmp/error" >&2
+      rm -rf -- "$exec_tmp"
+      trap - EXIT INT TERM
+      return "$result"
+    fi
+    if (( ${#prepared[@]} < 4 )) || [[ ! ${prepared[2]} =~ ^[0-9]+$ ]]; then
+      warn "exec could not prepare the seat's command"
+      rm -rf -- "$exec_tmp"
+      trap - EXIT INT TERM
+      return 2
+    fi
+    print=${prepared[0]} directory=${prepared[1]} count=${prepared[2]} split=$(( 3 + prepared[2] ))
+    if (( count % 2 || split >= ${#prepared[@]} )); then
+      warn "exec could not prepare the seat's values"
+      rm -rf -- "$exec_tmp"
+      trap - EXIT INT TERM
+      return 2
+    fi
+    argv=("${prepared[@]:split}")
+    rm -rf -- "$exec_tmp"
+    trap - EXIT INT TERM
+    if (( print )); then json_list "${argv[@]}"; return 0; fi
+    for (( i=3; i<split; i+=2 )); do export "WORKPLACE_VALUE_${prepared[i]}=${prepared[i + 1]}"; done
+    prepared=()
+    cd -- "$directory" || die "cannot enter $directory" 2
+    exec "${argv[@]}"
+  done
+  rm -rf -- "$exec_tmp"
+  trap - EXIT INT TERM
+  warn "the build changed during exec three times; run it again"
+  return 1
+}
+
+exec_data() {
+  local mode=$1
+  shift
   local print=0
   if [[ ${1-} == --print ]]; then print=1; shift; fi
   [[ ${1-} == -- ]] && shift
@@ -3366,7 +3457,7 @@ cmd_exec() {
   mapfile -d '' -t command < <(jq --raw-output0 '.command[]' <<< "$record")
   local env_program
   env_program=$(command -v env) || die "exec needs env, and env is not on PATH" 2
-  local -a expected values=() fields problems
+  local -a expected values=() fields problems prepared_values=()
   mapfile -t expected < <(jq -r '.expects[]?' <<< "$record")
   if (( ${#expected[@]} )); then
     local file key i split=""
@@ -3385,13 +3476,21 @@ cmd_exec() {
     for (( i = 0; i < ${#fields[@]}; i += 3 )); do
       [[ -n ${fields[i + 1]} ]] \
         || die "the seat $seat ($(jq -r 'join("/")' <<< "$key")) expects the value ${fields[i]}, and $file gives it at none of its places: the seat, its room, its office, the workplace" 2
-      (( print )) || export "WORKPLACE_VALUE_${fields[i]}=${fields[i + 2]}"
+      if [[ $mode == prepare ]]; then
+        (( print )) || prepared_values+=("${fields[i]}" "${fields[i + 2]}")
+      else
+        (( print )) || export "WORKPLACE_VALUE_${fields[i]}=${fields[i + 2]}"
+      fi
       split+=${split:+ }${fields[i]}=\${WORKPLACE_VALUE_${fields[i]}}
     done
     fields=()
     values=(-S "$split")
   fi
   local -a argv=("$env_program" -i "${values[@]}" "${assignments[@]}" "${command[@]}")
+  if [[ $mode == prepare ]]; then
+    printf '%s\0' "$print" "$directory" "${#prepared_values[@]}" "${prepared_values[@]}" "${argv[@]}"
+    return 0
+  fi
   if (( print )); then
     json_list "${argv[@]}"
     return 0
@@ -4740,7 +4839,7 @@ record_entries() {
   fi
 }
 
-cmd_record() {
+cmd_record_once() {
   [[ ${1-} == verify ]] && (( $# == 2 || $# == 3 )) \
     || die "record takes verify and a seat's name, then a day as YYYY-MM-DD, today by default, or unstored, gaps or signed; or verify --requests" 2
   local name=$2 day=${3-} records seat file rel since="" until="" size expected=0 prev=0000000000000000000000000000000000000000000000000000000000000000 entry at offset length hash previous got replayed key began_at
@@ -4849,7 +4948,7 @@ cmd_carrier_end() {
   return 1
 }
 
-cmd_why() {
+cmd_why_once() {
   (( $# == 2 )) || die "why takes a seat's name and an absolute path" 2
   local seat=$1 path=$2
   [[ $path == /* ]] || die "why takes an absolute path, not $path" 2
@@ -5024,7 +5123,7 @@ cmd_why() {
 JQ
 }
 
-cmd_doctor() {
+cmd_doctor_once() {
   (( $# == 0 )) || die "doctor takes no arguments" 2
   local bad=0 program found
   if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 2) )); then
@@ -5399,7 +5498,7 @@ records_status() {
   return 0
 }
 
-cmd_status() {
+cmd_status_once() {
   need_jq
   locate
   # With floors, status reports every floor, or the floor it names (5.160 point 8).
@@ -5556,7 +5655,7 @@ cmd_restart_locked() {
       || die "restart refuses: the pane of $name is gone, and only down and up make it again" 2
     [[ ${out#* } == "$run" ]] || die "restart refuses: the pane of $name does not carry this run's mark" 2
     [[ ${out%% *} == 1 ]] || die "restart refuses: the program in the pane of $name runs, and restart starts only a seat whose program has ended"
-    ( cmd_exec --print -- "$name" ) > /dev/null 2> "$run_dir/restart.err" \
+    ( exec_data run --print -- "$name" ) > /dev/null 2> "$run_dir/restart.err" \
       || die "restart refuses: $name would not start: $(tail -n 1 "$run_dir/restart.err")"
     panes+=("$pane")
   done

@@ -7709,6 +7709,8 @@ tests=(
   t_generation_floor_rebuild
   t_generation_floor_admission
   t_generation_key_identity
+  t_generation_reader_retry
+  t_generation_exec_values
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

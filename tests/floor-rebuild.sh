@@ -381,3 +381,88 @@ t_generation_key_identity() {
   actual=$(generation_top_floor lodge); actual=${actual%/MANIFEST}; actual=${actual##*/}
   check "[C124] the fresh build's fingerprint differs" test "$(jq -r '.seats[0].fingerprint' "$clone/BUILD/floors/lodge/$actual/keys.json")" != "$expected"
 }
+
+t_generation_reader_retry() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"
+  check "[C125] the reader fixture plans" exit_is 0 wplan
+  check "[C125] the reader fixture builds" exit_is 0 wp build
+  check "[C125] its unchanged target floor starts" exit_is 0 wp up deck
+  (( test_failed == 0 )) || return 1
+  local real_jq old command expected pid result number=0
+  local -a call
+  real_jq=$(command -v jq)
+  mkdir -- "$scratch/reader-bin"
+  printf '%s\n' '#!/usr/bin/env bash' 'for word in "$@"; do' \
+    "  if [[ -f '$scratch/reader-gate' && \$word == \"\$(cat '$scratch/reader-gate')\" ]]; then" \
+    "    : > '$scratch/reader-entered'; while [[ -f '$scratch/reader-gate' ]]; do sleep 0.02; done" \
+    '    break; fi' 'done' "exec '$real_jq' \"\$@\"" > "$scratch/reader-bin/jq"
+  chmod +x -- "$scratch/reader-bin/jq"
+  for command in status why doctor record exec; do
+    case $command in
+      status) call=(status deck); expected=0 ;;
+      why) call=(why "Harbor Keeper" /); expected=0 ;;
+      doctor) call=(doctor); expected=0 ;;
+      record) call=(record verify "Harbor Keeper" 2026-11-18); expected=2 ;;
+      exec) call=(exec --print -- "Harbor Keeper"); expected=0 ;;
+    esac
+    number=$(( number + 1 ))
+    old=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
+    printf '%s\n' "$clone/BUILD/$old/plan.json" > "$scratch/reader-gate"
+    rm -f -- "$scratch/reader-entered"
+    timeout --kill-after=1 30 env PATH="$scratch/reader-bin:$PATH" "$BASH" "$loop" "${call[@]}" > "$scratch/reader-$command.out" 2> "$scratch/reader-$command.error" & pid=$!
+    if ! eventually_long test -e "$scratch/reader-entered"; then
+      fail "[C125] $command did not reach its old-generation read gate"
+      rm -f -- "$scratch/reader-gate"
+      wait "$pid" 2>/dev/null
+      return 1
+    fi
+    check "[C125] publish during the $command read" exit_is 0 wp build lodge
+    mv -- "$clone/BUILD/$old" "$scratch/reader-retired-$number"
+    rm -- "$scratch/reader-gate"
+    result=0; wait "$pid" || result=$?
+    check "[C125] $command retries and preserves its native result" test "$result" = "$expected"
+    check "[C125] $command emits no diagnostic from the retired generation" bash -c '! grep -qF "$1" "$2"' _ "$old" "$scratch/reader-$command.error"
+    if [[ $command == status ]]; then
+      check "[C125] status reports the final published top" grep -qF "$(sha256sum < "$clone/BUILD/MANIFEST" | cut -d' ' -f1)" "$scratch/reader-status.out"
+    elif [[ $command == exec ]]; then
+      check "[C125] exec print still returns its command array" jq -e 'type=="array" and length>0' "$scratch/reader-exec.out"
+    fi
+  done
+  check "[C125] stop the unchanged target" exit_is 0 wp down deck
+}
+
+t_generation_exec_values() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then skip "[C125] final exec PID on an unenforced floor needs an unbarred caller"; return 0; fi
+  scoped_clone
+  floors_clone
+  jq '(.floors[] | select(.key=="bridge")).socket="run"' "$clone/workplace.json" > "$scratch/config-next"
+  mv -- "$scratch/config-next" "$clone/workplace.json"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\0" "$$" "$PWD" "$WPT_TOKEN" > "$1"' > "$root/tools/exec-probe"
+  chmod +x -- "$root/tools/exec-probe"
+  statements_plan "$floors_terms"' | (.programs[0].plan[] | select(.[0]=="floor" and .[1]=="bridge"))[5]="run"
+    | .programs[-1].recorded += [{term:["expect","orchard","-","-","office","WPT_TOKEN"],origin:at(2)}]
+    | terms_of("orchard/barn/grower/seat.typify"; if .[0]=="start" then .[4]=$root+"/harbor/berth" | .[5]=([$root+"/tools/exec-probe",$root+"/harbor/berth/exec-values"]|tojson) else . end)'
+  check "[C125] the exec value fixture plans" exit_is 0 wplan
+  check "[C125] it builds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local payload=$'two words\twith $ and "quotes" = end' s pid result
+  local -a observed
+  s=$(state_of)
+  printf '%s' "$payload" | jq -Rs '{workplace:{WPT_TOKEN:.}}' > "$s/values.json"
+  chmod 0600 -- "$s/values.json"
+  check "[C125] the value-bearing Administration fixture starts" exit_is 0 wp up bridge
+  (( test_failed == 0 )) || return 1
+  check "[C125] print prepares the value expansion without revealing its text" exit_is 0 wp exec --print -- "Orchard Grower"
+  check "[C125] print retains the value placeholder" grep -qF WORKPLACE_VALUE_WPT_TOKEN "$scratch/out"
+  check "[C125] print contains no actual value" bash -c '! grep -qF "$1" "$2"' _ "$payload" "$scratch/out"
+  "$BASH" "$loop" exec -- "Orchard Grower" > "$scratch/exec-native.out" 2> "$scratch/exec-native.error" & pid=$!
+  result=0; wait "$pid" || result=$?
+  check "[C125] the prepared command executes successfully" test "$result" = 0
+  mapfile -d '' -t observed < "$root/harbor/berth/exec-values"
+  check "[C125] the final program retains the public exec process's PID" test "${observed[0]-}" = "$pid"
+  check "[C125] it runs in the declared directory" test "${observed[1]-}" = "$root/harbor/berth"
+  check "[C125] its value retains spaces, tabs, quotes and dollar signs" test "${observed[2]-}" = "$payload"
+  check "[C125] stop the value-bearing fixture" exit_is 0 wp down bridge
+}

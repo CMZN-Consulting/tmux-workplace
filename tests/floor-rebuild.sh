@@ -1029,18 +1029,20 @@ t_generation_bridge_handoff() {
   check "[C132] its destination starts" exit_is 0 wp up deck
   check "[C132] its unenforced bridge starts on the synthetic default socket" exit_is 0 wp up bridge
   (( test_failed == 0 )) || return 1
-  local carrier
-  carrier=$(carrier_pid bridge)
+  local carrier s
+  s=$(state_of) carrier=$(carrier_pid bridge)
   request grower before.grab 'seat: Harbor Keeper'
   check "[C132] the bridge grabs its initial target" carrier_test_answer grower before.grab ok
   check "[C132] the existing target goes down for a real rebuild" exit_is 0 wp down deck
-  statements_plan "$base $harbor_yard"
+  statements_plan "$base $harbor_yard"' | terms_of("harbor/yard/sentry/seat.typify"; if .[0]=="start" then .[5]=(.[5]|fromjson|.[1]="sentinel"|tojson) else . end)'
   check "[C132] an office-floor addition plans" exit_is 0 wplan
   check "[C132] its real floor build publishes while the bridge stays up" exit_is 0 wp build deck
   check "[C132] the rebuilt office floor starts" exit_is 0 wp up deck
   (( test_failed == 0 )) || return 1
+  check "[C132] the new target actually runs its distinctive program" eventually_long on deck screen_has 'Harbor Sentry' 'probe sentinel done'
   request grower added.grab 'seat: Harbor Sentry'
   check "[C132] the old bridge carrier grabs the newly published seat" carrier_test_answer grower added.grab ok
+  check "[C132] its capture is the actual new target, not a reused old pane" grep -qF 'probe sentinel done' "$s/comms/Orchard Grower/answers/added.grab"
   request grower after.write 'seat: Harbor Keeper' --- 'bridge-after-publication'
   check "[C132] the bridge writes through the rebuilt floor server" carrier_test_answer grower after.write ok
   check "[C132] the text reached the actual destination program" eventually_long grep -qF 'bridge-after-publication' "$root/harbor/berth/bridge-typed"

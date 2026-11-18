@@ -181,3 +181,23 @@ t_generation_unpublished_files() {
   check "[C119] removing the planted marker permits its unchanged published generation" exit_is 0 wp up lodge
   check "[C119] stop that synthetic floor" exit_is 0 wp down lodge
 }
+
+t_generation_key_prerequisites() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [m(["key","lodge","east","-","room","held"];2)]'
+  check "[C120] the key prerequisite fixture plans" exit_is 0 wplan
+  check "[C120] the initial build makes a real synthetic key" exit_is 0 wp build
+  local s before after
+  s=$(state_of)
+  before=$(find "$s/floors/lodge/keys" -type f -printf '%P %i %m %s\n' -exec sha256sum -- '{}' \; | sha256sum)
+  check "[C120] generation scratch is absent after publication" bash -c '[[ -z $(find "$1/shared" "$1/floors" -name .work -print) && ! -e $1/key.out ]]' _ "$clone/BUILD"
+  rm -rf -- "$clone/BUILD"
+  mkdir -- "$scratch/key-prerequisite-bin"
+  printf '%s\n' '#!/usr/bin/env bash' 'if [[ ${1-} == --version ]]; then printf "%s\n" "gpg (GnuPG) 2.0.0"; exit 0; fi; exit 2' > "$scratch/key-prerequisite-bin/gpg"
+  chmod +x -- "$scratch/key-prerequisite-bin/gpg"
+  check "[C120] an unavailable supported GnuPG refuses before replacing keys" exit_is 2 env PATH="$scratch/key-prerequisite-bin:$PATH" "$BASH" "$loop" build
+  check "[C120] the refusal names the unsupported prerequisite" said "gpg 2.0.0 found"
+  after=$(find "$s/floors/lodge/keys" -type f -printf '%P %i %m %s\n' -exec sha256sum -- '{}' \; | sha256sum)
+  check "[C120] the existing floor's key files retain their bytes, inodes and modes" test "$before" = "$after"
+}

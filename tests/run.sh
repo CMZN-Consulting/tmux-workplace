@@ -7704,6 +7704,7 @@ tests=(
   t_generation_slices
   t_generation_admission_model
   t_generation_unpublished_files
+  t_generation_key_prerequisites
   t_alias_access_review
   t_floor_blocking_config
   t_unit_invocation_ownership

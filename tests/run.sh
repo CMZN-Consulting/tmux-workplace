@@ -691,12 +691,14 @@ t_environment() {
 }
 
 t_exec_by_hand() {
+  local COLORTERM=truecolor
+  export COLORTERM
   check "build and up" up_fixture
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   check "[C17] exec --print prints the call" exit_is 0 wp exec --print "Harbor Keeper"
   check "[C17] the call starts with env -i" test "$(jq -r '.[0:2] | map(split("/") | last) | join(" ")' "$scratch/out")" = "env -i"
   check "[C17] and runs bubblewrap" test "$(jq -r '[.[] | select(endswith("/bwrap"))] | length' "$scratch/out")" = 1
-  local pane_lines hand_lines hand_env
+  local pane_lines hand_lines hand_env pane_env
   pane_lines=$(screen_of "Harbor Keeper" | grep -vE '^(pid |env |ns |where scratch: |$)')
   local -a same=()
   local name value
@@ -710,8 +712,10 @@ t_exec_by_hand() {
   hand_lines=$(grep -vE '^(pid |env |ns |where scratch: |$)' <<< "$hand_lines")
   check "[C17] exec by hand, from another directory, gives the pane's view" test "$pane_lines" = "$hand_lines"
   [[ $pane_lines == "$hand_lines" ]] || diff <(printf '%s\n' "$pane_lines") <(printf '%s\n' "$hand_lines") | sed 's/^/    | /'
+  pane_env=$(screen_of 'Harbor Keeper' | grep '^env ')
   check "[C17] and, given the pane's inherited names, the pane's environment ($hand_env)" \
-    test "$hand_env" = "$(screen_of 'Harbor Keeper' | grep '^env ')"
+    test "$hand_env" = "$pane_env"
+  [[ $hand_env == "$pane_env" ]] || printf '    | hand: %s\n    | pane: %s\n' "$hand_env" "$pane_env"
   printf '%s\n' ' ' >> "$clone/BUILD/binding.json"
   check "[C17] exec refuses a changed build" exit_is 2 wp exec "Harbor Keeper" < /dev/null
   check "[C17] the refusal says so" said "exec starts a seat only from a verified build"

@@ -426,6 +426,8 @@ t_generation_reader_retry() {
     check "[C125] $command emits no diagnostic from the retired generation" bash -c '! grep -qF "$1" "$2"' _ "$old" "$scratch/reader-$command.error"
     if [[ $command == status ]]; then
       check "[C125] status reports the final published top" grep -qF "$(sha256sum < "$clone/BUILD/MANIFEST" | cut -d' ' -f1)" "$scratch/reader-status.out"
+    elif [[ $command == record ]]; then
+      check "[C125] record verification retains its final refusal diagnostic" grep -qF 'this workplace keeps no record' "$scratch/reader-record.error"
     elif [[ $command == exec ]]; then
       check "[C125] exec print still returns its command array" jq -e 'type=="array" and length>0' "$scratch/reader-exec.out"
     fi

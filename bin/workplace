@@ -2650,8 +2650,17 @@ records_marked() {
   return 1
 }
 
+records_for_view() {
+  local records=$1
+  if [[ -f $b_view ]]; then
+    jq --slurpfile view "$b_view" '
+      .seats |= map(. as $seat | .reads =
+        (first($view[0].seats[] | select(.seat==$seat.seat) | .reach.record) // []))' "$records"
+  else cat -- "$records"; fi
+}
+
 set_records() {
-  local records=$f_gen/records.json made_in state_dir path chain entry binds key slot place
+  local records=$f_gen/records.json made_in state_dir path chain entry binds key slot place effective_records
   [[ -f $records ]] || return 0
   made_in=$(jq -r '.state' "$records")
   state_dir=$(workplace_state "$(jq -r '.workplace' "$records")") && state_dir=$state_dir${run_floor:+/floors/$run_floor} || state_dir=""
@@ -2671,6 +2680,7 @@ set_records() {
   fi
   need_programs_for "a plan that keeps a record" "${LOG_PROGRAMS[@]}" || return 1
   records_marked "$records" || return 1
+  effective_records=$(records_for_view "$records") || return 1
   path=$(jq -r '.path // empty' "$records")
   chain=$(jq -r '.chain // empty' "$records")
   if [[ -n $path ]]; then
@@ -2689,7 +2699,7 @@ set_records() {
     if [[ -n $run_floor && $(jq -r '.slots[(["unenforced"] | tojson)] // ""' <<< "$state") == 1 ]]; then
       floor_record_links "$path" "$entry" "$binds" make || return 1
     fi
-  done < <(jq -c '.seats[]' "$records")
+  done < <(jq -c '.seats[]' <<< "$effective_records")
   if [[ -n $run_floor && $(jq -r '.slots[(["unenforced"] | tojson)] // ""' <<< "$state") == 1 && -n $path ]]; then
     local links_mark links_state
     links_mark=$(jq -r '.slots[(["run"] | tojson)]' <<< "$state")
@@ -4153,7 +4163,7 @@ carrier_watch() {
 
 floor_record_links_refresh() (
   umask 077
-  local floor=$1 mark=$2 top records state_home stamp old='[]' desired='[]' where path row link target actual parent temporary
+  local floor=$1 mark=$2 top records state_home stamp old='[]' desired='[]' where path row link target actual parent temporary effective_records
   [[ -n $floor ]] || return 0
   top=$(sha_of "$build_dir/MANIFEST") || return 1
   build_resolve
@@ -4170,13 +4180,14 @@ floor_record_links_refresh() (
   verify_build "$floor" > /dev/null || return 1
   [[ $(floor_spec | jq -r '.[4]') == unenforced ]] || return 0
   path=$(jq -r '.path // empty' "$records")
+  effective_records=$(records_for_view "$records") || return 1
   if [[ -n $path ]]; then
     where=$(jq -c -L "$build_dir/libexec" --slurpfile b "$build_dir/binding.json" '
       include "table"; floor_index($b[0]) as $ix
       | [plan_terms[] | .term | select(.[0]=="pane") | {key:.[4],value:term_floor($b[0];$ix)}] | from_entries' "$b_plan") || return 1
     desired=$(jq -c --arg path "$path" --arg root "${state_home%/floors/*}" --argjson where "$where" '
       [.seats[] as $seat | $seat.reads[] as $name | select($where[$name]!=null)
-       | {path:($path+"/"+$seat.name+"/"+$name),target:($root+"/floors/"+$where[$name]+"/records/"+$name)}]' "$records") || return 1
+       | {path:($path+"/"+$seat.name+"/"+$name),target:($root+"/floors/"+$where[$name]+"/records/"+$name)}]' <<< "$effective_records") || return 1
   fi
   while IFS= read -r row; do
     link=$(jq -r .path <<< "$row") target=$(jq -r .target <<< "$row") parent=${link%/*}

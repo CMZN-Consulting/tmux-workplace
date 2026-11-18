@@ -7766,6 +7766,7 @@ tests=(
   t_carrier_cross_floor
   t_carrier_closed_wakes
   t_carrier_record_links
+  t_carrier_record_view_reload
   t_wake_floors
   t_carrier_floors
   t_floors_readers

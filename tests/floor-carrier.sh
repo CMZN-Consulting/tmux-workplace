@@ -671,3 +671,35 @@ t_carrier_pipe_timeout() {
   check "[C115] the native server has a pipe rather than an invented success" test "$(T display-message -p -t "$pane" '#{pane_pipe}')" = 1
   check "[C115] stop the fixture" exit_is 0 wp down
 }
+
+t_carrier_record_view_reload() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/records" "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["record","-","-","-","workplace","pane","kept"];2),
+    m(["record-path","records"];3),m(["record-chain","file"];4),
+    m(["reach","orchard","barn","grower","seat","record","harbor","dock","keeper","seat","allowed"];5)]'
+  check "[C112] shared record-view fixture plans" exit_is 0 wplan
+  check "[C112] fixture builds" exit_is 0 wp build
+  check "[C112] start Administration on its synthetic default socket" exit_is 0 wp up bridge
+  local old next before records record_view=$root/records/Orchard\ Grower
+  old=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
+  records=$(sed -n 's|^[0-9a-f]\{64\}  \(floors/bridge/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")/records.json
+  before=$(sha256sum < "$clone/BUILD/$records")
+  check "[C112] Administration initially sees the old authorized record" test -L "$record_view/Harbor Keeper"
+  check "[C112] the replacement record is initially absent" test ! -e "$record_view/Harbor Pilot"
+  next=$scratch/record-shared-next;cp -a -- "$clone/BUILD/$old" "$next"
+  jq '(.seats[] | select(.seat==["orchard","barn","grower"])).reach.record=["Harbor Pilot"]' "$next/plan-view.json" > "$scratch/record-shared-view"
+  mv -f -- "$scratch/record-shared-view" "$next/plan-view.json"
+  carrier_test_shared_manifest "$next"
+  check "[C112] publish only the changed shared reach table" carrier_test_publish_shared "$next" 60
+  check "[C112] the carrier creates the newly authorized link without rebuilding Administration" eventually_long test -L "$record_view/Harbor Pilot"
+  check "[C112] the revoked link is removed by the same refresh" test ! -L "$record_view/Harbor Keeper"
+  check "[C112] the floor's own sealed metadata stayed byte for byte" test "$(sha256sum < "$clone/BUILD/$records")" = "$before"
+  check "[C112] stop Administration after the shared update" exit_is 0 wp down bridge
+  check "[C112] start it again from the same own generation" exit_is 0 wp up bridge
+  check "[C112] up also resolves record reads from the current shared view" test -L "$record_view/Harbor Pilot"
+  check "[C112] up does not recreate the revoked cached read" test ! -L "$record_view/Harbor Keeper"
+  check "[C112] stop the fixture" exit_is 0 wp down bridge
+}

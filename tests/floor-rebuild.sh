@@ -29,7 +29,7 @@ BASH
 t_generations_entry_lock() {
   scoped_clone
   floors_clone
-  statements_plan "$floors_terms"' | (.programs[] | select(.path=="harbor/dock/keeper/seat.typify") | .plan[1].term[5])=(["/usr/bin/true"]|tojson)'
+  statements_plan "$floors_terms"
   check "[C117] generations lock fixture plans" exit_is 0 wplan
   check "[C117] fixture builds" exit_is 0 wp build
   local real_tmux s action pid kind selected_locale=C
@@ -49,6 +49,7 @@ t_generations_entry_lock() {
     kind=new-session
     local -a arguments=(up deck)
     if [[ $action == restart ]]; then
+      check "[C117] end the selected synthetic program before restart" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" C-c
       check "[C117] the selected program has ended before restart" eventually_long on deck dead_pane "Harbor Keeper"
       kind=respawn-pane arguments=(restart deck "Harbor Keeper")
     fi

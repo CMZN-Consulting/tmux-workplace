@@ -562,7 +562,18 @@ t_carrier_index_reload() {
     m(["record-path","records"];4),m(["record-chain","file"];5)]'
   check "[C114] index reload fixture plans" exit_is 0 wplan
   check "[C114] fixture builds" exit_is 0 wp build
-  check "[C114] start only the source floor" exit_is 0 wp up deck
+  local real_flock
+  real_flock=$(command -v flock)
+  mkdir -- "$scratch/reload-flock"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "if [[ \${!#} == 8 && -f '$scratch/reload-pause' ]]; then" \
+    "  rm -- '$scratch/reload-pause'; printf '%s\\n' \"\$PPID\" > '$scratch/reload-paused'" \
+    '  kill -STOP "$PPID"' \
+    "  while [[ ! -e '$scratch/reload-release' ]]; do sleep 0.05; done" \
+    'fi' \
+    "exec '$real_flock' \"\$@\"" > "$scratch/reload-flock/flock"
+  chmod +x -- "$scratch/reload-flock/flock"
+  check "[C114] start only the source floor" exit_is 0 env PATH="$scratch/reload-flock:$PATH" "$BASH" "$loop" up deck
   local s old next pid id day file expected
   s=$(state_of) pid=$(carrier_pid deck)
   request keeper unknown.md "to: Lodge Ivo" "subject: unknown before publication" --- body
@@ -588,11 +599,26 @@ t_carrier_index_reload() {
   check "[C114] the previous route is no longer authorized" answered keeper removed.md "refused the plan does not let Harbor Keeper mail Lodge Ida, so the mail goes to none"
   check "[C114] reloading keeps the same live carrier process" test "$(carrier_pid deck)" = "$pid"
   next=$scratch/shared-next-51;cp -a -- "$clone/BUILD/shared/50" "$next"
+  jq '(.seats[] | select(.name=="Harbor Keeper")).reach.mail=["Lodge Ida"]' "$next/mail.json" > "$scratch/race-mail.json"
+  mv -f -- "$scratch/race-mail.json" "$next/mail.json"
+  carrier_test_shared_manifest "$next"
+  : > "$scratch/reload-pause"
+  trap ': > "$scratch/reload-release"; kill -CONT "$pid" 2>/dev/null; cleanup || exit 1' EXIT
+  request keeper race.md "to: Lodge Ivo" "subject: revoke before store hold" --- body
+  check "[C114] the real carrier reaches its store take after reading the previous index" eventually_long test -s "$scratch/reload-paused"
+  check "[C114] the source is stopped before its lock acquisition" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
+  check "[C114] publish the route revocation before the carrier takes the store lock" carrier_test_publish_shared "$next" 51
+  : > "$scratch/reload-release"
+  check "[C114] resume the carrier at its actual store take" kill -CONT "$pid"
+  trap 'cleanup || exit 1' EXIT
+  check "[C114] the request is decided under the new index, not the stale authorized one" answered keeper race.md "refused the plan does not let Harbor Keeper mail Lodge Ivo, so the mail goes to none"
+  check "[C114] that stale pass created no delivery commit" test "$(store_commits)" = 1
+  next=$scratch/shared-next-52;cp -a -- "$clone/BUILD/shared/51" "$next"
   cp -- "$next/mail.json" "$scratch/repair-mail.json"
   carrier_test_shared_manifest "$next"
   printf '%s\n' corrupt >> "$next/mail.json"
-  check "[C114] publish a shared generation whose mail bytes fail its sealed hash" carrier_test_publish_shared "$next" 51
-  request keeper held.md "to: Lodge Ivo" "subject: retained during invalid snapshot" --- body
+  check "[C114] publish a shared generation whose mail bytes fail its sealed hash" carrier_test_publish_shared "$next" 52
+  request keeper held.md "to: Lodge Ida" "subject: retained during invalid snapshot" --- body
   check "[C114] the carrier reports the invalid snapshot" eventually_long grep -qF 'the carrier could not verify the changed build' "$run/deck/carrier.log"
   sleep 2
   check "[C114] a failed snapshot leaves the request untaken and unanswered" bash -c '[[ -f $1/out/held.md && ! -e $1/answers/held.md ]]' _ "$s/comms/Harbor Keeper"
@@ -606,7 +632,7 @@ t_carrier_index_reload() {
   check "[C114] the record chain continues while the index is refused" eventually_long bash -c '
     jq -e --arg rel "$2" --argjson offset "$3" ".files[\$rel].offset>=\$offset" "$1" >/dev/null
   ' _ "$s/floors/deck/records/chain.state" "Harbor Keeper/$day.pane" "$expected"
-  cp -- "$scratch/repair-mail.json" "$clone/BUILD/shared/51/mail.json"
+  cp -- "$scratch/repair-mail.json" "$clone/BUILD/shared/52/mail.json"
   check "[C114] repairing the snapshot resumes the retained request" answered_ok keeper held.md
   check "[C114] recovery kept the same carrier process" test "$(carrier_pid deck)" = "$pid"
   check "[C114] stop the synthetic floor" exit_is 0 wp down deck

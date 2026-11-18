@@ -1759,7 +1759,7 @@ generation_state_entries() {
   local -a files=() dirs=()
   for name in build.lock build.holder generations.lock generation.next; do files+=("$state_dir/$name"); done
   if [[ -n $floor ]]; then
-    for name in up.lock up.holder type.lock carrier.lock comms/record comms/serving comms/serving.new; do files+=("$state_dir/floors/$floor/$name"); done
+    for name in up.lock up.holder type.lock carrier.lock comms/record comms/serving comms/serving.new comms/.pointing.new; do files+=("$state_dir/floors/$floor/$name"); done
     dirs=("$state_dir/floors/$floor/comms" "$state_dir/floors/$floor/comms/taken" "$state_dir/floors/$floor/comms/.pointing")
     for path in "${dirs[@]}"; do
       [[ -e $path || -L $path ]] || continue
@@ -5540,7 +5540,7 @@ seats_report() {
       state_path=$(jq -r '.state' "$b_mail")
       if [[ $b_layout == generations ]]; then pointer_files=("$state_path"/floors/*/comms/.pointing/*)
       else pointer_files=("$state_path"/comms/.pointing/*); fi
-      if (( ${#pointer_files[@]} )); then pointed=$(jq -s '[.[] | select(.outcome == "ok")]' "${pointer_files[@]}") || pointed='[]'; fi
+      if (( ${#pointer_files[@]} )); then pointed=$(jq -s '[.[] | select(.outcome == "ok")]' "${pointer_files[@]}" 2> /dev/null) || pointed='[]'; fi
       jq -r --argjson pointed "$pointed" --slurpfile w "$file" '
         (reduce $pointed[] as $p ($w[0];
           if .seats[$p.box] == null then . else

@@ -15,6 +15,7 @@ def generation_slices:
   | .view as $view
   | .conf as $conf
   | .plan as $plan
+  | .root as $root
   | $plan
   | floor_index($binding) as $ix
   | plan_terms as $terms
@@ -27,6 +28,10 @@ def generation_slices:
       floors:$floors,
       globals:{workplace:[$terms[] | select(.term[0]=="workplace" or .term[0]=="server") | .term],
                 mail:($view.mail // null),records:($view.records // null),
+                labels:([$terms[] | select(.term[0]=="label")
+                         | {path:(.term[1]|joined_path($root)),
+                            value:(if .term[2]=="closed" then "closed" else (.term[2]|tonumber) end)}]
+                        | unique_by([.path,.value])),
                 environment:[$plan.state[$binding.tables.environment.cell][]?
                              | select(generation_floor_of($ix;.key[0])==null)]},
       names:$by_name,
@@ -75,9 +80,10 @@ def generation_rebuild_faults($new; $floor):
        | first(($old.slices[$other]|keys[]) as $member
                | select($old.slices[$other][$member]!=$new.slices[$other][$member])
                | {kind:"slice",floor:$other,member:$member,reason:"another floor's slice changed"})),
-      (if ([$old.relations[] | select(.action=="mail" and .from_floor!=$floor and .to_floor!=$floor)])
-          !=([$new.relations[] | select(.action=="mail" and .from_floor!=$floor and .to_floor!=$floor)])
-       then {kind:"unrelated-mail",reason:"a mail pair with neither end on the requested floor changed"} else empty end)
+      ((["mail","grab","write","record"][]) as $action
+       | if ([$old.relations[] | select(.action==$action and .from_floor!=$floor and .to_floor!=$floor)])
+           !=([$new.relations[] | select(.action==$action and .from_floor!=$floor and .to_floor!=$floor)])
+         then {kind:("unrelated-"+$action),reason:("a "+$action+" pair with neither end on the requested floor changed")} else empty end)
     ];
 
 if $operation=="project" then

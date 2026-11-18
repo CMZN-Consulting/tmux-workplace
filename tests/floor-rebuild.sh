@@ -76,8 +76,8 @@ t_generations_entry_lock() {
 
 generation_test_project() {
   jq -c --slurpfile binding "$tool/host/binding.json" --slurpfile view "$2" \
-    --argjson conf '{"deck":"deck-conf","bridge":"bridge-conf","lodge":"lodge-conf"}' \
-    '{plan:.,binding:$binding[0],view:$view[0],conf:$conf}' "$1" \
+    --argjson conf '{"deck":"deck-conf","bridge":"bridge-conf","lodge":"lodge-conf"}' --arg root "$root" \
+    '{plan:.,binding:$binding[0],view:$view[0],conf:$conf,root:$root}' "$1" \
     | jq -c -L "$tool/libexec" --arg operation project -f "$tool/libexec/generations.jq" > "$3"
 }
 
@@ -145,6 +145,16 @@ t_generation_admission_model() {
   check "[C118] a shared mail pair touching the requested floor is permitted" jq -e 'length==0' "$faults"
   generation_test_faults "$base" "$next" lodge "$faults"
   check "[C118] that same pair is refused for an unrelated requested floor" jq -e 'any(.[]; .kind=="unrelated-mail")' "$faults"
+  local action
+  for action in grab write record; do
+    jq --arg action "$action" '.relations += [{from:"Orchard Grower",from_floor:"bridge",to:"Harbor Keeper",to_floor:"deck",action:$action}] | .relations |= sort_by([.from,.action,.to])' "$base" > "$next"
+    generation_test_faults "$base" "$next" deck "$faults"
+    check "[C118] a shared $action pair touching the requested floor is permitted" jq -e 'length==0' "$faults"
+    generation_test_faults "$base" "$next" lodge "$faults"
+    check "[C118] an unrelated $action pair requires a whole build" jq -e --arg kind "unrelated-$action" 'any(.[]; .kind==$kind)' "$faults"
+    generation_test_faults "$next" "$base" lodge "$faults"
+    check "[C118] removing an unrelated $action pair also requires a whole build" jq -e --arg kind "unrelated-$action" 'any(.[]; .kind==$kind)' "$faults"
+  done
   jq '.slices.deck.conf="new-conf"' "$base" > "$next"
   generation_test_faults "$base" "$next" deck "$faults"
   check "[C118] the requested floor may replace its own configuration bytes" jq -e 'length==0' "$faults"
@@ -312,6 +322,9 @@ t_generation_floor_admission() {
     'another floor command|terms_of("harbor/dock/keeper/seat.typify"; if .[0]=="start" then .[5]=(["/usr/bin/true"]|tojson) else . end)|slice of floor deck (terms)'
     'another floor environment|.state.environment += [{key:["harbor","dock","keeper","WPT_ADMISSION"],value:["changed"],masked:false,origin:at(22)}]|slice of floor deck (environment)'
     'unrelated mail|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","mail","harbor","dock","keeper","seat","allowed"];23)]|unrelated-mail'
+    'unrelated grab|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","grab","harbor","dock","keeper","seat","allowed"];24)]|unrelated-grab'
+    'unrelated write|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","write","harbor","dock","keeper","seat","allowed"];25)]|unrelated-write'
+    'unrelated record|.programs[-1].recorded += [m(["reach","orchard","barn","grower","seat","record","harbor","dock","keeper","seat","allowed"];26)]|unrelated-record'
   )
   for entry in "${changes[@]}"; do
     title=${entry%%|*} entry=${entry#*|} change=${entry%|*} expected=${entry##*|}
@@ -344,6 +357,54 @@ t_generation_floor_admission() {
   check "[C123] restore the source edition" exit_is 0 wplan
   check "[C123] every admission refusal left BUILD unchanged" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
   check "[C123] every admission refusal left the counter unchanged" test "$(cat "$s/generation.next")" = "$count"
+}
+
+t_generation_label_admission() {
+  scoped_clone
+  floors_clone
+  local policy baseline s count before base=$scratch/label-base next=$scratch/label-next value change
+  policy=' | .programs[-1].recorded = [sc(1), st("-";"-";"-";"workplace";"/";"searchable-only";2)]'
+  statements_plan "$floors_terms $policy"
+  check "[C123] the searchable-only label fixture plans" exit_is 0 wplan
+  check "[C123] its initial whole build succeeds" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  s=$(state_of) count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
+  generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
+  for value in closed 1; do
+    statements_plan "$floors_terms $policy"' | .programs[-1].recorded += [lb("harbor/private";"'"$value"'";3)]'
+    check "[C123] adding a $value label below searchable-only plans" exit_is 0 wplan
+    (( test_failed == 0 )) || return 1
+    generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$next"
+    check "[C123] the $value label changes no private floor slice" generation_test_changes "$base" "$next" '[]'
+    check "[C123] the shared projection keeps the joined $value label" jq -e --arg path "$root/harbor/private" --argjson value "$(if [[ $value == closed ]]; then printf '"closed"'; else printf '%s' "$value"; fi)" \
+      '.globals.labels==[{path:$path,value:$value}]' "$next"
+    check "[C123] a new $value label requires a whole build" exit_is 1 wp build lodge
+    check "[C123] that refusal identifies the global labels" said 'global (labels)'
+    check "[C123] rejecting a $value label preserves BUILD" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
+    check "[C123] rejecting a $value label allocates no generation" test "$(cat "$s/generation.next")" = "$count"
+  done
+  baseline="$floors_terms $policy"' | .programs[-1].recorded += [lb("harbor/private";"1";3),lb("orchard/private";"closed";4)]'
+  statements_plan "$baseline"
+  check "[C118] a labelled baseline plans" exit_is 0 wplan
+  generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
+  statements_plan "$baseline"' | .programs[-1].recorded |= (map(if .term[0]=="label" then .term[1]=($root+"/"+.term[1]) | .origin=at(999) else . end) | reverse) | .programs[-1].recorded += [.programs[-1].recorded[0]]'
+  check "[C118] reordered duplicate labels with absolute paths plan" exit_is 0 wplan
+  generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$next"
+  check "[C118] label origins, spelling, order and identical duplicates leave the projection unchanged" jq -ne --slurpfile a "$base" --slurpfile b "$next" '$a[0]==$b[0]'
+  check "[C123] remove the synthetic unlabelled build for a labelled whole build" exit_is 0 wp unbuild
+  statements_plan "$baseline"
+  check "[C123] the labelled whole-build edition plans" exit_is 0 wplan
+  check "[C123] the labelled edition builds as a whole" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
+  for change in 'map(select(.term[0]!="label"))' 'map(if .term[0]=="label" and .term[2]=="1" then .term[2]="2" else . end)'; do
+    statements_plan "$baseline | .programs[-1].recorded |= ($change)"
+    check "[C123] removing or relabelling under searchable-only plans" exit_is 0 wplan
+    check "[C123] removing or relabelling requires a whole build" exit_is 1 wp build lodge
+    check "[C123] removing or relabelling identifies global labels" said 'global (labels)'
+    check "[C123] removing or relabelling preserves BUILD" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
+    check "[C123] removing or relabelling allocates no generation" test "$(cat "$s/generation.next")" = "$count"
+  done
 }
 
 t_generation_key_identity() {
@@ -860,6 +921,7 @@ t_generation_state_refusals() {
     'floors/lodge/up.holder|file|644' 'floors/lodge/type.lock|file|644'
     'floors/lodge/comms/record|file|644' 'floors/lodge/comms/serving|dir|700'
     'floors/lodge/comms/serving.new|file|644' 'floors/lodge/comms/.pointing|dir|755'
+    'floors/lodge/comms/.pointing.new|file|644' 'floors/lodge/comms/.pointing.new|link|600'
     'floors/lodge/comms/serving|link|600' 'floors/lodge/comms/.pointing/bad.json|file|644'
   )
   s=$(state_of)

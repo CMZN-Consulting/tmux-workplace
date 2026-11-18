@@ -261,6 +261,7 @@ t_generation_large_document() {
   mkdir -p -- "$root/mailbox" "$root/records"
   statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
     m(["reach","orchard","-","-","office","record","harbor","-","-","office","allowed"];20),
+    m(["reach","orchard","barn","picker","seat","mail","orchard","barn","grower","seat","allowed"];24),
     m(["record","-","-","-","workplace","pane","kept"];21),
     m(["record-path","records"];22), m(["record-chain","file"];23)]
     | .programs[-1].recorded += [range(100;1300) as $line | st("-";"-";"-";"workplace";"/";"read-only";$line)]'

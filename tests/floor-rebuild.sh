@@ -768,3 +768,78 @@ t_generation_pause_isolation() {
   check "[C128] the key generation resumes and publishes" test "$result" = 0
   check "[C128] end the restarted witness" exit_is 0 wp down deck
 }
+
+t_generation_live_handoff() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/records"
+  local extra='| ([.programs[] | select(.path=="lodge/west/ivo/seat.typify")][0]
+    | .path="lodge/west/ira/seat.typify"
+    | .plan |= map(if type=="object" then .term[3]="ira" else .[3]="ira" | if .[0]=="pane" then .[4]="Lodge Ira" else . end end)) as $ira
+    | .programs=.programs[0:-1]+[$ira]+.programs[-1:]'
+  local base="$floors_terms $lodge_west $harbor_yard | $comms_terms"'
+    | terms_of("harbor/dock/keeper/seat.typify"; if .[0]=="start" then .[5]=(.[5]|fromjson|.+["typed="+$root+"/harbor/berth/typed"]|tojson) else . end)
+    | .programs[-1].recorded += [
+      m(["reach","harbor","-","-","office","mail","lodge","-","-","floor","allowed"];2),
+      m(["reach","lodge","-","-","floor","mail","harbor","-","-","office","allowed"];3),
+      m(["reach","harbor","-","-","office","grab","lodge","-","-","floor","allowed"];4),
+      m(["record","-","-","-","workplace","pane","kept"];5),
+      m(["record-path","records"];6),m(["record-chain","file"];7),
+      m(["key","harbor","dock","-","room","held"];8),m(["key","lodge","west","-","room","held"];9)]'
+  statements_plan "$base"
+  check "[C129] the live handoff fixture plans" exit_is 0 wplan
+  check "[C129] it builds with records, keys and cross-floor mail" exit_is 0 wp build
+  check "[C129] the witness starts" exit_is 0 wp up deck
+  check "[C129] the changing floor starts" exit_is 0 wp up lodge
+  (( test_failed == 0 )) || return 1
+  local s line server carrier panes agent home private prefix day file gaps edition key previous next id
+  s=$(state_of) line=$(generation_top_floor deck) server=$(on deck T display-message -p '#{pid}') carrier=$(carrier_pid deck)
+  panes=$(on deck T list-panes -a -F '#{pane_id} #{pane_pid}')
+  home=$s/floors/deck/keys/01
+  agent=$(gpg-connect-agent --homedir "$home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')
+  check "[C129] the witness's actual key agent is identified" test -n "$agent"
+  private=$(generation_tree_digest "$clone/BUILD/floors/deck" "$home/private-keys-v1.d")
+  day=$(date -u +%F) file=$s/floors/deck/records/Harbor\ Keeper/$day.pane
+  check "[C129] the witness's pane record stands" eventually_long test -s "$file"
+  gaps=$(sha256sum < "$s/floors/deck/records/Harbor Keeper/gaps")
+  check "[C129] the old index refuses a seat that does not yet exist" bash -c '[[ ! -e $1/comms/"Lodge Ira" ]]' _ "$s"
+  for edition in added removed; do
+    cp -- "$file" "$scratch/record-prefix"
+    prefix=$(stat -c %s -- "$scratch/record-prefix")
+    previous=$(jq -r '.seats[0].fingerprint' "$clone/BUILD/$(generation_top_floor lodge | sed 's/^[^ ]*  //;s|/MANIFEST$||')/keys.json")
+    check "[C129] down the changing floor for $edition" exit_is 0 wp down lodge
+    if [[ $edition == added ]]; then statements_plan "$base $extra"
+    else statements_plan "$base $extra"' | .programs |= map(select(.path | startswith("lodge/east/") | not))'; fi
+    check "[C129] the $edition edition plans" exit_is 0 wplan
+    check "[C129] the actual floor publisher commits $edition" exit_is 0 wp build lodge
+    (( test_failed == 0 )) || return 1
+    next=$(jq -r '.seats[0].fingerprint' "$clone/BUILD/$(generation_top_floor lodge | sed 's/^[^ ]*  //;s|/MANIFEST$||')/keys.json")
+    check "[C129] the changed floor receives a fresh key for $edition" test "$next" != "$previous"
+    request keeper "handoff-$edition.md" 'to: Lodge Ira' 'subject: live handoff' --- body
+    check "[C129] the old live carrier admits the new edition's seat while its floor is down" carrier_test_answer keeper "handoff-$edition.md" ok
+    id=$(answer_of keeper "handoff-$edition.md"); id=${id#ok }
+    check "[C129] the writer and reader retain their own identities after $edition" bash -c '[[ -f $1/mail/"Lodge Ira"/in/$2.md && -f $1/mail/"Harbor Keeper"/sent/$2.md ]]' _ "$s" "$id"
+    if [[ $edition == removed ]]; then
+      request keeper old-seat.md 'to: Lodge Ida' 'subject: removed' --- body
+      check "[C129] the live carrier refuses the removed seat" carrier_test_answer keeper old-seat.md 'refused name 1 of its to line is not a seat the plan makes, by its exact name, so the mail goes to none'
+    fi
+    request ira "waiting-$edition.md" 'to: Harbor Keeper' 'subject: own floor down' --- body
+    sleep 1
+    check "[C129] the down floor's writer stays waiting after $edition" test -f "$s/comms/Lodge Ira/out/waiting-$edition.md"
+    check "[C129] start the actual $edition edition" exit_is 0 wp up lodge
+    check "[C129] the resumed destination carrier serves its waiting writer" carrier_test_answer ira "waiting-$edition.md" ok
+    check "[C129] $edition preserves the witness's top entry" test "$(generation_top_floor deck)" = "$line"
+    check "[C129] $edition preserves the witness's immutable tree and private keys" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$home/private-keys-v1.d")" = "$private"
+    check "[C129] $edition preserves every witness pane's id and process" test "$(on deck T list-panes -a -F '#{pane_id} #{pane_pid}')" = "$panes"
+    check "[C129] $edition preserves the witness server and carrier" test "$(on deck T display-message -p '#{pid}')/$(carrier_pid deck)" = "$server/$carrier"
+    check "[C129] $edition preserves the actual witness key agent" test "$(gpg-connect-agent --homedir "$home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')" = "$agent"
+    check "[C129] $edition retains all previous recorded bytes as a prefix" bash -c 'head -c "$1" -- "$2" | cmp -s -- - "$3"' _ "$prefix" "$file" "$scratch/record-prefix"
+    check "[C129] type a witness marker after $edition" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" "handoff-$edition" Enter
+    check "[C129] output after $edition is still recorded" eventually_long grep -qF "handoff-$edition" "$file"
+    check "[C129] $edition adds no recording gap" test "$(sha256sum < "$s/floors/deck/records/Harbor Keeper/gaps")" = "$gaps"
+    check "[C129] $edition needs no witness restart" test ! -e "$s/floors/deck/restarts"
+  done
+  check "[C129] stop the rebuilt floor" exit_is 0 wp down lodge
+  check "[C129] stop the witness and its key agent" exit_is 0 wp down deck
+  check "[C129] the complete witness chain verifies after both publications" exit_is 0 wp record verify 'Harbor Keeper' "$day"
+}

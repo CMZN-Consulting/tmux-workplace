@@ -2,7 +2,7 @@ name: tmux compatibility
 
 on:
   push:
-    branches: [w1-loop]
+    branches: [w1-loop, pr/stop4c-preweek-2026-11-18]
   workflow_dispatch:
 
 permissions:

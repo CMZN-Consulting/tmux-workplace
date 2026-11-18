@@ -3453,9 +3453,9 @@ generation_leftover_report() {
     if [[ $relative == floors/* ]]; then
       floor=${relative#floors/}; floor=${floor%%/*}
       [[ $relative != "${b_floor[$floor]-}" ]] || continue
-      printf '%-8s%s: a generation no top names; nothing reads it, and a later build of %s removes it when no up holds the generations lock\n' "$prefix" "$dir" "$floor"
+      printf '%-8s%s: a generation the current top does not name; a retained reader may still use it, and a later build of %s removes it when no up or restart holds the generations lock\n' "$prefix" "$dir" "$floor"
     else
-      printf '%-8s%s: a generation no top names; nothing reads it, and a later build of any floor removes it when no up holds the generations lock\n' "$prefix" "$dir"
+      printf '%-8s%s: a generation the current top does not name; a retained reader may still use it, and a later build of any floor removes it when no up or restart holds the generations lock\n' "$prefix" "$dir"
     fi
   done
 }

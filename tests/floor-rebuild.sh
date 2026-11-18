@@ -413,6 +413,52 @@ t_generation_label_admission() {
   done
 }
 
+t_generation_ssh_admission() {
+  scoped_clone
+  floors_clone
+  mkdir -- "$root/ssh-fixture"
+  printf '%s\n' 'synthetic non-key data' > "$root/ssh-fixture/first"
+  printf '%s\n' 'another synthetic non-key file' > "$root/ssh-fixture/second"
+  local baseline="$floors_terms"' | .programs[-1].recorded = [
+    st("-";"-";"-";"workplace";"/";"searchable-only";1),
+    {term:["ssh-key","account","ssh-fixture/first"],origin:at(2)},
+    {term:["ssh-key","orphan","ssh-fixture/second"],origin:at(3)}]'
+  statements_plan "$baseline"
+  check "[C123] the ungranted key declaration fixture plans" exit_is 0 wplan
+  check "[C123] no fixture seat is granted either key" jq -e 'all(.seats[]; ((.ssh.granted // [])|length)==0)' "$clone/PLAN/view.json"
+  check "[C123] a whole build accepts ungranted canonical non-key files without parsing them" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local base=$scratch/ssh-base next=$scratch/ssh-next s count before change
+  generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
+  check "[C123] the global projection retains both joined declarations" jq -e --arg root "$root" \
+    '.globals.ssh_keys==[{name:"account",path:($root+"/ssh-fixture/first")},{name:"orphan",path:($root+"/ssh-fixture/second")}]' "$base"
+  statements_plan "$baseline"' | .programs[-1].recorded |= (map(if .term[0]=="ssh-key" then .term[2]=($root+"/"+.term[2]) | .origin=at(999) else . end) | reverse) | .programs[-1].recorded += [.programs[-1].recorded[0]]'
+  check "[C123] equivalent key spellings, order, origins and duplicates plan" exit_is 0 wplan
+  generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$next"
+  check "[C118] equivalent ungranted declarations preserve the whole projection" jq -ne --slurpfile a "$base" --slurpfile b "$next" '$a[0]==$b[0]'
+  check "[C123] equivalent declarations permit an ordinary floor build" exit_is 0 wp build lodge
+  (( test_failed == 0 )) || return 1
+  s=$(state_of) count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
+  local -a changes=(
+    'map(select(.term[0]!="ssh-key" or .term[1]!="orphan"))'
+    'map(if .term[0]=="ssh-key" and .term[1]=="account" then .term[2]="ssh-fixture/second" else . end)'
+    'map(if .term[0]=="ssh-key" and .term[1]=="orphan" then .term[1]="renamed" else . end)'
+    '. + [{term:["ssh-key","added","ssh-fixture/first"],origin:at(4)}]'
+  )
+  for change in "${changes[@]}"; do
+    statements_plan "$baseline | .programs[-1].recorded |= ($change)"
+    check "[C123] changing an ungranted key declaration is a valid plan" exit_is 0 wplan
+    (( test_failed == 0 )) || return 1
+    generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$next"
+    check "[C118] an ungranted declaration change alters no private floor slice" generation_test_changes "$base" "$next" '[]'
+    check "[C123] changing an ungranted key declaration requires a whole build" exit_is 1 wp build lodge
+    check "[C123] that refusal names the repeated ssh key declarations" said 'global (ssh_keys)'
+    check "[C123] refusing an ungranted key change preserves BUILD" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
+    check "[C123] refusing an ungranted key change allocates no generation" test "$(cat "$s/generation.next")" = "$count"
+    (( test_failed == 0 )) || return 1
+  done
+}
+
 t_generation_key_identity() {
   scoped_clone
   floors_clone
@@ -637,6 +683,8 @@ t_generation_phase_reports() {
   check "[C127] marker recovery leaves the counter alone" test "$(cat "$s/generation.next")" = "$next"
   check "[C127] a stale successful build holder is not a running build" exit_is 0 wp status lodge
   check "[C127] the old unnamed directory is reported" said "left    $clone/BUILD/floors/lodge/777:"
+  check "[C127] a leftover report allows for a retained snapshot reader" said 'the current top does not name; a retained reader may still use it'
+  check "[C127] cleanup wording names both shared-lock reader commands" said 'when no up or restart holds the generations lock'
   check "[C127] a leftover alone does not make doctor bad" exit_is 0 wp doctor
   check "[C127] doctor names that leftover as a note" said "note    $clone/BUILD/floors/lodge/777:"
   mkdir -p -- "$clone/BUILD/floors/bridge/888/.work" "$scratch/phase-bin"

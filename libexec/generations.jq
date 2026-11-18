@@ -32,6 +32,9 @@ def generation_slices:
                          | {path:(.term[1]|joined_path($root)),
                             value:(if .term[2]=="closed" then "closed" else (.term[2]|tonumber) end)}]
                         | unique_by([.path,.value])),
+                ssh_keys:([$plan.programs[]?.recorded[]? | select(.term[0]?=="ssh-key")
+                           | {name:.term[1],path:(.term[2]|joined_path($root))}]
+                          | unique_by([.name,.path])),
                 environment:[$plan.state[$binding.tables.environment.cell][]?
                              | select(generation_floor_of($ix;.key[0])==null)]},
       names:$by_name,

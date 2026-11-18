@@ -7728,6 +7728,7 @@ tests=(
   t_generation_floor_rebuild
   t_generation_floor_admission
   t_generation_label_admission
+  t_generation_ssh_admission
   t_generation_key_identity
   t_generation_reader_retry
   t_generation_exec_values

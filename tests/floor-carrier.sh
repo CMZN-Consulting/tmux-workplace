@@ -694,6 +694,9 @@ t_carrier_record_view_reload() {
   mv -f -- "$scratch/record-shared-view" "$next/plan-view.json"
   carrier_test_shared_manifest "$next"
   check "[C112] publish only the changed shared reach table" carrier_test_publish_shared "$next" 60
+  local published_top
+  published_top=$(sha256sum < "$clone/BUILD/MANIFEST"); published_top=${published_top%% *}
+  check "[C112] the carrier finishes its refresh for the published top" eventually_long jq -e --arg top "$published_top" '.top==$top' "$(state_of)/floors/bridge/links.state"
   check "[C112] the carrier creates the newly authorized link without rebuilding Administration" eventually_long test -L "$record_view/Harbor Pilot"
   check "[C112] the revoked link is removed by the same refresh" test ! -L "$record_view/Harbor Keeper"
   check "[C112] the floor's own sealed metadata stayed byte for byte" test "$(sha256sum < "$clone/BUILD/$records")" = "$before"

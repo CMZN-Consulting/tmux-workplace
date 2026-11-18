@@ -860,7 +860,7 @@ t_generation_state_refusals() {
     'floors/lodge/up.holder|file|644' 'floors/lodge/type.lock|file|644'
     'floors/lodge/comms/record|file|644' 'floors/lodge/comms/serving|dir|700'
     'floors/lodge/comms/serving.new|file|644' 'floors/lodge/comms/.pointing|dir|755'
-    'floors/lodge/comms/taken/bad.copy|link|600' 'floors/lodge/comms/.pointing/bad.json|file|644'
+    'floors/lodge/comms/serving|link|600' 'floors/lodge/comms/.pointing/bad.json|file|644'
   )
   s=$(state_of)
   count=$(cat "$s/generation.next") top=$(sha256sum < "$clone/BUILD/MANIFEST")

@@ -146,12 +146,13 @@ t_carrier_request_recovery() {
   check "[C108] start the source carrier with only the rename gate" exit_is 0 env PATH="$scratch/mv-wrapper:$PATH" "$BASH" "$loop" up deck
   check "[C108] start the other floor" exit_is 0 wp up lodge
   : > "$scratch/rename-stop"
-  request keeper lost.md "to: Lodge Ida" "subject: never lost" --- body
+  ( umask 022; request keeper lost.md "to: Lodge Ida" "subject: never lost" --- body )
   check "[C108] the actual take rename completes at the gate" eventually_long test -s "$scratch/rename-entered"
   pid=$(cat "$scratch/rename-entered")
   check "[C108] the source carrier is stopped between rename and next instruction" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
   original=$(jq -r .id "$c/serving")
   check "[C108] a named journal already identifies the taken request" bash -c '[[ -f $1/taken/$2 && $(jq -r .stage "$1/serving") == named && $(jq -r .request "$1/serving") == lost.md ]]' _ "$c" "$original"
+  check "[C130] the taken request retains its incoming mode for recovery" test "$(stat -c %a -- "$c/taken/$original")" = 644
   check "[C108] kill the stopped source carrier" kill -KILL "$pid"
   rm -f -- "$scratch/rename-stop"
   check "[C108] close only its dead run" exit_is 0 wp down deck
@@ -170,20 +171,20 @@ t_carrier_request_recovery() {
   check "[C108] floor records contain only their own request writers" eventually_long bash -c 'jq -s -e "all(.[] | select(.seat != \"the frame\"); .seat != \"Lodge Ida\")" "$1/floors/deck/comms/record" >/dev/null && jq -s -e "any(.[]; .seat == \"Lodge Ida\" and .request == \"other.md\")" "$1/floors/lodge/comms/record" >/dev/null' _ "$s"
   check "[C108] stop the source for planted later windows" exit_is 0 wp down deck
   line=$(jq -c --arg id "$id" 'select(.id == $id and .action == "mail")' "$record")
-  jq -nc --arg id "$id" --argjson record "$line" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"lost.md",action:"mail",stage:"recorded",rec:0,record:$record,answer:("ok " + $id + "\n")}' > "$c/serving"
+  ( umask 077; jq -nc --arg id "$id" --argjson record "$line" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"lost.md",action:"mail",stage:"recorded",rec:0,record:$record,answer:("ok " + $id + "\n")}' > "$c/serving" )
   rm -f -- "$s/comms/Harbor Keeper/answers/lost.md"
   check "[C108] recover after the record but before journal removal" exit_is 0 wp up deck
   check "[C108] the saved answer is restored" answered_ok keeper lost.md
   check "[C108] dedupe appends no second request line" test "$(jq -s --arg id "$id" '[.[] | select(.id == $id and .request == "lost.md")] | length' "$record")" = 1
   check "[C108] stop for an interrupted action" exit_is 0 wp down deck
   rec=$(stat -c %s -- "$record")
-  jq -nc --arg id "$unknown_id" --argjson rec "$rec" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.write",action:"write",stage:"acting",rec:$rec,target:["Lodge Ida"],written:"3 abc"}' > "$c/serving"
+  ( umask 077; jq -nc --arg id "$unknown_id" --argjson rec "$rec" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.write",action:"write",stage:"acting",rec:$rec,target:["Lodge Ida"],written:"3 abc"}' > "$c/serving" )
   check "[C108] recover with no further request waiting" exit_is 0 wp up deck
   check "[C108] interrupted write is answered without pretending success" answered keeper uncertain.write "refused the carrier stopped while it served this, and whether it acted is not known"
   check "[C108] its unknown line retains the original target and charged text" eventually_long bash -c 'jq -e "select(.request == \"uncertain.write\" and .outcome == \"unknown\" and .target == [\"Lodge Ida\"] and .length == 3 and .sha256 == \"abc\")" "$1" >/dev/null' _ "$record"
   check "[C108] stop for an invalid recorded base" exit_is 0 wp down deck
   rec=$(stat -c %s -- "$record")
-  jq -nc --argjson rec "$rec" '{id:"invalid-base",box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.md",action:"mail",stage:"delivering",rec:$rec,base:"ffffffffffffffffffffffffffffffffffffffff"}' > "$c/serving"
+  ( umask 077; jq -nc --argjson rec "$rec" '{id:"invalid-base",box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.md",action:"mail",stage:"delivering",rec:$rec,base:"ffffffffffffffffffffffffffffffffffffffff"}' > "$c/serving" )
   printf '%s\n' preserve > "$s/mail/Lodge Ida/in/invalid-base.md"
   check "[C108] invalid base is handled by bounded recovery retries" exit_is 0 wp up deck
   check "[C108] no delivery verdict is invented for an unreadable commit range" answered keeper uncertain.md "refused the carrier could not tell whether this was delivered; look in the store for deliver invalid-base before resubmitting this request"
@@ -249,7 +250,7 @@ t_carrier_pointer_recovery() {
   other=$(answer_of keeper two.md); other=${other#ok }
   check "[C109] stop the reader for the successful-record window" exit_is 0 wp down lodge
   rec=$(stat -c %s -- "$record") start=$EPOCHSECONDS
-  jq -nc --arg id "$id" --argjson rec "$rec" --argjson start "$start" '{box:"Lodge Ida",target:"Lodge Ida",ids:[$id],start:$start,rec:$rec,length:3,sha256:"abc",outcome:"ok",reason:""}' > "$c/.pointing/Lodge Ida"
+  ( umask 077; jq -nc --arg id "$id" --argjson rec "$rec" --argjson start "$start" '{box:"Lodge Ida",target:"Lodge Ida",ids:[$id],start:$start,rec:$rec,length:3,sha256:"abc",outcome:"ok",reason:""}' > "$c/.pointing/Lodge Ida" )
   flock -o "$s/mail" sleep 60 & holder=$!
   check "[C109] hold the shared store while the local pointer record is recovered" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
   check "[C109] reader starts despite the store holder" exit_is 0 wp up lodge
@@ -355,7 +356,7 @@ t_carrier_closed_wakes() {
   jq -c '.seats["Gone Again"]={name:"Gone Again",ids:["gone-2"],count:1,since:"2026-11-18T00:00:00Z",last:0} | .seats["Bridge Canary"]={name:"Bridge Canary",ids:["canary"],count:1,since:"2026-11-18T00:00:00Z",last:0}' "$s/comms/wake.json" > "$scratch/wake-new"
   cp -- "$scratch/wake-new" "$s/comms/wake.json"
   rec=$(stat -c %s -- "$record")
-  jq -nc --argjson rec "$rec" '{box:"Gone Again",target:"Gone Again",ids:["gone-2"],start:0,rec:$rec,outcome:"closed",reason:"no build makes the seat Gone Again"}' > "$c/.pointing/Gone Again"
+  ( umask 077; jq -nc --argjson rec "$rec" '{box:"Gone Again",target:"Gone Again",ids:["gone-2"],start:0,rec:$rec,outcome:"closed",reason:"no build makes the seat Gone Again"}' > "$c/.pointing/Gone Again" )
   check "[C111] another floor starts before the interrupted claimant recovers" exit_is 0 wp up bridge
   check "[C111] the second carrier completes a later closure in the same pass" eventually_long bash -c 'jq -e "select(.covers==[\"canary\"] and .outcome==\"closed\")" "$1" >/dev/null' _ "$s/floors/bridge/comms/record"
   check "[C111] recover a closure already claimed in the local journal" exit_is 0 wp up deck
@@ -385,7 +386,7 @@ t_carrier_recovery_decisions() {
   for path in 'Harbor Pilot/in' 'Lodge Ida/in' 'Harbor Keeper/sent'; do printf '%s\n' recovery > "$store/$path/$id.md"; done
   check "[C108] stage the synthetic delivery under the store lock" exit_is 0 flock -o "$store" env -i PATH="$PATH" HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$real_git" -C "$store" add -- .
   check "[C108] commit that delivery under the store lock" exit_is 0 flock -o "$store" env -i PATH="$PATH" HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$real_git" -C "$store" -c user.name=fixture -c user.email=fixture@example.test commit -qm "deliver $id"
-  jq -nc --arg id "$id" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"resumed.md",action:"mail",stage:"delivering",base:"",rec:0}' > "$c/serving"
+  ( umask 077; jq -nc --arg id "$id" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"resumed.md",action:"mail",stage:"delivering",base:"",rec:0}' > "$c/serving" )
   printf '%s\n' '#!/usr/bin/env bash' 'dest=${!#}' \
     "'$real_mv' \"\$@\" || exit" \
     "if [[ \$dest == '$s/comms/wake.json' && -f '$scratch/recovery-stop' ]] && jq -e --arg id '$id' '(.seats[\"Harbor Pilot\"].ids // [] | index(\$id)) != null and (.seats[\"Lodge Ida\"].ids // [] | index(\$id)) == null' \"\$dest\" >/dev/null; then" \

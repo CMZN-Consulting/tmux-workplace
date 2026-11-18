@@ -1766,7 +1766,7 @@ generation_state_entries() {
       [[ -d $path && ! -L $path && $(stat -c %a -- "$path") == 700 && $(stat -c %u -- "$path") == "$EUID" ]] \
         || { warn "$path is not a directory of this user's with mode 700, where the floor keeps its communications"; return 1; }
     done
-    files+=("$state_dir/floors/$floor/comms/taken"/* "$state_dir/floors/$floor/comms/.pointing"/*)
+    files+=("$state_dir/floors/$floor/comms/.pointing"/*)
   fi
   for path in "${files[@]}"; do
     [[ -e $path || -L $path ]] || continue

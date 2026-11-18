@@ -2968,7 +2968,7 @@ t_pointer_floors() {
   printf '%s\n' '{"at":"2026-01-01T00:00:00Z","seat":"the frame","action":"wake","target":["Lodge Ira"],"covers":["recovered-1"],"outcome":"none","reason":"its kind has no wake pattern, so no pointer is typed for it (C94)"}' >> "$s/floors/lodge/comms/record"
   printf '%s' '{"at":"2026' >> "$s/floors/lodge/comms/record"
   jq '.seats["Orchard Grower"] |= (.count += 1 | .ids += ["recovered-1"]) | del(.seats["Harbor Watch"])' "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
-  printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/floors/lodge/comms/serving"
+  ( umask 077; printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/floors/lodge/comms/serving" )
   mkdir -p -- "$clone/BUILD/RUN/lodge/carrier"
   started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry" 2>&1 &
@@ -3869,7 +3869,7 @@ t_store_lock() {
   printf '%s\n' y > "$store/Harbor Pilot/in/recovered-y.md"
   sgit add -- "Harbor Pilot/in/recovered-y.md"
   sgit -c user.name=t -c user.email=t@t commit -q -m "deliver recovered-y"
-  jq -n -c --arg b "$base" '{id: "recovered-x", box: "Lodge Ida", request: "x.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving"
+  ( umask 077; jq -n -c --arg b "$base" '{id: "recovered-x", box: "Lodge Ida", request: "x.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving" )
   mkdir -p -- "$run/lodge/carrier"
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
   carriers=("$!")
@@ -3890,7 +3890,7 @@ t_store_lock() {
   printf '%s\n' y > "$store/Harbor Pilot/in/other-y.md"
   sgit add -- "Harbor Pilot/in/other-y.md"
   sgit -c user.name=t -c user.email=t@t commit -q -m "deliver other-y"
-  jq -n -c '{id: "first-x", box: "Lodge Ida", request: "f.md", action: "mail", seat: "Lodge Ida", base: ""}' > "$s/floors/lodge/comms/serving"
+  ( umask 077; jq -n -c '{id: "first-x", box: "Lodge Ida", request: "f.md", action: "mail", seat: "Lodge Ida", base: ""}' > "$s/floors/lodge/comms/serving" )
   mkdir -p -- "$run/lodge/carrier"
   printf '%s\n' '{"slots": {}}' > "$run/lodge/state.json"
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
@@ -3903,7 +3903,7 @@ t_store_lock() {
   for f in "Lodge Ida/sent" "Harbor Keeper/in"; do printf '%s\n' z > "$store/$f/half-z.md"; done
   sgit add -- "Lodge Ida/sent/half-z.md" "Harbor Keeper/in/half-z.md"
   : > "$store/.git/index.lock"
-  jq -n -c --arg b "$(sgit rev-parse HEAD)" '{id: "half-z", box: "Lodge Ida", request: "z.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving"
+  ( umask 077; jq -n -c --arg b "$(sgit rev-parse HEAD)" '{id: "half-z", box: "Lodge Ida", request: "z.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving" )
   mkdir -p -- "$run/lodge/carrier"
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
   carriers=("$!")
@@ -4050,8 +4050,8 @@ t_carrier_floors() {
   # Recovery under a hold (5.162 point 1): a stopped request's journal in the lodge's own state, and one in the shared
   # S/comms, which is no floor's, planted while the lodge is down; the lodge comes up while the test holds the lock.
   printf '%s\n' busy > "$d/screen"
-  jq -n -c '{id: "20261115T000000Z-900001", box: "Lodge Ida", request: "f1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/floors/lodge/comms/serving"
-  jq -n -c '{id: "20261115T000000Z-900002", box: "Lodge Ida", request: "s1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/comms/serving"
+  ( umask 077; jq -n -c '{id: "20261115T000000Z-900001", box: "Lodge Ida", request: "f1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/floors/lodge/comms/serving" )
+  ( umask 077; jq -n -c '{id: "20261115T000000Z-900002", box: "Lodge Ida", request: "s1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/comms/serving" )
   # As above, the holder outlives every wait until the test lets it go.
   flock -o "$s/mail" sleep 300 &
   holder=$!
@@ -6097,14 +6097,14 @@ t_comms_carrier() {
   check "[C57] which is gone" bash -c '! stat -L "/proc/$1/cwd" > /dev/null 2>&1' _ "$pid2"
   local delivered
   delivered=$(jq -r 'select(.request == "late.md") | .id' "$s/comms/record")
-  jq -n -c --arg id "$delivered" '{id: $id, box: "Harbor Watch", request: "again.md", action: "mail", seat: "Harbor Watch"}' > "$s/comms/serving"
+  ( umask 077; jq -n -c --arg id "$delivered" '{id: $id, box: "Harbor Watch", request: "again.md", action: "mail", seat: "Harbor Watch"}' > "$s/comms/serving" )
   check "[C57] up, after a carrier that stopped once it had delivered a mail" exit_is 0 wp up
   check "[C57] the mail it delivered is answered as delivered when the carrier starts again" answered watch again.md "ok $delivered"
   check "down" exit_is 0 wp down
   printf '%s\n' stray > "$s/mail/Harbor Keeper/in/stray.md"
   printf '%s\n' half > "$s/mail/Harbor Keeper/in/20261112T000000Z-999999.md"
   printf '%s\n' half > "$s/mail/Harbor Keeper/sent/20261112T000000Z-999999.md"
-  jq -n -c '{id: "20261112T000000Z-999999", box: "Harbor Keeper", request: "half.md", action: "mail", seat: "Harbor Keeper"}' > "$s/comms/serving"
+  ( umask 077; jq -n -c '{id: "20261112T000000Z-999999", box: "Harbor Keeper", request: "half.md", action: "mail", seat: "Harbor Keeper"}' > "$s/comms/serving" )
   check "[C57] up, after a carrier that stopped while it delivered a mail" exit_is 0 wp up
   check "[C57] the mail is answered as delivered to none" \
     answered keeper half.md "refused the carrier stopped while it served this, and it went to none; leave it in out again"

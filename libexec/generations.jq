@@ -10,8 +10,12 @@ def generation_term($binding):
   ($binding.primitives[.[0]].seat.argv // null) as $argv
   | if $argv==null then . else .[$argv] |= fromjson end;
 
-def generation_slices($binding; $view; $conf):
-  . as $plan
+def generation_slices:
+  .binding as $binding
+  | .view as $view
+  | .conf as $conf
+  | .plan as $plan
+  | $plan
   | floor_index($binding) as $ix
   | plan_terms as $terms
   | [$terms[] | select(.term[0]=="pane")

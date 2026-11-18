@@ -77,7 +77,7 @@ t_generations_entry_lock() {
 generation_test_project() {
   jq -c -L "$tool/libexec" --slurpfile binding "$tool/host/binding.json" --slurpfile view "$2" \
     --argjson conf '{"deck":"deck-conf","bridge":"bridge-conf","lodge":"lodge-conf"}' \
-    'include "generations"; generation_slices($binding[0];$view[0];$conf)' "$1" > "$3"
+    'include "generations"; {plan:.,binding:$binding[0],view:$view[0],conf:$conf} | generation_slices' "$1" > "$3"
 }
 
 generation_test_changes() {

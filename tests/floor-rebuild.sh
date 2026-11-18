@@ -72,3 +72,46 @@ t_generations_entry_lock() {
   done
   check "[C117] stop the synthetic floor" exit_is 0 wp down deck
 }
+
+generation_test_project() {
+  jq -c -L "$tool/libexec" --slurpfile binding "$tool/host/binding.json" --slurpfile view "$2" \
+    --argjson conf '{"deck":"deck-conf","bridge":"bridge-conf","lodge":"lodge-conf"}' \
+    'include "generations"; generation_slices($binding[0];$view[0];$conf)' "$1" > "$3"
+}
+
+generation_test_changes() {
+  jq -ne --slurpfile old "$1" --slurpfile new "$2" --argjson wanted "$3" '
+    [$old[0].slices | keys[] | select($old[0].slices[.]!=$new[0].slices[.])] == $wanted'
+}
+
+t_generation_slices() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [
+    m(["reach","orchard","barn","grower","seat","mail","-","-","-","workplace","banned"];2)]'
+  check "[C118] floor projection fixture plans" exit_is 0 wplan
+  local plan=$clone/PLAN/plan.json view=$clone/PLAN/view.json base=$scratch/slices-base next=$scratch/slices-next
+  check "[C118] project the accepted plan and folded view" generation_test_project "$plan" "$view" "$base"
+  check "[C118] every declared floor has a slice" jq -e '.slices|keys==["bridge","deck","lodge"]' "$base"
+  jq 'walk(if type=="object" and has("origin") then .origin={path:"moved.typify",line:900} else . end)' "$plan" > "$scratch/origin-plan"
+  jq 'walk(if type=="object" and has("origins") then .origins=[{path:"moved.typify",line:900}] else . end)' "$view" > "$scratch/origin-view"
+  generation_test_project "$scratch/origin-plan" "$scratch/origin-view" "$next"
+  check "[C118] origin changes alone change no projection" jq -ne --slurpfile a "$base" --slurpfile b "$next" '$a[0]==$b[0]'
+  jq '(.programs[] | select(.path=="harbor/dock/keeper/seat.typify") | .plan[1].term[5])=(["/usr/bin/printf","changed"]|tojson)' "$plan" > "$scratch/command-plan"
+  generation_test_project "$scratch/command-plan" "$view" "$next"
+  check "[C118] a changed command belongs to its own floor" generation_test_changes "$base" "$next" '["deck"]'
+  jq '(.programs[] | select(.path=="harbor/dock/keeper/seat.typify") | .plan[1].term[5]) |= ("  "+.+"  ")' "$plan" > "$scratch/formatted-plan"
+  generation_test_project "$scratch/formatted-plan" "$view" "$next"
+  check "[C118] JSON formatting of the same argv adds no operational change" generation_test_changes "$base" "$next" '[]'
+  jq '.state.environment += [{key:["orchard","barn","grower","WPT_SLICE"],value:["new"],masked:false,origin:{path:"env.typify",line:1}}]' "$plan" > "$scratch/environment-plan"
+  generation_test_project "$scratch/environment-plan" "$view" "$next"
+  check "[C118] an environment change belongs to the receiving floor" generation_test_changes "$base" "$next" '["bridge"]'
+  jq '(.seats[] | select(.seat==["orchard","barn","grower"])).reach.mail=["Harbor Keeper"]' "$view" > "$scratch/relation-view"
+  generation_test_project "$plan" "$scratch/relation-view" "$next"
+  check "[C118] a cross-floor relation is excluded from every private slice" generation_test_changes "$base" "$next" '[]'
+  check "[C118] that relation is still represented in the shared relation index" jq -e 'any(.relations[]; .from=="Orchard Grower" and .from_floor=="bridge" and .to=="Harbor Keeper" and .to_floor=="deck" and .action=="mail")' "$next"
+  jq '.records={path:"records",limit:17,chain:"file",origins:[]}' "$view" > "$scratch/global-view"
+  generation_test_project "$plan" "$scratch/global-view" "$next"
+  check "[C118] repeated global record settings are compared outside private slices" jq -ne --slurpfile a "$base" --slurpfile b "$next" '$a[0].globals!=$b[0].globals'
+}

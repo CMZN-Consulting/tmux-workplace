@@ -345,3 +345,38 @@ t_generation_floor_admission() {
   check "[C123] every admission refusal left BUILD unchanged" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
   check "[C123] every admission refusal left the counter unchanged" test "$(cat "$s/generation.next")" = "$count"
 }
+
+t_generation_key_identity() {
+  scoped_clone
+  floors_clone
+  statements_plan "$floors_terms"' | .programs[-1].recorded += [
+    {term:["key","lodge","east","-","room","held"],origin:at(2)},
+    {term:["key","harbor","dock","-","room","held"],origin:at(3)}]'
+  check "[C124] the key identity fixture plans" exit_is 0 wplan
+  check "[C124] its whole build makes real keys on two floors" exit_is 0 wp build
+  (( test_failed == 0 )) || return 1
+  local s home generation expected before next actual
+  s=$(state_of) generation=$(top_gen) home=$(state_of)/floors/lodge/keys/01
+  expected=$(jq -r '.seats[0].fingerprint' "$clone/BUILD/floors/lodge/$generation/keys.json")
+  check "[C124] the donor and recipient are distinct identities" test "$expected" != "$(jq -r '.seats[0].fingerprint' "$clone/BUILD/floors/deck/$generation/keys.json")"
+  mv -- "$home" "$scratch/kept-key-home"
+  cp -a -- "$s/floors/deck/keys/01" "$home"
+  check "[C124] a swapped key home refuses up" exit_is 1 wp up lodge
+  check "[C124] the refusal names the mismatched fingerprints" said "does not hold the signing and authentication fingerprints of this build"
+  check "[C124] the rejected key leaves no run" test ! -e "$run/lodge"
+  check "[C124] the rejected key starts no GnuPG agent" bash -c '! gpg-connect-agent --homedir "$1" --no-autostart "GETINFO pid" /bye >/dev/null 2>&1' _ "$home"
+  rm -rf -- "$home"
+  mv -- "$scratch/kept-key-home" "$home"
+  check "[C124] the restored genuine key starts" exit_is 0 wp up lodge
+  (( test_failed == 0 )) || return 1
+  check "[C124] stop the genuine key's floor" exit_is 0 wp down lodge
+  before=$(generation_tree_digest "$home/private-keys-v1.d") next=$(cat "$s/generation.next")
+  ( umask 077; jq -nc --argjson n "$generation" '{pid:1,generation:$n,at:"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  check "[C124] committed-marker recovery does not remake real keys" exit_is 0 wp build lodge
+  check "[C124] the private key files keep their bytes, inodes and modes" test "$(generation_tree_digest "$home/private-keys-v1.d")" = "$before"
+  check "[C124] marker recovery also preserves the generation count" test "$(cat "$s/generation.next")" = "$next"
+  check "[C124] an ordinary floor build then makes a fresh identity" exit_is 0 wp build lodge
+  (( test_failed == 0 )) || return 1
+  actual=$(generation_top_floor lodge); actual=${actual%/MANIFEST}; actual=${actual##*/}
+  check "[C124] the fresh build's fingerprint differs" test "$(jq -r '.seats[0].fingerprint' "$clone/BUILD/floors/lodge/$actual/keys.json")" != "$expected"
+}

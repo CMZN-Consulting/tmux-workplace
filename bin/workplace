@@ -2669,6 +2669,25 @@ agent_record() {
     '{what: $what, when: $words[0:6], is: $is, call: $words[6:]}'
 }
 
+key_home_matches() {
+  local home=$1 holder=$2 listed line section='' primary='' authentication=''
+  local -a fields
+  listed=$(gpg --homedir "$home" --no-autostart --batch --with-colons --with-fingerprint --list-keys 2> /dev/null) || return 1
+  while IFS= read -r line; do
+    IFS=: read -r -a fields <<< "$line"
+    case ${fields[0]-} in
+      pub) section=pub ;;
+      sub) section=sub ;;
+      fpr)
+        [[ $section != pub || -n $primary ]] || primary=${fields[9]-}
+        [[ $section != sub || -n $authentication ]] || authentication=${fields[9]-}
+        ;;
+    esac
+  done <<< "$listed"
+  [[ -n $primary && -n $authentication && $primary == "$(jq -r .fingerprint <<< "$holder")" \
+    && $authentication == "$(jq -r .authentication <<< "$holder")" ]]
+}
+
 start_agents() {
   local state_dir runtime=/run/user/$EUID
   state_dir=$(state_root) || state_dir=""
@@ -2687,7 +2706,7 @@ start_agents() {
     return 1
   fi
   local program connect kill_with agent
-  for program in gpg-agent gpgconf gpg-connect-agent; do
+  for program in gpg gpg-agent gpgconf gpg-connect-agent; do
     command -v "$program" > /dev/null || { warn "this workplace holds keys, and $program is not on PATH"; return 1; }
   done
   agent=$(command -v gpg-agent) connect=$(command -v gpg-connect-agent) kill_with=$(command -v gpgconf)
@@ -2706,6 +2725,8 @@ start_agents() {
     mapfile -t seat < <(jq -r '.seat[]' <<< "$holder")
     who="the agent of $name"
     [[ -d $home ]] || { warn "the key home $home of $name is missing; build again"; return 1; }
+    key_home_matches "$home" "$holder" \
+      || { warn "the key home $home of $name does not hold the signing and authentication fingerprints of this build; build again"; return 1; }
     if says_batch "$home/gpg-agent.conf"; then
       warn "$home/gpg-agent.conf says batch, and an agent that serves a seat never runs with it, since it takes any key added through its ssh socket; build again"
       return 1

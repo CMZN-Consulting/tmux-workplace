@@ -6664,7 +6664,7 @@ t_wake() {
     file_comes_to "$c/typed" "$(pointer 2 "$p2")"
   check "[C94] three mails delivered between two pointers give one pointer, with the count 3 and the newest id" \
     file_comes_to "$b/typed" "$(printf '%s\n' "$(pointer 1 "$id1")" "$(pointer 3 "$newest")")"
-  check "[C94] [C133] and it went a minute or more after the first" eventually \
+  check "[C133] and it went a minute or more after the first" eventually \
     bash -c 'mapfile -t at < <(jq -r "select(.action == \"wake\" and .target == [\"Harbor Keeper\"] and has(\"length\")) | .at" "$1"); (( ${#at[@]} == 2 && $(date -u -d "${at[1]}" +%s) - $(date -u -d "${at[0]}" +%s) >= 60 ))' _ "$s/comms/record"
   note "[C94] observed keeper pointer timestamps: $(jq -s -c '[.[]|select(.action=="wake" and .target==["Harbor Keeper"] and has("length"))|.at] | {at:.,seconds:(if length==2 then (.[1]|fromdateiso8601)-(.[0]|fromdateiso8601) else null end)}' "$s/comms/record")"
   note "[C94] persisted keeper throttle: $(jq -c '.seats["Harbor Keeper"]|{last,count}' "$s/comms/wake.json")"

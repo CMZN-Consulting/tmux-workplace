@@ -32,8 +32,9 @@ t_generations_entry_lock() {
   statements_plan "$floors_terms"' | (.programs[] | select(.path=="harbor/dock/keeper/seat.typify") | .plan[1].term[5])=(["/usr/bin/true"]|tojson)'
   check "[C117] generations lock fixture plans" exit_is 0 wplan
   check "[C117] fixture builds" exit_is 0 wp build
-  local real_tmux s action pid kind
+  local real_tmux s action pid kind selected_locale=C
   real_tmux=$(command -v tmux) s=$(state_of)
+  if env LC_ALL=C.UTF-8 "$BASH" -c : >/dev/null 2>&1; then selected_locale=C.UTF-8; fi
   mkdir -- "$scratch/generations-tmux"
   printf '%s\n' '#!/usr/bin/env bash' \
     "if [[ -f '$scratch/generations-gate' ]]; then" \
@@ -53,7 +54,7 @@ t_generations_entry_lock() {
     fi
     rm -f -- "$scratch/generations-entered"
     printf '%s\n' "$kind" > "$scratch/generations-gate"
-    timeout --kill-after=1 20 env PATH="$scratch/generations-tmux:$PATH" "$BASH" "$loop" "${arguments[@]}" > "$scratch/generations-$action.log" 2>&1 & pid=$!
+    timeout --kill-after=1 20 env LC_ALL="$selected_locale" PATH="$scratch/generations-tmux:$PATH" "$BASH" "$loop" "${arguments[@]}" > "$scratch/generations-$action.log" 2>&1 & pid=$!
     if ! eventually_long test -e "$scratch/generations-entered"; then
       fail "[C117] $action did not reach its native gate"
       rm -f -- "$scratch/generations-gate"
@@ -66,6 +67,7 @@ t_generations_entry_lock() {
     if wait "$pid"; then check "[C117] $action completes after its gate opens" true
     else fail "[C117] $action failed after its gate opened"; cat "$scratch/generations-$action.log"; return 1; fi
     check "[C117] $action leaves no generations lock inherited by its living children" flock -n -x "$s/generations.lock" true
+    check "[C117] $action keeps the caller's locale across its command boundary" test "$(on deck T show-environment -g LC_ALL)" = "LC_ALL=$selected_locale"
   done
   check "[C117] stop the synthetic floor" exit_is 0 wp down deck
 }

@@ -2872,7 +2872,7 @@ generation_entry() {
   state=$(unbuild_state) || { warn "$action needs the build's state directory for its generations lock"; return 2; }
   generation_lock_file "$state" || return $?
   command -v flock > /dev/null || { warn "$action with floors needs flock"; return 2; }
-  flock -s -w 10 -E 75 -o "$state/generations.lock" "$BASH" "$tool/bin/workplace" generation-run "$action" "$state" "$@" || result=$?
+  ( caller_locale; exec flock -s -w 10 -E 75 -o "$state/generations.lock" "$BASH" "$tool/bin/workplace" generation-run "$action" "$state" "$@" ) || result=$?
   if (( result == 75 )); then
     warn "a build is removing old generations; run $action again"
     return 1

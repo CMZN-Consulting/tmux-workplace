@@ -21,10 +21,10 @@ def generation_slices($binding; $view; $conf):
   | [$terms[] | select(.term[0]=="floor") | .term] as $floors
   | {
       floors:$floors,
-      globals:({workplace:[$terms[] | select(.term[0]=="workplace" or .term[0]=="server") | .term],
+      globals:{workplace:[$terms[] | select(.term[0]=="workplace" or .term[0]=="server") | .term],
                 mail:($view.mail // null),records:($view.records // null),
                 environment:[$plan.state[$binding.tables.environment.cell][]?
-                             | select(generation_floor_of($ix;.key[0])==null)]} | generation_semantic),
+                             | select(generation_floor_of($ix;.key[0])==null)]},
       names:$by_name,
       relations:([$view.seats[]? as $seat | ($seat.reach // {} | to_entries[]) as $reach
                    | $reach.value[] | {from:$by_key[$seat.seat|tojson],from_floor:$seat.floor,
@@ -34,16 +34,16 @@ def generation_slices($binding; $view; $conf):
         | [$names[] | select(.floor==$f) | .name] as $local_names
         | [$view.seats[]? | select(.floor==$f)] as $own_seats
         | [$own_seats[].ssh.granted[]?.name] as $grants
-        | {key:$f,value:({floor:$floor,conf:($conf[$f] // null),
+        | {key:$f,value:{floor:$floor,conf:($conf[$f] // null),
              terms:[$terms[] | select((.term|term_floor($binding;$ix))==$f) | .term | generation_term($binding)],
              seats:[$own_seats[] | . + {name:$by_key[.seat|tojson]}
                     | if .reach==null then . else .reach |= map_values(map(select(. as $n | $local_names|index($n)!=null))) end],
              rows:[table_rows($plan;$view;$binding.tables.view)[] | select(generation_floor_of($ix;.key[0])==$f)],
              environment:[$plan.state[$binding.tables.environment.cell][]?
                           | select(generation_floor_of($ix;.key[0])==$f)],
-             ssh:[$view.ssh.keys[]? | select(.name as $name | $grants | index($name)!=null)]}
-            | generation_semantic)}] | from_entries)
-    };
+             ssh:[$view.ssh.keys[]? | select(.name as $name | $grants | index($name)!=null)]}}] | from_entries)
+    }
+  | generation_semantic;
 
 def generation_rebuild_faults($new; $floor):
   . as $old

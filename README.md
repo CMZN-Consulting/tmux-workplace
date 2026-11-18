@@ -76,7 +76,7 @@ new configuration.
 - git 2.32 or later, with `flock`, `dd`, `mv`, `tail` and `date`, only when the plan holds mail. Each seat is then shown its own mailbox at the plan's mail path, with the frame's page for a seat in it, and the carrier, which `up` starts, takes what a seat leaves in its `out`: a mail it delivers into the store, a grab or a write it does on another seat's pane where the plan allows it. Where a kind's `wake` term says how its pane looks when it waits for a line, the carrier types into a reader's waiting pane one line that points out its new mail and names its mailbox's `in` and the page;
 - `dd`, `date`, `tail` and `head`, only when the plan keeps a pane's record, and `systemd-run`, `systemctl` and `journalctl` with a user manager that answers, only when its chain goes to the journal. A kept pane is piped from before its program starts into a keeper of the frame's, one file a day for each seat in the workplace's state directory, and the carrier sends the chain every ten seconds.
 
-`doctor` checks each of these. The tests pass on tmux 3.5a, built from its release archive by the workflow in `.github/workflows/`, and on tmux 3.8.
+`doctor` checks each of these. The workflow in `.github/workflows/tmux.yml` is configured to test the minimum tmux 3.5a and the pinned 3.6b, 3.7c and 3.8 releases, with hash-checked upstream archives. Each version runs independently and the `tests` check requires all four to succeed. This configuration does not itself establish that a candidate has passed those jobs; consult its actual run results.
 
 ## Tests
 

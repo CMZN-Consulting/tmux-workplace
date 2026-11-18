@@ -1,4 +1,4 @@
-name: tests on tmux 3.5a
+name: tmux compatibility
 
 on:
   push:
@@ -9,31 +9,47 @@ permissions:
   contents: read
 
 jobs:
-  tests:
+  compatibility:
+    name: tmux ${{ matrix.version }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: "3.5a"
+            sha256: 16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951
+          - version: "3.6b"
+            sha256: 390759d25fdba016887ec982b808927e637070fd7d03a8021f8ef3102b9ae3c7
+          - version: "3.7c"
+            sha256: 7c60cae9a0e25288e2e24750aafc9e8800fc7fd4555e447e1b29ee4201cfb3bf
+          - version: "3.8"
+            sha256: e79c699c7e949dccd0a4a125e17b8d1261e311b16979dbc8eb34542f3966d82e
+    env:
+      TMUX_VERSION: ${{ matrix.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Packages
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential pkg-config bison libevent-dev libncurses-dev bubblewrap jq openssh-server scdaemon
-      - name: tmux 3.5a from its release archive
+      - name: tmux ${{ matrix.version }} from its release archive
         env:
-          TMUX_ARCHIVE: https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz
-          TMUX_SHA256: 16216bd0877170dfcc64157085ba9013610b12b082548c7c9542cc0103198951
+          TMUX_ARCHIVE: https://github.com/tmux/tmux/releases/download/${{ matrix.version }}/tmux-${{ matrix.version }}.tar.gz
+          TMUX_SHA256: ${{ matrix.sha256 }}
         run: |
           curl -fsSL -o tmux.tar.gz "$TMUX_ARCHIVE"
           printf '%s  %s\n' "$TMUX_SHA256" tmux.tar.gz | sha256sum -c -
           tar -xzf tmux.tar.gz
-          cd tmux-3.5a
-          ./configure --prefix="$HOME/tmux-3.5a"
+          cd "tmux-$TMUX_VERSION"
+          ./configure --prefix="$HOME/tmux-$TMUX_VERSION"
           make -j"$(nproc)"
           make install
       - name: Unprivileged user namespaces for bubblewrap
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: What this tmux does with a dead pane's pipe
         run: |
-          export PATH="$HOME/tmux-3.5a/bin:$PATH"
+          export PATH="$HOME/tmux-$TMUX_VERSION/bin:$PATH"
           unset TMUX TMUX_PANE
           d=$(mktemp -d)
           tmux -S "$d/s" -f /dev/null new-session -d -s m 'sleep 1; echo out; sleep 1'
@@ -50,10 +66,21 @@ jobs:
           rm -rf -- "$d"
       - name: The test file
         run: |
-          export PATH="$HOME/tmux-3.5a/bin:$PATH"
+          export PATH="$HOME/tmux-$TMUX_VERSION/bin:$PATH"
           tmux -V
           bash --version | head -1
           jq --version
           gpg --version | head -1
           ssh -V
           bash tests/run.sh
+
+  tests:
+    name: tests
+    if: always()
+    needs: compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every version
+        env:
+          RESULT: ${{ needs.compatibility.result }}
+        run: test "$RESULT" = success

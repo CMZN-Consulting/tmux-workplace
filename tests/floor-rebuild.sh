@@ -801,8 +801,9 @@ t_generation_live_handoff() {
   private=$(generation_tree_digest "$clone/BUILD/floors/deck" "$home/private-keys-v1.d")
   day=$(date -u +%F) file=$s/floors/deck/records/Harbor\ Keeper/$day.pane
   check "[C129] the witness's pane record stands" eventually_long test -s "$file"
-  gaps=$(sha256sum < "$s/floors/deck/records/Harbor Keeper/gaps")
-  check "[C129] the old index refuses a seat that does not yet exist" bash -c '[[ ! -e $1/comms/"Lodge Ira" ]]' _ "$s"
+  gaps=$(if [[ -f $s/floors/deck/records/Harbor\ Keeper/gaps ]]; then sha256sum < "$s/floors/deck/records/Harbor Keeper/gaps"; else printf absent; fi)
+  request keeper unknown-handoff.md 'to: Lodge Ira' 'subject: not created yet' --- body
+  check "[C129] the old live index refuses a seat that does not yet exist" carrier_test_answer keeper unknown-handoff.md 'refused name 1 of its to line is not a seat the plan makes, by its exact name, so the mail goes to none'
   for edition in added removed; do
     cp -- "$file" "$scratch/record-prefix"
     prefix=$(stat -c %s -- "$scratch/record-prefix")
@@ -836,7 +837,7 @@ t_generation_live_handoff() {
     check "[C129] $edition retains all previous recorded bytes as a prefix" bash -c 'head -c "$1" -- "$2" | cmp -s -- - "$3"' _ "$prefix" "$file" "$scratch/record-prefix"
     check "[C129] type a witness marker after $edition" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" "handoff-$edition" Enter
     check "[C129] output after $edition is still recorded" eventually_long grep -qF "handoff-$edition" "$file"
-    check "[C129] $edition adds no recording gap" test "$(sha256sum < "$s/floors/deck/records/Harbor Keeper/gaps")" = "$gaps"
+    check "[C129] $edition adds no recording gap" test "$(if [[ -f $s/floors/deck/records/Harbor\ Keeper/gaps ]]; then sha256sum < "$s/floors/deck/records/Harbor Keeper/gaps"; else printf absent; fi)" = "$gaps"
     check "[C129] $edition needs no witness restart" test ! -e "$s/floors/deck/restarts"
   done
   check "[C129] stop the rebuilt floor" exit_is 0 wp down lodge

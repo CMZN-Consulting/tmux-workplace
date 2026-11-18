@@ -6569,6 +6569,17 @@ t_wake_fold() {
 
 t_wake() {
   scoped_clone
+  if [[ -n ${WORKPLACE_TEST_WAKE_DELAY-} ]]; then
+    local real_tmux
+    real_tmux=$(command -v tmux)
+    mkdir -- "$scratch/wake-delay-bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'pointer=0' \
+      'for arg in "$@"; do [[ $arg != mail:\ * ]] || pointer=1; done' \
+      "if (( pointer )) && [[ ! -f '$scratch/wake-delayed' ]]; then : > '$scratch/wake-delayed'; sleep '$WORKPLACE_TEST_WAKE_DELAY'; fi" \
+      "exec '$real_tmux' \"\$@\"" > "$scratch/wake-delay-bin/tmux"
+    chmod +x -- "$scratch/wake-delay-bin/tmux"
+    export PATH="$scratch/wake-delay-bin:$PATH"
+  fi
   mkdir -p -- "$root/mailbox"
   local s b=$root/harbor/berth c=$root/harbor/charts a=$root/orchard/almanac own id1 p1 p2 p4 at1 newest first line pane
   s=$(state_of)
@@ -6655,6 +6666,8 @@ t_wake() {
     file_comes_to "$b/typed" "$(printf '%s\n' "$(pointer 1 "$id1")" "$(pointer 3 "$newest")")"
   check "[C94] and it went a minute or more after the first" eventually \
     bash -c 'mapfile -t at < <(jq -r "select(.action == \"wake\" and .target == [\"Harbor Keeper\"] and has(\"length\")) | .at" "$1"); (( ${#at[@]} == 2 && $(date -u -d "${at[1]}" +%s) - $(date -u -d "${at[0]}" +%s) >= 60 ))' _ "$s/comms/record"
+  note "[C94] observed keeper pointer timestamps: $(jq -s -c '[.[]|select(.action=="wake" and .target==["Harbor Keeper"] and has("length"))|.at] | {at:.,seconds:(if length==2 then (.[1]|fromdateiso8601)-(.[0]|fromdateiso8601) else null end)}' "$s/comms/record")"
+  note "[C94] persisted keeper throttle: $(jq -c '.seats["Harbor Keeper"]|{last,count}' "$s/comms/wake.json")"
   check "[C94] a pane that shows a numbered menu still has none, a minute on" test ! -e "$a/typed"
   first=$(jq -c 'select(.action == "wake" and .target == ["Harbor Keeper"] and has("length"))' "$s/comms/record" | head -n 1)
   line=$(pointer 1 "$id1")

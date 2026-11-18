@@ -1711,7 +1711,7 @@ build_floor_seats() {
 # generations' lock; and the counter of generations. Each is a file of this user's with mode 0600. A generation's
 # number is the counter's, and an empty counter gives 1; the build writes the next number back before it makes BUILD,
 # so that a number a stopped build took is never taken again, and the counter outlives unbuild, since S stands.
-build_state_begin() {
+build_state_lock() {
   local workplace=$1 base s name f next d n
   command -v flock > /dev/null || die "a plan with floors needs flock, and flock is not on PATH" 2
   base=$(state_root) || die "build needs the workplaces' state directory for its locks, and neither XDG_STATE_HOME nor HOME is an absolute path" 2
@@ -1731,6 +1731,11 @@ build_state_begin() {
   fi
   ( umask 077 && jq -n -c --arg c build --argjson p "$$" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{command: $c, pid: $p, at: $at}' > "$s/build.holder.new" ) \
     && mv -f -- "$s/build.holder.new" "$s/build.holder" || die "cannot write $s/build.holder" 2
+  build_state_dir=$s
+}
+
+build_generation_next() {
+  local s=$build_state_dir next d n
   # The counter starts empty, as build makes it, and holds the next number after; one that holds anything else is
   # refused rather than read as 1, so that no number is taken twice (5.162).
   next=$(< "$s/generation.next") || die "cannot read $s/generation.next" 2
@@ -1749,6 +1754,11 @@ build_state_begin() {
   ( umask 077 && printf '%s\n' "$(( next + 1 ))" > "$s/generation.next.new" ) && mv -f -- "$s/generation.next.new" "$s/generation.next" \
     || die "cannot write $s/generation.next" 2
   build_generation=$next
+}
+
+build_state_begin() {
+  build_state_lock "$1"
+  build_generation_next
 }
 
 build_check_plan() {

@@ -1,0 +1,18 @@
+clearance-scale : turned
+view : / = read-only
+view : . = read-write
+view : agents = searchable-only
+view : agents/navigator = hidden
+view : agents/gardener = hidden
+view : harbor/charts = read-write
+view : harbor/charts = read-write
+view : harbor/ledger/inner = read-write
+view : harbor/berth = read-write
+view : orchard/crate-picker = read-write
+view : sealed = hidden
+view : harbor/scratch = scratch
+view : orchard/scratch = scratch
+label : public = 2
+label : restricted = 0
+label : restricted/lower = 0
+label : sealed/info = 2

@@ -9,7 +9,7 @@ Argument numbers below exclude the constructor name. The plan preserves every pa
 | Input | Path in the plan | Frame handling |
 | --- | --- | --- |
 | `view : PATH = MODE`, at workplace, office, room, seat or kind | `statement A B C SCOPE PATH MODE`, argument 5 | Join before folding; kind shared places use these view lines, while private program homes are frame-supplied |
-| `label : PATH = NUMBER` | `label PATH NUMBER`, argument 1 | Join before grouping and label checks |
+| `label : PATH = VALUE` (number or `closed`) | `label PATH VALUE`, argument 1 | Join before grouping and label checks |
 | Seat `directory : PATH` | `record-directory A B C PATH`, argument 4 | Join before using the declared directories |
 | Seat `command : ARGV` | `start A B C DIR ARGV`, argument 4 | DIR is the first directory line's raw value through the existing context; join before application |
 | Generated `server : NAME : CONF` | `server NAME CONF`, argument 2 | CONF is the raw configuration path; join before application |

@@ -12,6 +12,31 @@ permissions:
   contents: read
 
 jobs:
+  w4-example:
+    name: W4 example with the released Typify reader
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install Racket 9.3 CS and Typify v1.0.0-rc.1
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSL -o racket-install.sh https://download.racket-lang.org/releases/9.3/installers/racket-9.3-x86_64-linux-buster.sh
+          echo '30dc59d9b5af083eacf793253d35782c5231e8bfb7a7331fe32ccd9a41fd792f  racket-install.sh' | sha256sum --check --strict
+          sh racket-install.sh --create-dir --in-place --dest "$RUNNER_TEMP/racket"
+          export PATH="$RUNNER_TEMP/racket/bin:$PATH"
+          curl -fsSL -o typify.tar.gz https://github.com/CMZN-Consulting/typify/releases/download/v1.0.0-rc.1/typify-1.0.0-rc.1-source.tar.gz
+          echo '77e0fb7819c207a7748c3aabd84771ed88fc2684d5ff926cbc2384ac943407c5  typify.tar.gz' | sha256sum --check --strict
+          mkdir reader
+          tar -xzf typify.tar.gz --strip-components=1 -C reader
+          raco pkg install --scope user --deps fail --name typify --link ./reader/src
+          echo "$RUNNER_TEMP/racket/bin" >> "$GITHUB_PATH"
+          racket -e '(require setup/dirs) (displayln (find-user-console-bin-dir))' >> "$GITHUB_PATH"
+      - name: Plan the W4 example and check its access table
+        run: python3 tests/w4-example.py
+
   compatibility:
     name: tmux ${{ matrix.version }}
     runs-on: ubuntu-24.04
@@ -83,10 +108,11 @@ jobs:
   tests:
     name: tests
     if: always()
-    needs: compatibility
+    needs: [compatibility, w4-example]
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every version
+      - name: Require every version and the W4 example
         env:
           RESULT: ${{ needs.compatibility.result }}
-        run: test "$RESULT" = success
+          EXAMPLE: ${{ needs.w4-example.result }}
+        run: test "$RESULT" = success && test "$EXAMPLE" = success

@@ -9,5 +9,8 @@ repo=$(cd -P -- "$fixture/../../.." && pwd -P)
 destination=$1
 bash "$fixture/../logs-workplace/prepare.sh" "$destination"
 cp -- "$fixture/workplace.json" "$destination/workplace.json"
-cp -- "$repo/layers/Identity.typify" "$repo/layers/SSH.typify" "$destination/layers/"
+# The inherited source uses the historical base layers. W4 uses the current ones.
+for layer in Structure Access Agents Host Identity SSH; do
+  cp -- "$repo/layers/$layer.typify" "$destination/layers/"
+done
 cp -R -- "$fixture/programs/." "$destination/programs/"

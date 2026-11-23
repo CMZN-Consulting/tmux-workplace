@@ -4,7 +4,22 @@ The frame that applies a workplace's plan. tmux makes the sessions, windows and 
 
 To plan a workplace from its Typify declarations, install the reader and put its `typify` launcher on your `PATH`. The [reader installation guide](https://github.com/CMZN-Consulting/typify/blob/v1.0.0-rc.1/mcp/README.md#run-locally) gives the Racket commands. Bun is needed only for the optional MCP server.
 
-The [shared declaration layers](docs/declarations.md) define the programs the frame can apply. They include communication and recording policy and scoped SSH grants. The guide links to runnable fixtures for each.
+The [shared declaration layers](docs/declarations.md) cover room access, communication, recording and scoped SSH grants.
+
+### Plan a five-seat workplace
+
+With the Typify reader on your `PATH`, run these commands from the frame checkout on Linux. They prepare the W4 example in a fresh directory and write its plan. Planning requires Bash, jq and the reader. The example uses invented paths and SSH key names.
+
+```sh
+example_root=$(mktemp -d)
+bash tests/fixtures/ssh-workplace/prepare.sh "$example_root/config"
+WORKPLACE_ROOT="$example_root" WORKPLACE_CONFIG="$example_root/config" bin/workplace plan --no-inventory
+jq '.rows[] | select(.key[0:3] == ["harbor","dock","pilot"])' "$example_root/config/PLAN/view.json"
+```
+
+The [example's access table](tests/fixtures/ssh-workplace/README.md) gives the expected results for each seat. To run the checks against a fresh copy, use `python3 tests/w4-example.py`.
+
+### Operate a workplace
 
 ```text
 export WORKPLACE_ROOT=/path/the/workplace/lives/under

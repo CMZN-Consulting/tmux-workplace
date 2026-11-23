@@ -1,0 +1,2 @@
+view : public = read-write
+view : agents/navigator/stores/pilot = read-write

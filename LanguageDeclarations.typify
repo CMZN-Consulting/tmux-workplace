@@ -51,19 +51,27 @@ file : programs/WORKPLACE.typify
 optional!
 is : workplace-path = canonical-path | relative-path | "."
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
-is : clearance-number = /(0|[1-9][0-9]*)/
+is : clearance-number = /(0|[1-9][0-9]{0,14})/
+is : label-value = clearance-number | "closed"
+is : scale = "turned"
 cell : statement-records = shadow
 primitive : statement : text text text text workplace-path mode
 writes : statement : statement-records = put 5
 effect : statement = state
 cell : label-records = shadow
-primitive : label : workplace-path clearance-number
+primitive : label : workplace-path label-value
 writes : label : label-records = put 1
 effect : label = state
+cell : clearance-scales = shadow
+primitive : clearance-scale : scale
+writes : clearance-scale : clearance-scales = put 1 "declared"
+effect : clearance-scale = state
 form : view : <workplace-path> = <mode>
 does : statement - - - workplace <workplace-path> <mode>
-form : label : <workplace-path> = <clearance-number>
-does : label <workplace-path> <clearance-number>
+form : label : <workplace-path> = <label-value>
+does : label <workplace-path> <label-value>
+form : clearance-scale : <scale>
+does : clearance-scale <scale>
 end!
 
 declare : OfficeAccess
@@ -73,7 +81,7 @@ optional!
 is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
-is : clearance-number = /(0|[1-9][0-9]*)/
+is : clearance-number = /(0|[1-9][0-9]{0,14})/
 cell : sessions = shadow
 cell : statement-records = shadow
 primitive : statement : text text text text workplace-path mode
@@ -99,7 +107,7 @@ is : workplace-path = canonical-path | relative-path | "."
 is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
-is : clearance-number = /(0|[1-9][0-9]*)/
+is : clearance-number = /(0|[1-9][0-9]{0,14})/
 cell : windows = shadow
 cell : statement-records = shadow
 primitive : statement : text text text text workplace-path mode
@@ -126,22 +134,14 @@ is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
 is : mode = "hidden" | "searchable-only" | "scratch" | "read-only" | "read-write"
-is : clearance-number = /(0|[1-9][0-9]*)/
 cell : panes = shadow
 cell : statement-records = shadow
 primitive : statement : text text text text workplace-path mode
 writes : statement : statement-records = put 5
 effect : statement = state
 ensure : statement : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
-cell : clearance-records = shadow
-primitive : clearance : text text text text clearance-number
-writes : clearance : clearance-records = put 4
-effect : clearance = state
-ensure : clearance : seat-declared = (bound panes <office-key> <room-key> <seat-key>)
 form : view : <workplace-path> = <mode>
 does : statement <office-key> <room-key> <seat-key> seat <workplace-path> <mode>
-form : clearance : <clearance-number>
-does : clearance <office-key> <room-key> <seat-key> seat <clearance-number>
 end!
 declare : AgentKinds
 version : 1

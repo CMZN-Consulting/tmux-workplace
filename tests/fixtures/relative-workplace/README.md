@@ -2,14 +2,14 @@
 
 The relative edition overlays the accepted five-seat reader-workplace fixture. Only thirteen program files change, so the overlay avoids duplicating its structure, kinds registry, directory declarations, environment and support data. Every program keeps its source address and line count.
 
-The preparation script also makes the existing absolute edition with the updated shared layers, for comparison:
+The preparation script also makes the absolute edition for comparison.
 
 ```sh
 bash tests/fixtures/relative-workplace/prepare.sh absolute /absolute/new/config
 bash tests/fixtures/relative-workplace/prepare.sh relative /another/new/config
 ```
 
-Each destination must be a new absolute path whose parent already exists. The script copies no PLAN/, BUILD/ or runtime data. It copies the four current shared layers, so either edition receives the same declarations. It neither plans nor builds nor starts a workplace. Support files remain in reader-workplace/root/.
+Each destination must be a new absolute path whose parent already exists. Both editions use the four archived layers in `reader-workplace/layers/` so the recorded hashes stay reproducible. The script prepares source only. Support files remain in `reader-workplace/root/`. Use the [W4 example](../ssh-workplace/README.md) for the current frame's room clearance rules.
 
 The relative edition writes `.` for the workplace root and relative suffixes for every resource beneath it. `/` remains the filesystem root. A command's executable is `tools/probe`, while its other words remain unchanged. The frame resolves the executable under the root; a bare command name still uses the seat's PATH. Directories were already written relative in the baseline and are unchanged.
 

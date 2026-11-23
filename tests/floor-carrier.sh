@@ -707,3 +707,150 @@ t_carrier_record_view_reload() {
   check "[C112] up does not recreate the revoked cached read" test ! -L "$record_view/Harbor Keeper"
   check "[C112] stop the fixture" exit_is 0 wp down bridge
 }
+
+t_client_mail() {
+  check "client mail: isolated carrier, replay and recovery" bash "$here/client-mail.sh" "$tool"
+}
+
+client_mail_floor_fixture() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox" "$root/screens"
+  printf '%s\n' busy > "$root/screens/grower"
+  statements_plan "$floors_terms | $comms_terms"' | kinds([["orchard","barn","grower","courier"],["harbor","dock","keeper","courier"],["harbor","dock","pilot","quiet"]])
+    | .programs[-1].recorded += [m(["client-mail","courier"];2),m(["client-panes","courier"];9),m(["client-notice","harbor","courier","claude-hook"];5),
+      m(["wake","courier","^waiting>$"];13),m(["kind-notice","courier","screen-pattern"];14),
+      m(["client-mail","quiet"];15),m(["kind-notice","quiet","screen-pattern"];16),
+      m(["mail-contact","harbor","dock","keeper"];6),m(["mail-contact","orchard","barn","grower"];7),m(["observe-juniors","harbor"];8),
+      m(["reach","orchard","-","-","office","mail","harbor","-","-","office","allowed"];3),
+      m(["reach","harbor","dock","-","room","mail","orchard","barn","grower","seat","allowed"];4),
+      m(["reach","orchard","barn","grower","seat","grab","harbor","tower","watch","seat","allowed"];10),
+      m(["reach","orchard","barn","grower","seat","write","harbor","tower","watch","seat","allowed"];11),
+      st("harbor";"tower";"-";"room";$root+"/harbor/charts";"read-write";12)]
+    | (.programs[] | select(.path=="orchard/barn/grower/seat.typify") | .plan[1].term[5]) |=
+      (fromjson + ["screen="+$root+"/screens/grower","typed="+$root+"/screens/grower-typed"] | tojson)
+    | (.programs[] | select(.path=="harbor/tower/watch/seat.typify") | .plan[1].term[5]) |=
+      (fromjson + ["typed="+$root+"/harbor/charts/client-typed","list="+$root+"/mailbox/in","list="+$root+"/mailbox/Orchard Grower/client-out","list="+$root+"/mailbox/Orchard Grower/client-in"] | tojson)'
+}
+
+t_client_mail_floors() {
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then skip "client mail floors: Administration needs an unbarred caller"; return 0; fi
+  client_mail_floor_fixture
+  check "client mail: plan selects the declared kind" exit_is 0 wplan
+  check "client mail: fold persists the opt-in" jq -e '.mail.clientKinds == ["courier","quiet"]' "$clone/PLAN/view.json"
+  check "client notice: only the declared office and kind get the hook" jq -e '[.seats[] | select(.clientNotice == "claude-hook") | .seat] == [["harbor","dock","keeper"]]' "$clone/PLAN/view.json"
+  check "client mail: synthetic floor build" exit_is 0 wp build
+  local mailbox="$root/mailbox/Orchard Grower" key digest file id delivered
+  file=$clone/BUILD/shared/$(top_gen)/mail.json
+  [[ -s $file ]] || return 1
+  check "client mail: exactly one trusted seat has the endpoint" jq -e '[.seats[] | select(.clientEndpoint) | .name] == ["Orchard Grower"]' "$file"
+  check "client notice: the office hook takes precedence over its kind's pointer" jq -e 'any(.seats[]; .name == "Harbor Keeper" and .pendingNotice and .clientNotice == "claude-hook")' "$file"
+  check "client notice: a selected kind without a wake pattern is pending-only" jq -e 'any(.seats[]; .name == "Harbor Pilot" and .pendingNotice and .wake == null and .clientNotice == null)' "$file"
+  check "client notice: the workspace endpoint keeps its kind's pointer in the same client-mail index" jq -e '.clientMail and any(.seats[]; .name == "Orchard Grower" and .clientEndpoint and .clientNotice == "screen-pattern" and .wake == "^waiting>$" and (.pendingNotice | not))' "$file"
+  check "client mail: Administration starts" exit_is 0 wp up bridge
+  check "client mail: enforced floor starts" exit_is 0 wp up deck
+  check "client mail: the enforced seat can read its own inbox" eventually_long on deck screen_has "Harbor Watch" "list $root/mailbox/in: ok"
+  check "client mail: the enforced seat cannot read the administrator submission directory" on deck screen_has "Harbor Watch" "list $mailbox/client-out: refused"
+  check "client mail: the enforced seat cannot read the administrator inbox directory" on deck screen_has "Harbor Watch" "list $mailbox/client-in: refused"
+  printf '%s\n' 'to: Harbor Keeper' 'subject: witnessed submission' --- 'complete letter' > "$mailbox/client-out/.draft"
+  digest=$(sha256sum < "$mailbox/client-out/.draft")
+  key="first.${digest%% *}.md"
+  mv -T -- "$mailbox/client-out/.draft" "$mailbox/client-out/$key"
+  check "client mail: sender sees the receipt" eventually_long grep -sEq '^ok [0-9]{8}T[0-9]{6}Z-' "$mailbox/client-answers/$key"
+  id=$(sed -n 's/^ok //p' "$mailbox/client-answers/$key")
+  delivered="$(state_of)/mail/Harbor Keeper/in/$id.md"
+  check "client mail: recipient has the receipt ID" grep -Fxq -- "id: $id" "$delivered"
+  check "client mail: recipient sees the submitting seat as sender" grep -Fxq -- "from: Orchard Grower" "$delivered"
+  check "client mail: recipient got the complete body" grep -Fxq -- "complete letter" "$delivered"
+  local keeper_out keeper_answer reply_id
+  keeper_out=$(jq -er '.seats[]|select(.name=="Harbor Keeper")|.out' "$file") || return 1
+  [[ -d $keeper_out && $keeper_out == "$scratch"/* ]] || return 1
+  keeper_answer=$(jq -r '.seats[]|select(.name=="Harbor Keeper")|.answers' "$file")/reply.md
+  printf '%s\n' 'to: Orchard Grower' 'subject: returning mail' --- 'cross-floor reply' > "$keeper_out/.reply" && mv -T -- "$keeper_out/.reply" "$keeper_out/reply.md"
+  check "client mail: the other floor sends a reply" eventually_long grep -sEq '^ok [0-9]{8}T[0-9]{6}Z-' "$keeper_answer"
+  reply_id=$(sed -n 's/^ok //p' "$keeper_answer")
+  check "client mail: the administrator reads the reply at its workspace path" eventually_long grep -sFxq -- 'cross-floor reply' "$mailbox/client-in/$reply_id.md"
+  local pointer="mail: 1 new, newest $reply_id.md, in $mailbox/client-in, and the page $mailbox/README.md says what this line is"
+  local typed=$root/screens/grower-typed marker=${keeper_answer%/*}/.workplace-claude-notice.json
+  check "client notice: the recipient sees its letter while its pane is busy" on bridge screen_has "Orchard Grower" working
+  check "client notice: the busy recipient still has its ID queued" jq -e --arg id "$reply_id" '.seats["Orchard Grower"].ids == [$id]' "$(state_of)/comms/wake.json"
+  check "client notice: the hook publishes the original delivery" eventually_long jq -e --arg id "$id" '.ids == [$id]' "$marker"
+  check "client notice: no pointer was typed while busy" test ! -e "$typed"
+  printf '%s\n' menu > "$root/screens/grower"
+  check "client notice: the recipient opens a dialog" eventually_long on bridge screen_has "Orchard Grower" 'Esc to cancel'
+  local pilot_out pilot_answer
+  pilot_out=$(jq -er '.seats[] | select(.name=="Harbor Pilot") | .out' "$file") || return 1
+  pilot_answer=$(jq -er '.seats[] | select(.name=="Harbor Pilot") | .answers' "$file")/outside.md
+  printf '%s\n' 'to: Orchard Grower' 'subject: non-contact' --- 'outside' > "$pilot_out/.outside" && mv -T -- "$pilot_out/.outside" "$pilot_out/outside.md"
+  check "the enforced non-contact cannot mail out through the ordinary queue" eventually_long grep -sFq 'refused the plan does not let Harbor Pilot mail Orchard Grower' "$pilot_answer"
+  printf '%s\n' 'to: Harbor Keeper, Harbor Pilot' 'subject: atomic boundary' --- 'blocked' > "$mailbox/client-out/.multi"
+  digest=$(sha256sum < "$mailbox/client-out/.multi")
+  key="multi.${digest%% *}.md"
+  mv -T -- "$mailbox/client-out/.multi" "$mailbox/client-out/$key"
+  check "the client queue refuses an entire letter containing a non-contact outside" eventually_long grep -sFq 'refused the plan does not let Orchard Grower mail Harbor Pilot, so the mail goes to none' "$mailbox/client-answers/$key"
+  check "client panes: fold is scoped to the selected kind" jq -e '.mail.clientPaneKinds == ["courier"]' "$clone/PLAN/view.json"
+  check "client panes: only the trusted endpoint supports pane requests" jq -e '[.seats[] | select(.clientPanes) | .name] == ["Orchard Grower"]' "$file"
+  local copy_name write_name refused_name
+  printf '%s\n' 'seat: Harbor Watch' > "$mailbox/client-out/.grab"
+  digest=$(sha256sum < "$mailbox/client-out/.grab")
+  copy_name="look.${digest%% *}.grab"
+  mv -T -- "$mailbox/client-out/.grab" "$mailbox/client-out/$copy_name"
+  check "client panes: grab reads the declared cross-floor target" eventually_long grep -sFq 'probe watch done' "$mailbox/client-answers/$copy_name"
+  printf '%s\n' 'seat: Harbor Watch' --- 'workspace-only marker' > "$mailbox/client-out/.type"
+  digest=$(sha256sum < "$mailbox/client-out/.type")
+  write_name="speak.${digest%% *}.write"
+  mv -T -- "$mailbox/client-out/.type" "$mailbox/client-out/$write_name"
+  check "client panes: destination received the verified typed line" eventually_long grep -sxFq 'workspace-only marker' "$root/harbor/charts/client-typed"
+  check "client panes: receipt completes" eventually_long grep -sEq '^ok ' "$mailbox/client-answers/$write_name"
+  local first_answer
+  first_answer=$(< "$mailbox/client-answers/$write_name")
+  rm -- "$mailbox/client-answers/$write_name"
+  printf '%s\n' 'seat: Harbor Watch' --- 'workspace-only marker' > "$mailbox/client-out/.type"
+  mv -T -- "$mailbox/client-out/.type" "$mailbox/client-out/$write_name"
+  check "client panes: retry restores original receipt" eventually_long grep -sxFq "$first_answer" "$mailbox/client-answers/$write_name"
+  check "client panes: retry does not type twice" test "$(grep -cxF 'workspace-only marker' "$root/harbor/charts/client-typed")" = 1
+  printf '%s\n' 'seat: Harbor Pilot' --- 'denied marker' > "$mailbox/client-out/.deny"
+  digest=$(sha256sum < "$mailbox/client-out/.deny")
+  refused_name="denied.${digest%% *}.write"
+  mv -T -- "$mailbox/client-out/.deny" "$mailbox/client-out/$refused_name"
+  check "client panes: non-granted target refused with sender attribution" eventually_long grep -sFq 'the plan does not let Orchard Grower write to Harbor Pilot' "$mailbox/client-answers/$refused_name"
+  request keeper downward.grab "seat: Harbor Watch"
+  check "the senior room observes the actual junior pane" carrier_test_answer keeper downward.grab ok
+  request keeper sideways.grab "seat: Harbor Pilot"
+  check "the senior cannot observe another seat in the same room" carrier_test_answer keeper sideways.grab "refused the plan does not let Harbor Keeper grab Harbor Pilot"
+  request watch upward.grab "seat: Harbor Keeper"
+  check "the junior cannot observe the senior" carrier_test_answer watch upward.grab "refused the plan does not let Harbor Watch grab Harbor Keeper"
+  check "client mail: pending is visible on status" exit_is 0 wp status
+  check "status names the declared office contact" said "Harbor Keeper (harbor/dock/keeper) is office harbor’s external mail contact"
+  check "client mail: status ties the recipient, oldest ID and reason together" bash -c 'grep -F "Harbor Keeper (" "$1" | grep -Fq "oldest $2; pending: waiting for the seat"' _ "$scratch/out" "$id"
+  check "client notice: the dialog received no pointer" test ! -e "$typed"
+  check "client notice: the status gives the screen route and oldest delivery" said "oldest $reply_id; pending: waiting to point out mail at the declared ready prompt"
+  printf '%s\n' ready > "$root/screens/grower"
+  check "client notice: the ready seat gets the pointer naming its workspace inbox" file_comes_to "$typed" "$pointer"
+  local state due log
+  state=$(state_of)
+  due=$state/comms/wake.json log=$state/floors/bridge/comms/record
+  check "client notice: the screen pointer settles only its delivery" eventually_long jq -e '.seats["Orchard Grower"].ids == []' "$due"
+  check "client notice: the workspace seat has no hook marker" test ! -e "$mailbox/answers/.workplace-claude-notice.json"
+  check "client notice: restart the recipient after pointing" exit_is 0 wp down bridge
+  check "client notice: start the recipient with the retained mixed index" exit_is 0 wp up bridge
+  request grower restart.grab "seat: Harbor Watch"
+  check "client notice: a full carrier pass completes after restart" eventually_long grep -sEq '^ok ' "$mailbox/answers/restart.grab"
+  check "client notice: exactly one screen pointer was recorded across restart" jq -se --arg id "$reply_id" '[.[] | select(.action=="wake" and .outcome=="ok" and .covers==[$id])] | length==1' "$log"
+  check "client notice: the same ID is typed only once across restart" file_is "$typed" "$pointer"
+  printf '%s\n' busy > "$root/screens/grower"
+  check "client notice: the recipient is busy again" eventually_long on bridge screen_has "Orchard Grower" working
+  request keeper read-first.md "to: Orchard Grower" "subject: early confirmation" --- "read while busy"
+  check "client notice: a second letter reaches the busy reader" carrier_test_answer keeper read-first.md ok
+  local read_id ack
+  read_id=$(answer_of keeper read-first.md); read_id=${read_id#ok }
+  check "client notice: the second letter is readable from the workspace" eventually_long grep -sFxq 'read while busy' "$mailbox/client-in/$read_id.md"
+  ack="$mailbox/out/.workplace-read-$read_id"
+  sha256sum < "$mailbox/client-in/$read_id.md" > "$mailbox/out/.read" && mv -fT -- "$mailbox/out/.read" "$ack"
+  check "client notice: the carrier settles the read without typing" eventually_long jq -e --arg id "$read_id" '.seats["Orchard Grower"].ids | index($id) == null' "$due"
+  printf '%s\n' ready > "$root/screens/grower"
+  check "client notice: a confirmed letter gets a read record and no pointer" jq -se --arg id "$read_id" '[.[] | select(.action=="wake" and .covers==[$id]) | .outcome] == ["read"]' "$log"
+  check "client notice: the recipient has only the first pointer" file_is "$typed" "$pointer"
+  check "client mail: stop enforced floor" exit_is 0 wp down deck
+  check "client mail: stop Administration" exit_is 0 wp down bridge
+}

@@ -15,7 +15,7 @@ JQ_FLOOR=1.7
 GPG_FLOOR=2.4.4
 ENV_FLOOR=8.30
 GIT_FLOOR=2.32
-FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-v18
+FOLD_DERIVATION=frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-kind-notice-v24
 floor_sub=""
 # Where build writes a floor's keys, homes and records: BUILD itself without floors, and the floor's generation
 # BUILD/floors/F/N with them (5.160 point 2). floor_sub stays the floor's state path, filter and unit.
@@ -540,6 +540,8 @@ print_fold_report() {
     def numbered($n): "\($n.room | join("/")) \(if $n.value == null then "with no number" else "at \($n.value), from \(ats($n.origins))" end)";
     def said($s): "\($s.term[4]) \([$s.term[1:4][] | select(. != "-")] | join("/") | if . == "" then "" else . + " " end)\($s.term[5]) \($s.term[6]) (\(ats($s.origins)))";
     .report.names as $names
+    | .view.mail.clientKinds as $clientKinds
+    | (.view.seats | any(.clientNotice == "claude-hook")) as $hasNativeNotice
     | (.report.reach // {}) as $reach
     | ([.view.seats[]?.ssh.granted[]?.name] | unique) as $reached
     | (if .view.mail == null then empty else "mail: \(.view.mail.path), where each seat is shown its own mailbox (\(ats(.view.mail.origins)))" end),
@@ -563,10 +565,13 @@ print_fold_report() {
                 elif .ground == "sub-room" then " (a sub-room: \(numbered(.rooms[1])), beneath \(numbered(.rooms[0])))"
                 else "" end)] | join(", ") end)"
           end),
+         (if .observeJuniors == null then empty else "  observation in office \(.seat[0]): earlier rooms may grab later rooms in order \(.observeJuniors.rooms | join(", ")) (\(ats(.observeJuniors.origins)))" end),
+         (if .officeMailContact == null then empty else "  mail contact for external correspondence of office \(.seat[0]) (\(ats(.officeMailContact.origins)))" end),
          (.ssh.granted[]? | "  ssh key \(.name): granted, by the \(.scope)'"'"'s term (\(ats(.origins)))"),
          (.ssh.unreached[]? | "  ssh key \(.name): the \(.scope)'"'"'s grant does not reach it, since the seat holds no key (\(ats(.origins)))"),
-         (.wake // empty | "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \(.pattern | tojson), by its kind'"'"'s term (\(ats(.origins)))"
-            + (if .own == null then "" else "; on this floor its kind wakes by itself, as \(.own.item) rules, so mail to it from a room cleared less is delivered without a pointer (\(ats(.own.origins)))" end)),
+         (if .clientNotice == "claude-hook" then "  wake: the carrier publishes a notice to this seat’s Claude hook and awaits the reader’s confirmation"
+          elif .clientNotice != "screen-pattern" and ((($clientKinds != null or $hasNativeNotice) and .wake != null) or (.kind as $k | ($clientKinds // []) | index($k) != null)) then "  wake: mail stays pending until this client supports submission at the ready prompt of this conversation" else .wake // empty | "  wake: its pane is ready when one of the last five lines of its screen that are not empty matches \(.pattern | tojson), by its kind'"'"'s term (\(ats(.origins)))"
+            + (if .own == null then "" else "; on this floor its kind wakes by itself, as \(.own.item) rules, so mail to it from a room cleared less is delivered without a pointer (\(ats(.own.origins)))" end) end),
          (.replacement_statements[] | "  \(said(.statement)) replaced:", (.replaced[] | "    \(said(.))")),
          (.statements_at_labelled_paths[] | "  stands at a labelled path: \(said(.statement)), label \(.label.value) (\(ats(.label.origins)))"),
          "  exceptions \(.exception_count), statements replaced \(.distinct_replaced_statement_count), statements at labelled paths \(.statements_at_labelled_paths | length)"),
@@ -906,11 +911,15 @@ refuse_alias_access() {
          | select(type == "array" and .[0] == "pane") | {key: (.[1:4] | tojson), value: .[4]}] | from_entries),
        runtime_faults: [runtime_row_problems($b[0]; ($p | .state[$spec.cell] = $rows);
          (($v[0] // {}) + {rows: $rows}); $runtime)],
+       client_mail: (if $v[0].mail.clientKinds then $v[0].mail.path else null end),
        chain: ($v[0].records.chain // "") }') || { warn "cannot read alias-access policy in $plan and $view"; return 1; }
   [[ $(jq '[.rows[], .labels[], .keys[]] | length' <<< "$input") != 0 ]] || { alias_access_report='{"faults":[],"labelled":[]}'; return 0; }
   local -a masks=()
   mapfile -d '' -t masks < <(frame_masks "$(jq -r '.chain' <<< "$input")")
   wait "$!" || { warn "cannot read alias-access masks"; return 1; }
+  local client_mail
+  client_mail=$(jq -r '.client_mail // empty' <<< "$input") || return 1
+  [[ -z $client_mail ]] || masks+=("$client_mail" closed "the seat-private client mailboxes")
   input=$(jq -c --args '.masks = ([range(0; ($ARGS.positional | length); 3) as $i
     | {path: $ARGS.positional[$i], kind: $ARGS.positional[$i+1], name: $ARGS.positional[$i+2]}])' \
     -- "${masks[@]}" <<< "$input") || { warn "cannot read alias-access masks"; return 1; }
@@ -1003,8 +1012,12 @@ held_by_nobody() {
 }
 
 cmd_plan() {
-  local name
-  (( $# == 0 )) || die "plan takes no arguments; it reads the clone at WORKPLACE_CONFIG" 2
+  local name inventory=1
+  if (( $# == 1 )) && [[ $1 == --no-inventory ]]; then
+    inventory=0
+  elif (( $# != 0 )); then
+    die "plan takes only the optional --no-inventory flag; it reads the clone at WORKPLACE_CONFIG" 2
+  fi
   need_jq
   locate
   local reader version
@@ -1074,7 +1087,7 @@ cmd_plan() {
   done
   if [[ -n $folded ]]; then
     print_fold_report
-    held_by_nobody "$plan_dir/view.json" "$plan_dir/plan.json"
+    (( ! inventory )) || held_by_nobody "$plan_dir/view.json" "$plan_dir/plan.json"
   fi
   return 0
 }
@@ -1593,10 +1606,20 @@ make_mail() {
     fi
     entries=$(jq -c --argjson s "$seat" --arg box "$box" --arg store "$store" --arg comms "$comms" \
       '. + [$s + {box: $box, in: "\($store)/\($box)/in", sent: "\($store)/\($box)/sent", out: "\($comms)/\($box)/out", answers: "\($comms)/\($box)/answers"}]' <<< "$entries")
-  done < <(jq -c '.report.names as $n | .view.seats[] | {seat, name: $n[.seat | tojson], reach} + (if .wake == null then {} else {wake: .wake.pattern} end)
+  done < <(jq -c '.report.names as $n | (.view.mail.clientKinds // []) as $clients | (.view.mail.clientPaneKinds // []) as $panes
+    | ((($clients | length) > 0) or (.view.seats | any(.clientNotice == "claude-hook"))) as $strict | .view.seats[]
+    | (.kind as $kind | $clients | index($kind) != null) as $client
+    | {seat, name: $n[.seat | tojson], reach}
+    + (if .officeMailContact == null then {} else {officeMailContact:true} end)
+    + (if .clientNotice == "screen-pattern" then {clientNotice}
+       elif .clientNotice == "claude-hook" then {clientNotice, pendingNotice:true}
+       elif $strict and ($client or .wake != null) then {pendingNotice:true} else {} end)
+    + (if $client and .enforced == false then {clientEndpoint:true} + (if (.kind as $k | $panes | index($k)) != null then {clientPanes:true} else {} end) else {} end) + (if .wake == null then {} else {wake: .wake.pattern} end)
     + (if has("floor") then {floor, number: .clearance.value, own: (.wake.own.item // null)} else {} end)' <<< "$folded")
-  jq -n --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
-    '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats}' > "${build_out:-$build_dir}/mail.json" \
+  local client_mode
+  client_mode=$(jq '.view.mail | has("clientKinds")' <<< "$folded") || die "cannot read the mail policy"
+  jq -n --argjson client "$client_mode" --arg w "$workplace" --arg s "$state_dir" --arg p "$path" --argjson o "$origins" --arg store "$store" --arg comms "$comms" --argjson seats "$entries" \
+    '{workplace: $w, state: $s, path: $p, origins: $o, store: $store, comms: $comms, seats: $seats} + (if $client then {clientMail:true} else {} end)' > "${build_out:-$build_dir}/mail.json" \
     || die "cannot write ${build_out:-$build_dir}/mail.json" 2
   if [[ -z ${rebuild_floor-} ]]; then
     cp -- "$tool/share/seat-page.md" "$build_dir/seat-page.md" && [[ $(sha_of "$tool/share/seat-page.md") == "$(sha_of "$build_dir/seat-page.md")" ]] \
@@ -3765,10 +3788,75 @@ carrier_destination() (
   printf '%s\n' "$context"
 )
 
+carrier_copy_inbox() {
+  local box=$1 directory=$2 head tree listing="" object name tmp entry mode kind
+  local -A committed=()
+  [[ -d $directory && $(realpath -e -- "$directory") == "$directory" && $(stat -c '%u:%a' -- "$directory") == "$EUID:700" ]] || return 1
+  if head=$(carrier_git rev-parse --verify --quiet HEAD); then
+    tree=$(carrier_git ls-tree "$head" -- "$box/in") || return 1
+    if [[ -n $tree ]]; then
+      IFS=' ' read -r mode kind object <<< "${tree%%$'\t'*}"
+      [[ $mode == 040000 && $kind == tree ]] || return 1
+      listing=$(carrier_git ls-tree "$object") || return 1
+    fi
+  else
+    [[ $? == 1 && ! -e $store/.git/refs/heads/mail && ! -e $store/.git/packed-refs ]] || return 1
+    return 0
+  fi
+  while IFS= read -r entry; do
+    [[ -n $entry ]] || continue
+    IFS=' ' read -r mode kind object <<< "${entry%%$'\t'*}"
+    name=${entry#*$'\t'}
+    [[ $mode == 100644 && $kind == blob && $name =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]{6,}\.md$ ]] || return 1
+    committed[$name]=1
+    if [[ -f $directory/$name && ! -L $directory/$name && -f $store/$box/in/$name && ! -L $store/$box/in/$name && $(stat -c '%u:%a:%h' -- "$directory/$name") == "$EUID:400:1" ]] &&
+       cmp -s -- "$directory/$name" "$store/$box/in/$name"; then continue; fi
+    tmp=$(mktemp -- "$taken/.client-in.XXXXXXXX") || return 1
+    if ! carrier_git cat-file blob "$object" > "$tmp" || ! chmod 0400 -- "$tmp" || ! mv --no-copy -fT -- "$tmp" "$directory/$name"; then
+      rm -f -- "$tmp"
+      return 1
+    fi
+  done <<< "$listing"
+  for entry in "$directory"/*.md; do
+    name=${entry##*/}
+    [[ $name =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]{6,}\.md$ && -z ${committed[$name]+x} ]] || continue
+    rm -f -- "$entry" || return 1
+  done
+}
+
+carrier_refresh_inbox() {
+  local i=$1 box=${seat_boxes[$1]} directory=${seat_endpoint[$1]}/client-in stamp result=0
+  stamp=$(stat -c '%d:%i:%y:%z' -- "$store/$box/in" "$directory") || return 1
+  [[ ${inbox_stamps[i]-} != "$stamp" ]] || return 0
+  carrier_hold || return 0
+  if carrier_copy_inbox "$box" "$directory"; then
+    inbox_stamps[i]=$(stat -c '%d:%i:%y:%z' -- "$store/$box/in" "$directory") || result=1
+  else result=1; fi
+  carrier_release
+  return "$result"
+}
+
 carrier_serve_turn() {
-  local i=$1 checked target j carrier_reserved_floor=""
+  local i=$1 checked target j carrier_reserved_floor="" client_panes=${seat_client_panes[$1]:-false}
+  local request_out=${seat_out[$1]} request_answers=${seat_answers[$1]} client_request=false
+  local endpoint=${seat_endpoint[$1]-}
+  if [[ -n $endpoint ]]; then
+    if carrier_refresh_inbox "$i"; then inbox_faults[i]=0
+    elif [[ ${inbox_faults[i]-0} == 0 ]]; then
+      warn "the committed inbox for ${seat_names[i]} could not be refreshed at $endpoint/client-in; the carrier will retry"
+      inbox_faults[i]=1
+    fi
+  fi
+  if [[ -n $endpoint ]] && { [[ ${client_next[$i]-1} == 1 ]] || ! carrier_eligible "$i"; }; then
+    request_out=$endpoint/client-out
+    if carrier_eligible "$i"; then
+      request_answers=$endpoint/client-answers
+      client_request=true
+    else request_out=${seat_out[i]}; fi
+  fi
+  if [[ $client_request == true ]]; then client_next[i]=0; else client_next[i]=1; fi
   exec 5>&-
-  if [[ -n $run_floor ]] && carrier_eligible "$i" && [[ $eligible_entry == *.write && -f $eligible_entry && ! -L $eligible_entry ]]; then
+  if [[ -n $run_floor && ( $client_request == false || $client_panes == true ) ]] && carrier_eligible "$i" && [[ $eligible_entry == *.write && -f $eligible_entry && ! -L $eligible_entry ]]; then
     if dd if="$eligible_entry" of="$fcomms/.request-check" bs=$(( MAIL_LIMIT + 1 )) count=1 iflag=fullblock,nofollow,nonblock status=none 2> /dev/null; then
       checked=$(carrier_verdict write "${seat_names[i]}" "${seat_reach[i]}" "$fcomms/.request-check") || checked='{}'
       if [[ $(jq -r '.ok // false' <<< "$checked") == true ]]; then
@@ -3913,14 +4001,25 @@ carrier_append() {
 }
 
 
+carrier_publish_answer() {
+  local src=$1 dest=$2 name=$3
+  if [[ ${client_request:-false} != true ]]; then mv -fT -- "$src" "$dest/$name"; return; fi
+  if [[ -n ${client_ledger:-} ]]; then
+    jq -cn --arg request "$name" --rawfile answer "$src" '{request:$request,answer:$answer}' > "$taken/$carrier_id.receipt" \
+      && mv -fT -- "$taken/$carrier_id.receipt" "$client_ledger" || return 1
+  fi
+  chmod 0400 -- "$src" && mv --no-copy -fT -- "$src" "$dest/$name"
+}
+
 carrier_answer() {
   local answers=$1 name=$2 file=$taken/$carrier_id.answer
   shift 2
+  rm -f -- "$file" || return 1
   printf '%s\n' "$@" > "$file" || return 1
   if [[ -f $fcomms/serving ]]; then
     carrier_progress --rawfile answer "$file" '.answer = $answer' || return 1
   fi
-  mv -fT -- "$file" "$answers/$name"
+  carrier_publish_answer "$file" "$answers" "$name"
 }
 
 carrier_record() {
@@ -3940,7 +4039,7 @@ carrier_record() {
 
 carrier_refuse() {
   local i=$1 name=$2 action=$3 targets=$4 reason=$5
-  carrier_answer "${seat_answers[i]}" "$name" "refused $reason"
+  carrier_answer "${request_answers:-${seat_answers[i]}}" "$name" "refused $reason" || return 1
   carrier_record "${seat_names[i]}" "$name" "$action" "$targets" refused "$reason"
 }
 
@@ -4029,8 +4128,8 @@ carrier_seat_of() {
 carrier_journal() {
   local rec=0
   [[ -f $comms_record ]] && rec=$(stat -c %s -- "$comms_record")
-  jq -n -c --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" --arg base "${5-}" --argjson rec "$rec" \
-    '{id: $id, box: $box, request: $request, action: $action, seat: $seat, stage: "named", rec: $rec} + (if $action == "mail" then {base: $base} else {} end)' \
+  jq -n -c --argjson client "${client_request:-false}" --arg id "$carrier_id" --arg box "$1" --arg request "$2" --arg action "$3" --arg seat "$4" --arg base "${5-}" --argjson rec "$rec" \
+    '{id: $id, box: $box, request: $request, action: $action, seat: $seat, stage: "named", rec: $rec} + (if $client then {client:true} else {} end) + (if $action == "mail" then {base: $base} else {} end)' \
     > "$fcomms/serving.new" && mv -f -- "$fcomms/serving.new" "$fcomms/serving"
 }
 
@@ -4046,7 +4145,7 @@ carrier_progress() {
 carrier_eligible() {
   local i=$1 changed now
   local -a entries
-  entries=("${seat_out[i]}"/[!.]*)
+  entries=("${request_out:-${seat_out[i]}}"/[!.]*)
   (( ${#entries[@]} )) || return 1
   eligible_entry=${entries[0]}
   changed=$(stat -c %.6Z -- "$eligible_entry" 2> /dev/null) || return 1
@@ -4065,23 +4164,48 @@ carrier_serve() {
   carrier_eligible "$i" || return 0
   # One hold of the store's lock for one request; its eligibility is read again under the hold (5.162 point 1).
   carrier_hold || return 0
-  if ! carrier_eligible "$i"; then carrier_release; return 0; fi
+  if [[ -e $fcomms/serving ]] || ! carrier_eligible "$i"; then carrier_release; return 0; fi
   if [[ $(sha_of "$build_dir/MANIFEST") != "$carrier_top" ]]; then carrier_index_ok=0; carrier_release; return 0; fi
   entry=$eligible_entry
   name=${entry##*/}
+  local client_hash="" client_key="" client_ledger="" prior
+  if [[ ${client_request:-false} == true && $name =~ ^([A-Za-z0-9][A-Za-z0-9._-]*)\.([0-9a-f]{64})\.(md|grab|write)$ ]] &&
+    [[ ${BASH_REMATCH[3]} == md || ${client_panes:-false} == true ]]; then
+    client_key=${BASH_REMATCH[1]} client_hash=${BASH_REMATCH[2]}
+    prior=$comms/${seat_boxes[i]}/client-receipts/$client_key
+    if [[ -f $prior && -f $entry && ! -L $entry ]]; then
+      local replay=$taken/.client-replay
+      rm -f -- "$replay" || { carrier_release; return 1; }
+      local copy_hash
+      copy_hash=$(dd if="$entry" bs=$(( MAIL_LIMIT + 1 )) count=1 iflag=fullblock,nofollow,nonblock status=none | sha256sum) || copy_hash=""
+      if [[ $(stat -c %s -- "$entry") -le $MAIL_LIMIT && ${copy_hash%% *} == "$client_hash" ]] \
+        && jq -e --arg name "$name" '.request == $name' "$prior" > /dev/null; then
+        jq -rj '.answer' "$prior" > "$replay" || { carrier_release; return 1; }
+      else
+        printf '%s\n' 'refused this request name already has a receipt for different contents' > "$replay" || { carrier_release; return 1; }
+      fi
+      if ! chmod 0400 -- "$replay" || ! mv --no-copy -fT -- "$replay" "$request_answers/$name"; then carrier_release; return 1; fi
+      rm -f -- "$entry" || { carrier_release; return 1; }
+      carrier_release
+      return 0
+    fi
+  fi
   # A dead carrier's add that no commit took is unstaged, so that it rides into no other delivery's commit.
   [[ $name == *.md ]] && { carrier_git diff --cached --quiet > /dev/null 2>&1 || carrier_git reset -q > /dev/null 2>&1; }
   # The action and the head the delivery starts from are read before the rename, so that nothing but the journal's
   # write stands between the rename and the journal.
   action=unknown
   [[ $name =~ ^[A-Za-z0-9._-]+\.(md|grab|write)$ ]] && action=${BASH_REMATCH[1]/md/mail}
+  if [[ ${client_request:-false} == true && -z $client_key ]]; then action=unknown; fi
   base=""
   [[ $action == mail ]] && { base=$(carrier_git rev-parse -q --verify HEAD 2> /dev/null) || base=""; }
   carrier_next_id || { carrier_release; warn "cannot count the carrier's requests in $comms/next"; return 1; }
   carrier_holder "$carrier_id"
   carrier_finished=0 carrier_journal_failed=0
   carrier_journal "${seat_boxes[i]}" "$name" "$action" "${seat_names[i]}" "$base" || { carrier_release; warn "cannot write $fcomms/serving"; return 1; }
-  mv -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || { carrier_release; return 0; }
+  local -a move=()
+  [[ ${client_request:-false} != true ]] || move=(--no-copy)
+  mv "${move[@]}" -T -- "$entry" "$taken/$carrier_id" 2> /dev/null || { carrier_release; return 0; }
   carrier_progress '.stage = "taken"' || { carrier_release; return 1; }
   carrier_at=""
   kind=$(stat -c %F -- "$taken/$carrier_id" 2> /dev/null) || kind=unknown
@@ -4090,7 +4214,15 @@ carrier_serve() {
     carrier_refuse "$i" "$name" "$action" '[]' "it is a $kind, and the carrier takes a regular file alone; it is removed"
   elif [[ $action == unknown ]]; then
     rm -f -- "$taken/$carrier_id"
-    carrier_refuse "$i" "$name" "$action" '[]' "its name is not letters, digits, dot, dash and underscore ending in .md, .grab or .write; it is removed"
+    if [[ ${client_request:-false} == true ]]; then
+      if [[ ${client_panes:-false} == true ]]; then
+        carrier_refuse "$i" "$name" "$action" '[]' "client requests take NAME.SHA256.md, .grab or .write with the digest of the complete request"
+      else
+        carrier_refuse "$i" "$name" "$action" '[]' "client mail takes NAME.SHA256.md with a lowercase SHA-256 of the complete letter"
+      fi
+    else
+      carrier_refuse "$i" "$name" "$action" '[]' "its name is not letters, digits, dot, dash and underscore ending in .md, .grab or .write; it is removed"
+    fi
   else
     copy=$taken/$carrier_id.copy
     if ! dd if="$taken/$carrier_id" of="$copy" bs=$(( MAIL_LIMIT + 1 )) count=1 iflag=fullblock,nofollow,nonblock status=none 2> /dev/null; then
@@ -4100,9 +4232,15 @@ carrier_serve() {
       size=$(stat -c %s -- "$copy")
       if (( size > MAIL_LIMIT )); then
         carrier_refuse "$i" "$name" "$action" '[]' "it is more than 256 kB, 256,000 bytes"
+      elif [[ -n $client_hash && $(sha_of "$copy") != "$client_hash" ]]; then
+        carrier_refuse "$i" "$name" "$action" '[]' "the published SHA-256 does not match the complete request"
+      elif [[ -n $client_key ]] && ! carrier_progress --arg k "$client_key" '.clientKey = $k'; then
+        carrier_release
+        return 1
       elif ! verdict=$(carrier_verdict "$action" "${seat_names[i]}" "${seat_reach[i]}" "$copy"); then
         carrier_refuse "$i" "$name" "$action" '[]' "the carrier could not read it"
       else
+        [[ -z $client_key ]] || client_ledger=$prior
         targets=$(jq -c '.targets' <<< "$verdict")
         if [[ $(jq -r '.ok' <<< "$verdict") != true ]]; then
           carrier_refuse "$i" "$name" "$action" "$targets" "$(jq -r '.reason' <<< "$verdict")"
@@ -4136,7 +4274,7 @@ carrier_serve() {
           fi
           if (( delivered )); then
             carrier_wake_note "$carrier_at" "${seat_names[i]}" "${readers[@]}" || { carrier_release; return 1; }
-            carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
+            carrier_answer "${request_answers:-${seat_answers[i]}}" "$name" "ok $carrier_id" || { carrier_release; return 1; }
             carrier_record "${seat_names[i]}" "$name" mail "$targets" ok ""
           else
             carrier_git reset -q > /dev/null 2>&1
@@ -4167,7 +4305,7 @@ carrier_serve() {
               carrier_refuse "$i" "$name" grab "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone"
             else
               [[ $out == *$'\n'* ]] && out=${out#*$'\n'} || out=""
-              carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id" "$out"
+              carrier_answer "${request_answers:-${seat_answers[i]}}" "$name" "ok $carrier_id" "$out" || return 1
               carrier_record "${seat_names[i]}" "$name" grab "$targets" ok ""
             fi
           else
@@ -4185,21 +4323,21 @@ carrier_serve() {
               2) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} does not carry this run's mark, or is gone" ;;
               4) carrier_refuse "$i" "$name" write "$targets" "the pane of ${seat_names[j]} is in ${carrier_mode:-a mode}, so its program would not read what is typed" ;;
               3)
-                carrier_answer "${seat_answers[i]}" "$name" "refused tmux did not take the line"
+                carrier_answer "${request_answers:-${seat_answers[i]}}" "$name" "refused tmux did not take the line" || return 1
                 carrier_record "${seat_names[i]}" "$name" write "$targets" refused "tmux did not take the line" "$written"
                 ;;
               5 | 6 | 7 | 8)
                 why=$(carrier_apart "$typed" "${seat_names[j]}")
-                carrier_answer "${seat_answers[i]}" "$name" "refused $why"
+                carrier_answer "${request_answers:-${seat_answers[i]}}" "$name" "refused $why" || return 1
                 carrier_record "${seat_names[i]}" "$name" write "$targets" refused "$why" "$written"
                 ;;
               9)
                 why="the server did not answer within three seconds; whether the text was typed is not known"
-                carrier_answer "${seat_answers[i]}" "$name" "refused $why"
+                carrier_answer "${request_answers:-${seat_answers[i]}}" "$name" "refused $why" || return 1
                 carrier_record "${seat_names[i]}" "$name" write "$targets" unknown "$why" "$written"
                 ;;
               *)
-                carrier_answer "${seat_answers[i]}" "$name" "ok $carrier_id"
+                carrier_answer "${request_answers:-${seat_answers[i]}}" "$name" "ok $carrier_id" || return 1
                 carrier_record "${seat_names[i]}" "$name" write "$targets" ok "" "$written"
                 ;;
             esac
@@ -4259,7 +4397,7 @@ carrier_wake_note() {
       carrier_wake_decision "$p" none "the writer's own mail is pointed out to no one (5.79)" || return 1
     elif [[ -n ${seat_own[j]} && -n $w ]] && carrier_cleared_more "$j" "$w"; then
       carrier_wake_decision "$p" withheld "the room of $p, at ${seat_number[j]}, is cleared more than the writer's, $( [[ ${seat_number[w]} == null ]] && printf 'with no number' || printf 'at %s' "${seat_number[w]}" ), and its kind wakes by itself on its floor, as ${seat_own[j]} rules (5.124 point 8, 5.125 point 17)" || return 1
-    elif [[ -n ${seat_wake[j]} ]]; then
+    elif [[ -n ${seat_wake[j]} || ${seat_pending[j]-} == true ]]; then
       due+=("${seat_boxes[j]}")
     else
       carrier_wake_decision "$p" none "its kind has no wake pattern, so no pointer is typed for it (C94)" || return 1
@@ -4288,20 +4426,143 @@ carrier_wake_record() {
     + (if $written == "" then {} else ($written | split(" ") | {length: (.[0] | tonumber), sha256: .[1]}) end)'
 }
 
+# A seat may read before another floor finishes delivery, before the marker is published, or again
+# after settlement. Check only returned files. The store lock orders cleanup with delivery and recovery.
+carrier_clear_read_receipts() {
+  local i=$1 box=${seat_boxes[$1]} file id stamp journal pending protected
+  local -a receipts=("${seat_out[i]}"/.workplace-read-*) journals=()
+  local -A keep=()
+  (( ${#receipts[@]} )) || return 0
+  if [[ -n ${state_dir-} ]]; then journals=("$state_dir"/floors/*/comms/serving); fi
+  [[ ! -f $fcomms/serving ]] || journals+=("$fcomms/serving")
+  stamp=$(stat -c '%d:%i:%y:%z' -- "${seat_out[i]}" "$store/$box/in" "$comms/wake.json" "${journals[@]}" 2>/dev/null) || return 0
+  [[ $stamp != "${read_receipt_stamps[i]-}" ]] || return 0
+
+  carrier_hold || return 0
+  # Re-enumerate journals after taking the lock. A different floor can have committed the bytes
+  # without deciding the reader's wake before an interruption.
+  journals=()
+  if [[ -n ${state_dir-} ]]; then journals=("$state_dir"/floors/*/comms/serving); fi
+  [[ ! -f $fcomms/serving ]] || journals+=("$fcomms/serving")
+  pending=$(jq -r --arg b "$box" '.seats[$b].ids[]?' "$comms/wake.json") || { carrier_release; return 1; }
+  if (( ${#journals[@]} )); then
+    protected=$(jq -er '.id | if type == "string" then . else error("missing request ID") end' "${journals[@]}") || { carrier_release; return 0; }
+    pending+=${pending:+$'\n'}$protected
+  fi
+  while IFS= read -r id; do [[ -z $id ]] || keep[$id]=1; done <<< "$pending"
+  for file in "${receipts[@]}"; do
+    id=${file##*/.workplace-read-}
+    [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]{6,}$ && -z ${keep[$id]+x} && -f $file && ! -L $file ]] || continue
+    [[ -f $store/$box/in/$id.md ]] || continue
+    if carrier_git cat-file -e "HEAD:$box/in/$id.md" 2>/dev/null; then
+      rm -f -- "$file" || { carrier_release; return 1; }
+    else
+      # A file can exist before its commit. Its delivery changes the journal or the due index.
+      [[ $? == 128 ]] || { carrier_release; return 0; }
+    fi
+  done
+  carrier_release
+  read_receipt_stamps[i]=$stamp
+}
+
+# Confirm due IDs against committed letters. An office hook admits only IDs in both its prior marker and current batch.
+carrier_pending_reads() {
+  local i=$1 box=${seat_boxes[$1]} journal=$fcomms/.pointing/${seat_boxes[$1]} id ack sum result eligible
+  local -a read_ids=() receipts=("${seat_out[i]}"/.workplace-read-*)
+  (( ${#receipts[@]} )) && [[ ! -e $journal ]] || return 0
+  carrier_clear_read_receipts "$i" || return 1
+  if (( $# == 3 )); then
+    eligible=$(jq -r --argjson due "$3" '.[] | select(. as $id | $due | index($id) != null)' <<< "$2") || return 1
+  else
+    eligible=$(jq -r --arg box "$box" '.seats[$box].ids[]?' "$comms/wake.json") || return 1
+  fi
+  while IFS= read -r id; do
+    [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]{6,}$ ]] || continue
+    ack=${seat_out[i]}/.workplace-read-$id
+    [[ -f $ack && ! -L $ack ]] || continue
+    carrier_hold || return 0
+    sum=$(carrier_git cat-file blob "HEAD:$box/in/$id.md" | sha256sum)
+    result=$?
+    carrier_release
+    (( result == 0 )) || return 1
+    if dd if="$ack" bs=69 count=1 iflag=nofollow,nonblock,fullblock status=none 2> /dev/null |
+        cmp -s - <(printf '%s\n' "$sum"); then read_ids+=("$id"); fi
+  done <<< "$eligible"
+  (( ${#read_ids[@]} )) || return 0
+  jq -nc --arg box "$box" --arg target "${seat_names[i]}" --argjson rec "$(stat -c %s -- "$comms_record")" \
+    --argjson start "$EPOCHSECONDS" --args '{box:$box,target:$target,ids:$ARGS.positional,start:$start,rec:$rec,
+      outcome:"read",reason:"the seat returned the digest of its delivered letter"}' "${read_ids[@]}" \
+    > "$fcomms/.pointing.new" && mv -fT -- "$fcomms/.pointing.new" "$journal"
+}
+
+# A Claude hook watches this seat's receipt directory. Publication and read confirmation are separate:
+# only a digest the reader returns through its outbox can settle the corresponding committed delivery.
+carrier_claude_notice() {
+  local i=$1 box=${seat_boxes[$1]} marker=${seat_answers[$1]}/.workplace-claude-notice.json
+  local batch previous='[]' last=0 visible=$mail_path line tmp journal=$fcomms/.pointing/$box
+  [[ ! -e $journal ]] || return 0
+  batch=$(jq -c --arg box "$box" '.seats[$box].ids // [] | .[:128]' "$comms/wake.json") || return 1
+  if [[ -f $marker ]]; then
+    previous=$(jq -ec '.ids | arrays' "$marker") || return 1
+    last=$(stat -c %Y -- "$marker") || return 1
+  fi
+  carrier_pending_reads "$i" "$previous" "$batch" || return 1
+  [[ ! -e $journal ]] && (( ! hold_over )) || return 0
+  [[ $batch != '[]' || -f $marker ]] || return 0
+  if [[ $batch == '[]' ]]; then rm -f -- "$marker"; return; fi
+  [[ $batch != "$previous" ]] || return 0
+  local settled
+  settled=$(jq -r --arg box "$box" '.seats[$box].last // 0' "$comms/wake.json") || return 1
+  if (( EPOCHSECONDS - last < WAKE_PERIOD || EPOCHSECONDS - settled < WAKE_PERIOD )); then
+    # Withdraw confirmed IDs immediately. Additional arrivals can join the marker after the cooldown.
+    batch=$(jq -c --argjson due "$batch" 'map(select(. as $id | $due | index($id) != null))' <<< "$previous") || return 1
+    [[ $batch != "$previous" ]] || return 0
+    if [[ $batch == '[]' ]]; then rm -f -- "$marker"; return; fi
+  fi
+  if [[ -n $run_floor && ${floor_unenforced-0} == 1 ]]; then visible=$mail_path/${seat_names[i]}; fi
+  line=$(jq -r --arg path "$visible" '"mail: \(length) new, newest \(.[-1]).md, in \($path)/in, and the page \($path)/README.md says what this line is"' <<< "$batch") || return 1
+  tmp=$(mktemp -- "${seat_answers[i]}/.notice.XXXXXXXX") || return 1
+  if jq -c --arg text "$line" --argjson old "$previous" '
+      {version:1,ids:.,text:$text} + (if (. - $old | length) == 0 then {notify:false} else {} end)' <<< "$batch" > "$tmp" &&
+      chmod 0400 -- "$tmp" && mv -fT -- "$tmp" "$marker"; then return 0; fi
+  rm -f -- "$tmp"
+  return 1
+}
+
 carrier_wake() {
-  local i n seen ready out mark text sum outcome reason typed entry count ids last visible_mail
+  local i n seen ready out mark text sum outcome reason typed entry count ids last visible_mail inbox
   local -a shown
-  [[ -z $run_floor || ${carrier_transport_ok-1} == 1 ]] || return 0
   (( wake_any )) || return 0
   [[ -f $comms/wake.json ]] || return 0
   for i in "${own[@]}"; do
     exec 5>&-
     (( carrier_stop )) && break
+    if [[ ${seat_notice[i]-} == claude-hook ]]; then
+      carrier_claude_notice "$i" || return 1
+      continue
+    fi
+    if [[ -f ${seat_answers[i]}/.workplace-claude-notice.json ]]; then
+      rm -f -- "${seat_answers[i]}/.workplace-claude-notice.json" || return 1
+    fi
+    if [[ ${seat_pending[i]-} == true || ${seat_notice[i]-} == screen-pattern ]]; then
+      carrier_pending_reads "$i" || return 1
+      [[ ${seat_pending[i]-} != true ]] && (( ! hold_over )) || continue
+    fi
     [[ -n ${seat_wake[i]} && -n ${seat_pane[i]-} ]] || continue
+    [[ -z $run_floor || ${carrier_transport_ok-1} == 1 ]] || continue
     entry=$(jq -c --arg b "${seat_boxes[i]}" '.seats[$b] // empty' "$comms/wake.json" 2> /dev/null) || continue
     [[ -n $entry ]] || continue
     count=$(jq -r '.count // 0' <<< "$entry") last=$(jq -r '.last // 0' <<< "$entry") ids=$(jq -r '(.ids // []) | join(" ")' <<< "$entry")
     [[ $count =~ ^[0-9]+$ && $last =~ ^[0-9]+$ && -n $ids ]] && (( count > 0 && EPOCHSECONDS - last >= WAKE_PERIOD )) || continue
+    visible_mail=$mail_path
+    [[ -n $run_floor && ${floor_unenforced-0} == 1 ]] && visible_mail=$mail_path/${seat_names[i]}
+    inbox=$visible_mail/in
+    if [[ -n ${seat_endpoint[i]-} ]]; then
+      visible_mail=${seat_endpoint[i]}
+      inbox=$visible_mail/client-in
+      # Another floor may deliver after this floor last refreshed its workspace inbox.
+      [[ -f $inbox/${ids##* }.md ]] || continue
+    fi
     [[ ! -e $fcomms/.pointing/${seat_boxes[i]} ]] || continue
     carrier_type_hold "$run_floor" 0 || continue
     out=$(carrier_tmux display-message -p -t "${seat_pane[i]}" '#{pane_in_mode}#{pane_dead}:#{@workplace}' \; capture-pane -p -t "${seat_pane[i]}" 2> /dev/null) || continue
@@ -4316,9 +4577,7 @@ carrier_wake() {
       if [[ ${shown[n]} =~ ${seat_wake[i]} ]]; then ready=1; break; fi
     done
     (( ready )) || continue
-    visible_mail=$mail_path
-    [[ -n $run_floor && ${floor_unenforced-0} == 1 ]] && visible_mail=$mail_path/${seat_names[i]}
-    text="mail: $count new, newest ${ids##* }.md, in $visible_mail/in, and the page $visible_mail/README.md says what this line is"
+    text="mail: $count new, newest ${ids##* }.md, in $inbox, and the page $visible_mail/README.md says what this line is"
     sum=$(printf '%s' "$text" | sha256sum)
     jq -nc --arg box "${seat_boxes[i]}" --arg target "${seat_names[i]}" --arg ids "$ids" \
       --argjson start "$EPOCHSECONDS" --argjson rec "$(stat -c %s -- "$comms_record")" --argjson length "${#text}" --arg sha "${sum%% *}" \
@@ -4385,7 +4644,7 @@ carrier_settle() {
     | if $outcome == "closed" then del(.seats[$b])
       elif .seats[$b] == null then .
       else .seats[$b] |= (.last = ($last | tonumber)
-        | if $outcome == "ok" then
+        | if $outcome | IN("ok", "read") then
             ($typed | split(" ")) as $t
             | .ids -= $t | .times = ((.times // {}) | with_entries(select(.key as $k | $t | index($k) | not)))
             | .count = (.ids | length)
@@ -4420,7 +4679,7 @@ carrier_close_wakes() {
       reason="no build makes the seat $box"
     elif [[ -n $run_floor && ${seat_fl[j]} != "$run_floor" ]]; then
       continue
-    elif [[ -z ${seat_wake[j]} ]]; then
+    elif [[ -z ${seat_wake[j]} && ${seat_pending[j]-} != true ]]; then
       kind=$(jq -r --argjson key "${seat_keys[j]}" '.seats[] | select(.seat == $key) | .kind // "none"' <<< "$carrier_index_view") || kind=none
       reason="the kind $kind of ${seat_names[j]} has no wake now"
     else continue; fi
@@ -4458,7 +4717,18 @@ carrier_recover() {
   journal=$(jq -c '.' "$fcomms/serving" 2> /dev/null) || { rm -f -- "$fcomms/serving"; return 0; }
   carrier_id=$(jq -r '.id' <<< "$journal") box=$(jq -r '.box' <<< "$journal") request=$(jq -r '.request' <<< "$journal")
   action=$(jq -r '.action' <<< "$journal") seat=$(jq -r '.seat' <<< "$journal") base=$(jq -r '.base // ""' <<< "$journal")
+  local return_out=$comms/$box/out client_request=false client_ledger="" client_key
+  local -a return_flags=(-nT)
   answers=$comms/$box/answers
+  if jq -e '.client == true' <<< "$journal" > /dev/null; then
+    floor_client_mail_dirs check "$mail_path/$box" "$comms/$box/out" "$taken" || return 1
+    client_request=true
+    client_key=$(jq -r '.clientKey // empty' <<< "$journal") || return 1
+    [[ -z $client_key ]] || client_ledger=$comms/$box/client-receipts/$client_key
+    return_out=$mail_path/$box/client-out
+    answers=$mail_path/$box/client-answers
+    return_flags=(--no-copy -fT)
+  fi
   carrier_finished=0 carrier_journal_failed=0
   stage=$(jq -r '.stage // "legacy"' <<< "$journal")
   rec=$(jq -r '.rec // -1' <<< "$journal")
@@ -4473,8 +4743,9 @@ carrier_recover() {
       [[ -n $record ]] && carrier_append "$record" || return 1
     fi
     if jq -e '.answer | type == "string"' <<< "$journal" > /dev/null; then
+      rm -f -- "$taken/$carrier_id.answer" || return 1
       jq -rj '.answer' <<< "$journal" > "$taken/$carrier_id.answer" \
-        && mv -fT -- "$taken/$carrier_id.answer" "$answers/$request" || return 1
+        && carrier_publish_answer "$taken/$carrier_id.answer" "$answers" "$request" || return 1
     fi
     [[ $action != mail ]] || carrier_delivery_clear || return 1
     rm -f -- "$taken/$carrier_id" "$taken/$carrier_id.copy" "$taken/$carrier_id.mail" "$fcomms/serving"
@@ -4486,9 +4757,9 @@ carrier_recover() {
   fi
   if [[ $stage == named || $stage == taken || $stage == returning ]]; then
     if [[ -e $taken/$carrier_id || -L $taken/$carrier_id ]]; then
-      if [[ ! -e $comms/$box/out/$request && ! -L $comms/$box/out/$request ]]; then
+      if [[ $return_out != "$comms/$box/out" || ( ! -e $return_out/$request && ! -L $return_out/$request ) ]]; then
         carrier_progress '.stage = "returning"' || return 1
-        if mv -nT -- "$taken/$carrier_id" "$comms/$box/out/$request" && [[ ! -e $taken/$carrier_id && ! -L $taken/$carrier_id ]]; then
+        if mv "${return_flags[@]}" -- "$taken/$carrier_id" "$return_out/$request" && [[ ! -e $taken/$carrier_id && ! -L $taken/$carrier_id ]]; then
           rm -f -- "$taken/$carrier_id.copy" "$fcomms/serving"
           return 0
         fi
@@ -4534,7 +4805,7 @@ carrier_recover() {
       carrier_progress --argjson n "$(( attempts + 1 ))" '.lookupFailures = $n' || return 1
       (( attempts >= 2 )) || return 1
       reason="the carrier could not tell whether this was delivered; look in the store for deliver $carrier_id before resubmitting this request"
-      [[ -d $answers ]] && carrier_answer "$answers" "$request" "refused $reason"
+      if [[ -d $answers ]]; then carrier_answer "$answers" "$request" "refused $reason" || return 1; fi
       carrier_record "$seat" "$request" mail '[]' refused "$reason" || return 1
       rm -f -- "$fcomms/serving"
       return 0
@@ -4569,7 +4840,7 @@ carrier_recover() {
       done < "$taken/recovered.paths"
     fi
     rm -f -- "$taken/recovered.paths"
-    [[ -d $answers ]] && carrier_answer "$answers" "$request" "ok $carrier_id"
+    if [[ -d $answers ]]; then carrier_answer "$answers" "$request" "ok $carrier_id" || return 1; fi
     reason="the carrier stopped after it delivered this, and answers it as it starts again"
     (( listed )) || reason+="; the readers of its commit could not be read, so it decides for none"
     if (( ${#names[@]} )); then targets=$(printf '%s\n' "${names[@]}" | jq -R -n -c '[inputs]') || targets='[]'; else targets='[]'; fi
@@ -4590,7 +4861,7 @@ carrier_recover() {
     else
       reason="the carrier stopped while it served this, and whether it acted is not known"
     fi
-    [[ -d $answers ]] && carrier_answer "$answers" "$request" "refused $reason"
+    if [[ -d $answers ]]; then carrier_answer "$answers" "$request" "refused $reason" || return 1; fi
     if [[ $stage == acting ]]; then
       targets=$(jq -c '.target // []' <<< "$journal")
       written=$(jq -r '.written // ""' <<< "$journal")
@@ -4757,11 +5028,19 @@ cmd_record_links_end() {
 carrier_index_load() {
   local index=$1 entry i
   seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=() seat_number=() seat_own=() seat_fl=()
-  own=() wake_any=0
+  own=() wake_any=0 seat_pending=() seat_notice=() read_receipt_stamps=() seat_endpoint=() seat_client_panes=() inbox_stamps=() inbox_faults=()
+  local mail_root
+  mail_root=$(jq -r '.path' <<< "$index") || return 1
   while IFS= read -r entry; do
     seat_names+=("$(jq -r '.name' <<< "$entry")")
     seat_boxes+=("$(jq -r '.box' <<< "$entry")")
     seat_out+=("$(jq -r '.out' <<< "$entry")")
+    seat_client_panes+=("$(jq -r '.clientPanes // false' <<< "$entry")")
+    seat_pending+=("$(jq -r '.pendingNotice // false' <<< "$entry")")
+    seat_notice+=("$(jq -r '.clientNotice // ""' <<< "$entry")")
+    if jq -e '.clientEndpoint == true' <<< "$entry" > /dev/null; then
+      seat_endpoint+=("$mail_root/${seat_boxes[-1]}")
+    else seat_endpoint+=(""); fi
     seat_answers+=("$(jq -r '.answers' <<< "$entry")")
     seat_reach+=("$(jq -c '.reach' <<< "$entry")")
     seat_keys+=("$(jq -c '.seat' <<< "$entry")")
@@ -4769,14 +5048,14 @@ carrier_index_load() {
     seat_number+=("$(jq -r 'if has("number") then (.number // "null" | tostring) else "" end' <<< "$entry")")
     seat_own+=("$(jq -r '.own // ""' <<< "$entry")")
     seat_fl+=("$(jq -r '.floor // ""' <<< "$entry")")
-  done < <(jq -c '.seats[]' <<< "$index")
+  done < <(jq -c '.clientMail as $strict | .seats[] | if $strict == true and .wake != null and .clientNotice != "screen-pattern" then .pendingNotice=true else . end' <<< "$index")
   carrier_names=$(jq -c '[.seats[].name]' <<< "$index")
   carrier_box_floors=$(jq -c '[.seats[] | {key:.box,value:(.floor // "")}] | from_entries' <<< "$index")
   box_order=$(jq -c '[.seats[].box]' <<< "$index")
   for i in "${!seat_names[@]}"; do
     [[ -z $run_floor || ${seat_fl[i]} == "$run_floor" ]] || continue
     own+=("$i")
-    [[ -n ${seat_wake[i]} ]] && wake_any=1
+    [[ -n ${seat_wake[i]} || ${seat_pending[i]} == true || -n ${seat_notice[i]} || -f ${seat_answers[i]}/.workplace-claude-notice.json ]] && wake_any=1
   done
   if [[ -f $run_dir/state.json ]]; then
     for i in "${!seat_keys[@]}"; do
@@ -4859,6 +5138,7 @@ cmd_carry() {
   trap '' HUP
   exec {pause_fd}<> <(:)
   seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=() seat_number=() seat_own=() seat_fl=()
+  client_next=()
   own=() wake_any=0 box_order='[]' fcomms="" taken="" comms=""
   comms_record=""
   if [[ -f $mail ]]; then
@@ -5527,11 +5807,17 @@ seats_report() {
     while IFS= read -r entry; do
       path=$(jq -r '.out' <<< "$entry")
       inside=("$path"/[!.]*)
+      if jq -e '.clientEndpoint == true' <<< "$entry" > /dev/null; then
+        local client_out
+        client_out=$(jq -r '.path' "$b_mail")/$(jq -r .box <<< "$entry")/client-out
+        inside+=("$client_out"/[!.]*)
+      fi
       waiting=$(( waiting + ${#inside[@]} ))
       (( ${#inside[@]} )) && waits+=("mail    $(jq -r '"\(.name) (\(.seat | join("/")))"' <<< "$entry"): ${#inside[@]} waiting in out")
     done < <(jq -c '.seats[]' "$b_mail")
     say "mail    the store $(jq -r '.store' "$b_mail"), shown at $(jq -r '.path' "$b_mail"); requests waiting in the seats' out: $waiting"
     (( ${#waits[@]} )) && printf '%s\n' "${waits[@]}"
+    jq -r '.seats[] | select(.officeMailContact) | "mail    \(.name) (\(.seat | join("/"))) is office \(.seat[0])’s external mail contact"' "$b_mail"
     [[ $b_layout == generations ]] && store_status "$(jq -r '.store' "$b_mail")"
     file=$(jq -r '.comms' "$b_mail")/wake.json
     if [[ -f $file ]]; then
@@ -5540,15 +5826,18 @@ seats_report() {
       state_path=$(jq -r '.state' "$b_mail")
       if [[ $b_layout == generations ]]; then pointer_files=("$state_path"/floors/*/comms/.pointing/*)
       else pointer_files=("$state_path"/comms/.pointing/*); fi
-      if (( ${#pointer_files[@]} )); then pointed=$(jq -s '[.[] | select(.outcome == "ok")]' "${pointer_files[@]}" 2> /dev/null) || pointed='[]'; fi
+      if (( ${#pointer_files[@]} )); then pointed=$(jq -s '[.[] | select(.outcome | IN("ok", "read"))]' "${pointer_files[@]}" 2> /dev/null) || pointed='[]'; fi
       jq -r --argjson pointed "$pointed" --slurpfile w "$file" '
         (reduce $pointed[] as $p ($w[0];
           if .seats[$p.box] == null then . else
             .seats[$p.box] |= (.ids -= $p.ids | .count=(.ids | length)
               | .since=(if .count == 0 then null else ([.ids[] as $id | .times[$id] // .since] | min) end)) end)) as $pending
-        | .seats[] | select(.wake != null) | . as $s | ($pending.seats[$s.box] // null) as $p
+        | .clientMail as $strict | .seats[] | select(.wake != null or .pendingNotice == true) | . as $s | ($pending.seats[$s.box] // null) as $p
         | select($p != null and ($p.count // 0) > 0)
-        | "wake    \($s.name) (\($s.seat | join("/"))): \($p.count) delivered and not yet pointed out, the first at \($p.since)"' "$b_mail" 2> /dev/null
+        | "wake    \($s.name) (\($s.seat | join("/"))): \($p.count) delivered\(if $s.clientNotice == "claude-hook" then ", awaiting reader confirmation" else " and not yet pointed out" end), the first at \($p.since)" +
+          (if $s.clientNotice == "claude-hook" then "; oldest " + $p.ids[0] + "; pending: waiting for the seat to confirm reading its Claude mailbox notice"
+           elif $s.clientNotice == "screen-pattern" then "; oldest " + $p.ids[0] + "; pending: waiting to point out mail at the declared ready prompt"
+           elif $s.pendingNotice or ($strict and $s.wake != null) then "; oldest " + $p.ids[0] + "; pending: no client operation can submit to this conversation at its ready prompt" else "" end)' "$b_mail" 2> /dev/null
     fi
     file=""
   fi
@@ -5991,7 +6280,7 @@ cmd_unbuild() {
 }
 
 usage() {
-  say "usage: workplace plan | build | unbuild | up | restart [SEAT ...] | exec [--print] SEAT | down | status | why SEAT PATH | record verify SEAT [DAY | unstored | gaps | signed] | record verify --requests | doctor"
+  say "usage: workplace plan [--no-inventory] | build | unbuild | up | restart [SEAT ...] | exec [--print] SEAT | down | status | why SEAT PATH | record verify SEAT [DAY | unstored | gaps | signed] | record verify --requests | doctor"
   say "with floors: workplace up F | restart F [SEAT ...] | down F | status [F]"
   say "reads WORKPLACE_ROOT and WORKPLACE_CONFIG"
 }

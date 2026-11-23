@@ -214,6 +214,35 @@ floor_after_term() {
   fi
 }
 
+floor_client_mail_dirs() {
+  local mode=$1 destination=$2 private_out=$3 claim_dir=$4 dir
+  if [[ $(realpath -e -- "$destination") != "$destination" ]]; then
+    warn "the client mailbox $destination must be its physical path"
+    return 1
+  fi
+  for dir in "$destination/client-in" "$destination/client-out" "$destination/client-answers" "${private_out%/*}/client-receipts"; do
+    if [[ $mode == make && ! -e $dir && ! -L $dir ]]; then
+      mkdir -m 0700 -- "$dir" || return 1
+    fi
+    if [[ ! -d $dir || -L $dir || $(stat -c '%u:%a:%d' -- "$dir") != "$EUID:700:$(stat -c %d -- "$private_out")" ]]; then
+      warn "$dir must be this user's real directory, mode 700, on the carrier's file system"
+      return 1
+    fi
+  done
+  if [[ $mode == make ]]; then
+    local probe sample
+    probe=$(mktemp -d -- "$claim_dir/.mail-probe.XXXXXXXX") || return 1
+    sample=$(mktemp -- "$destination/client-out/.mail-probe.XXXXXXXX") || { rmdir -- "$probe"; return 1; }
+    if ! mv --no-copy -T -- "$sample" "$probe/letter" || ! mv --no-copy -T -- "$probe/letter" "$destination/client-answers/${sample##*/}"; then
+      rm -f -- "$sample" "$probe/letter"
+      rmdir -- "$probe"
+      warn "client mail requires an atomic rename between its queues and the carrier"
+      return 1
+    fi
+    rm -f -- "$destination/client-answers/${sample##*/}" && rmdir -- "$probe" || return 1
+  fi
+}
+
 floor_links() {
   [[ -n $run_floor && $(jq -r '.slots[(["unenforced"] | tojson)] // ""' <<< "$state") == 1 ]] || return 0
   local mode=${1:-check} file=$b_mail entry destination link target base
@@ -224,6 +253,9 @@ floor_links() {
       if [[ $mode == make && ! -e $destination && ! -L $destination ]]; then mkdir -m 0700 -- "$destination" || return 1; fi
       [[ -d $destination && ! -L $destination && $(stat -c %u -- "$destination") == "$EUID" ]] \
         || { warn "the unenforced floor's mailbox $destination is not this user's directory"; return 1; }
+      if jq -e '.clientEndpoint == true' <<< "$entry" > /dev/null; then
+        floor_client_mail_dirs "$mode" "$destination" "$(jq -r .out <<< "$entry")" "$(jq -r .state "$file")/floors/$run_floor/comms/taken" || return 1
+      fi
       for link in in sent out answers; do
         target=$(jq -r --arg k "$link" '.[$k]' <<< "$entry")
         if [[ -e $destination/$link || -L $destination/$link ]]; then

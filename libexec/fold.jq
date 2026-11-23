@@ -51,7 +51,7 @@ joined($b[0]; $root) as $plan
     else null end;
   [($plan.state["seat-kinds"] // [])[] | {key: (.key | tojson), value: .value[0]}] | from_entries as $kinds
 | ([$kinds[]] + [($plan.state.kinds // [])[] | .key[0]?] | map(select(type == "string" and . != "none")) | unique) as $made_kinds
-| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "clearance-scale", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake", "wake-own")))] as $records
+| [$plan.programs[] | .recorded[]? | select((.term | type) == "array" and (.term[0] | IN("statement", "clearance", "clearance-scale", "label", "key", "home", "home-variable", "home-seed", "expect", "mail", "mail-contact", "observe-juniors", "client-mail", "client-panes", "client-notice", "kind-notice", "reach", "record", "record-limit", "record-chain", "record-path", "ssh-key", "ssh-grant", "wake", "wake-own")))] as $records
 | def known($scope; $n):
     if $scope == "floor" then ($floor_keys | index($n[0])) != null
     elif $scope == "office" then ($offices | index([$n[0:1]])) != null
@@ -117,6 +117,30 @@ joined($b[0]; $root) as $plan
         if ($t | length) != 2 then "\($where): a mail has the words mail PATH, not \($t | length)"
         elif $t[1] | canonical | not then "\($where): \($t[1]) is not an absolute, canonical path"
         elif $t[1] == "/" then "\($where): a mail path of / would cover each seat's whole view with its mailbox"
+        else empty end
+      elif $t[0] == "observe-juniors" then
+        if ($t | length) != 2 then "\($where): observe-juniors takes OFFICE"
+        elif known("office"; [$t[1]]) != true or ($floor_keys | index($t[1])) != null then "\($where): observe-juniors names an undeclared office"
+        else empty end
+      elif $t[0] == "mail-contact" then
+        if ($t | length) != 4 then "\($where): mail-contact takes OFFICE ROOM SEAT"
+        elif known("office"; [$t[1]]) != true or ($floor_keys | index($t[1])) != null then "\($where): mail-contact names an undeclared office"
+        elif known("seat"; $t[1:4]) != true then "\($where): the office mail contact \($t[1:4] | join("/")) is not a seat of that office"
+        else empty end
+      elif ($t[0] | IN("client-mail", "client-panes")) then
+        if ($t | length) != 2 then "\($where): \($t[0]) takes one declared kind"
+        elif ($made_kinds | index($t[1])) == null then "\($where): \($t[0]) names an undeclared kind"
+        else empty end
+      elif $t[0] == "kind-notice" then
+        if ($t | length) != 3 then "\($where): kind-notice takes KIND screen-pattern"
+        elif ($made_kinds | index($t[1])) == null then "\($where): kind-notice names an undeclared kind"
+        elif $t[2] != "screen-pattern" then "\($where): kind-notice needs the screen-pattern transport"
+        else empty end
+      elif $t[0] == "client-notice" then
+        if ($t | length) != 4 then "\($where): client-notice takes OFFICE KIND claude-hook"
+        elif known("office"; [$t[1]]) != true or ($floor_keys | index($t[1])) != null then "\($where): client-notice names an undeclared office"
+        elif ($made_kinds | index($t[2])) == null then "\($where): client-notice names an undeclared kind"
+        elif $t[3] != "claude-hook" then "\($where): client-notice needs the claude-hook transport"
         else empty end
       elif $t[0] == "reach" then
         if ($t | length) != 11 then "\($where): a reach has the words reach A B C SCOPE ACTION TA TB TC TSCOPE STATE, not \($t | length)"
@@ -207,6 +231,12 @@ joined($b[0]; $root) as $plan
       | [$records[] | select(.term[0] == "label")] as $labelled
       | [$records[] | select(.term[0] == "key")] as $keyed
       | [$records[] | select(.term[0] == "mail")] as $mailed
+      | [$records[] | select(.term[0] == "observe-juniors")] as $observe
+      | [$records[] | select(.term[0] == "mail-contact")] as $contacts
+      | [$records[] | select(.term[0] == "client-mail")] as $clients
+      | ([$records[] | select(.term[0] == "client-panes") | .term[1]] | unique) as $pane_clients
+      | [$records[] | select(.term[0] == "client-notice")] as $notices
+      | ([$records[] | select(.term[0] == "kind-notice") | .term[1]] | unique) as $screen_kinds
       | [$records[] | select(.term[0] == "reach")] as $reached
       | ($mailed | map(.term[1]) | unique) as $mail_paths
       | [$records[] | select(.term[0] == "record")] as $recs
@@ -250,6 +280,20 @@ joined($b[0]; $root) as $plan
              | "\(at(.origin)): the kind \(.term[1]) has a seed and no home"),
             ($seeded[] | select($home_of[.term[1]] != null and $home_of[.term[1]][3] == "scratch")
              | "the kind \(.term[1]) has a seed and a scratch home, and build seeds only a kept one (the seed at \(at(.origin)); the home at \(home_at(.term[1]; .[3] == "scratch")))")),
+         (if ($observe | length) > 0 and (($mail_paths | length) != 1 or ($floored | not))
+          then "observe-juniors needs a workplace with floors and one declared mail path for grab requests" else empty end),
+         ($contacts | group_by(.term[1])[] | select((map(.term[1:4]) | unique | length) > 1)
+          | "the office \(.[0].term[1]) has two different mail contacts: \(map("\(.term[1:4]|join("/")) at \(at(.origin))") | join(", "))"),
+         (if ($contacts | length) > 0 and (($mail_paths | length) != 1 or ($floored | not))
+          then "mail-contact needs a workplace with floors and one declared mail path" else empty end),
+         (if ($screen_kinds | length) > 0 and (($mail_paths | length) != 1 or ($floored | not))
+          then "kind-notice needs a workplace with floors and one declared mail path" else empty end),
+         (if ($notices | length) > 0 and (($mail_paths | length) != 1 or ($floored | not))
+          then "client-notice needs a workplace with floors and one declared mail path" else empty end),
+         (if ($clients | length) > 0 and (($mail_paths | length) != 1 or ($floored | not))
+          then "client-mail needs a workplace with floors and one declared mail path" else empty end),
+         ($pane_clients[] as $k | select(($clients | any(.term[1] == $k)) | not)
+          | "client-panes needs client-mail for the same kind \($k)"),
          (if ($mail_paths | length) > 1
           then "two mail terms differ: \([$mail_paths[] as $p | "\($p) from \(ats([$mailed[] | select(.term[1] == $p) | .origin]))"] | join(", "))" else empty end),
          ($reached | group_by(.term[1:10])[] | select((map(.term[10]) | unique | length) > 1)
@@ -310,13 +354,20 @@ joined($b[0]; $root) as $plan
           | entities($seeded) as $seeds
           | entities($expected) as $expects
           | entities($reached) as $reaches
+          | (entities($observe) | map(. as $o | {key: .term[1], value: {origins, rooms: [$window_rooms[] | select(.[0] == $o.term[1]) | .[1]]}}) | from_entries) as $observed
+          | (entities($contacts) | map({key: .term[1], value: {seat: .term[1:4], origins}}) | from_entries) as $contact
+          | ([$reaches[] | select(.term[4] == "office" and .term[5] == "mail" and .term[9] == "office"
+                                  and .term[10] == "allowed" and .term[1] == .term[6])
+              | {key: .term[1], value: .origins}] | from_entries) as $office_mail
           | entities($recs) as $record_terms
           | entities($sshkeys) as $ssh_keys_e
           | entities($sshgrants) as $ssh_grants_e
           | entities($waked) as $wakes
           | entities($owned) as $owns
           | (if ($rpaths | length) == 0 then null else $record_paths[0] end) as $record_path
-          | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]} end) as $mail
+          | (if ($mailed | length) == 0 then null else {path: $mail_paths[0], origins: [$mailed[].origin]}
+          + (if ($clients | length) == 0 then {} else {clientKinds: ([$clients[].term[1]] | unique)} end)
+          + (if ($pane_clients | length) == 0 then {} else {clientPaneKinds: $pane_clients} end) end) as $mail
           | def holds($scope; $n; $k):
               $scope == "workplace" or ($scope == "floor" and $n[0] == floor_of($k[0])) or ($scope == "office" and $n[0] == $k[0]) or ($scope == "room" and $n[0:2] == $k[0:2]) or ($scope == "seat" and $n == $k);
             def number_of($k):
@@ -332,6 +383,10 @@ joined($b[0]; $root) as $plan
                 | if $a == $t then "peer"
                   elif $t == null or ($a != null and $t > $a) then "sub-room"
                   else "room above" end end;
+            def internal_mail($action; $k; $tk): $action == "mail" and $k[0] == $tk[0] and ($office_mail | has($k[0]));
+            def ordered_grab($action; $k; $tk): $action == "grab" and $k[0] == $tk[0] and $observed[$k[0]] != null;
+            def precedes($k; $tk): $observed[$k[0]].rooms | index($k[1]) < index($tk[1]);
+            def can_mail_outside($k): $contact[$k[0]] == null or $contact[$k[0]].seat == $k;
             def narrowest($c): ($c | map(.term[4] | rank) | max) as $ask | [$c[] | select((.term[4] | rank) == $ask)] as $narrow
               | ($narrow | map(.term[9] | rank) | max) as $tgt | [$narrow[] | select((.term[9] | rank) == $tgt)][0];
             def decide($action; $k; $tk):
@@ -340,7 +395,13 @@ joined($b[0]; $root) as $plan
                   if ($c | length) == 0 then {state: (if $action == "mail" then "allowed" else "banned" end), origins: []}
                   else narrowest($c) | {state: .term[10], origins} end
                 else mode_of($k) as $mode | (if $mode == "enforced" then relation($k; $tk) else null end) as $r
-                  | if any($c[]; .term[10] == "banned") then {state: "banned", origins: []}
+                  | if $action == "mail" and $k[0] != $tk[0] and ((can_mail_outside($k) and can_mail_outside($tk)) | not)
+                    then {state: "banned", origins: []}
+                    elif any($c[]; .term[10] == "banned") then {state: "banned", origins: []}
+                    elif ordered_grab($action; $k; $tk)
+                    then {state: (if precedes($k; $tk) then "allowed" else "banned" end), origins: $observed[$k[0]].origins}
+                    elif ($r | IN("room above", "peer")) and internal_mail($action; $k; $tk)
+                    then {state: "allowed", origins: $office_mail[$k[0]]}
                     elif ($c | length) > 0 then narrowest($c) | {state: "allowed", origins}
                     elif ($action == "grab" and ($r | IN("own room", "sub-room"))) or ($action == "mail" and $r == "sub-room")
                     then {state: "allowed", origins: [], ground: $r, rooms: ([number_of($k)] + (if $r == "own room" then [] else [number_of($tk)] end))}
@@ -356,6 +417,7 @@ joined($b[0]; $root) as $plan
               | $reaches[] | select((.term[5] | IN("grab", "mail")) and .term[10] == "allowed") | . as $t
               | [$askers[] as $k | $panes[] | .[1:4] as $tk | select($tk[0] == $k[0] and $tk[0:2] != $k[0:2])
                  | relation($k; $tk) as $r | select($r | IN("room above", "peer"))
+                 | select(internal_mail($t.term[5]; $k; $tk) | not)
                  | [$reaches[] | select(.term[5] == $t.term[5] and holds(.term[4]; .term[1:4]; $k) and holds(.term[9]; .term[6:9]; $tk))] as $c
                  | select(all($c[]; .term[10] != "banned") and narrowest($c).term == $t.term)
                  | {from: $k[0:2], to: $tk[0:2], r: $r}] | unique_by([.from, .to])[]
@@ -461,6 +523,7 @@ joined($b[0]; $root) as $plan
                (["grab", "mail"][] as $a | ($f.reach[$a] // [])[] as $t | $coord_of[$t.name] as $tk
                 | select(($room_floor_keys | index($f.seat[0])) == null)
                 | relation($f.seat; $tk) as $r | select($r | IN("room above", "peer"))
+                | select((internal_mail($a; $f.seat; $tk) or (ordered_grab($a; $f.seat; $tk) and precedes($f.seat; $tk))) | not)
                 | "seat \($f.name) (\($f.seat | join("/"))), on the enforced floor \(floor_of($f.seat[0])), may \($a) \($t.name) (\($tk | join("/"))) by its finished reach, "
                   + (if $r == "room above" then "a room above its own" else "a room cleared as much as its own" end)
                   + " in the office \($f.seat[0]): inside an office a seat reaches no room cleared more or as much (5.124 point 8, 5.125 point 9)")]
@@ -541,6 +604,12 @@ joined($b[0]; $root) as $plan
                      + (if .reach == null then {} else {reach: (.reach | map_values(map(.name)))} end)
                      + (if .record == null then {} else {record} end)
                      + (if .ssh == null then {} else {ssh} end)
+                     + (if $observed[.seat[0]] != null then {observeJuniors:$observed[.seat[0]]} else {} end)
+                     + (if $contact[.seat[0]].seat == .seat then {officeMailContact: $contact[.seat[0]]} else {} end)
+                     + (.seat[0] as $office | .kind as $kind
+                        | if any($notices[]; .term[1] == $office and .term[2] == $kind) then {clientNotice:"claude-hook"}
+                          elif .wake != null and ($screen_kinds | index($kind)) != null then {clientNotice:"screen-pattern"}
+                          else {} end)
                      + (if .wake == null then {} else {wake} end)
                      + {
                       rows: (.rows | length),

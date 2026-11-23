@@ -2,7 +2,10 @@ name: tmux compatibility
 
 on:
   push:
-    branches: [w1-loop, pr/stop4c-preweek-2026-11-18]
+    branches: [main, w1-loop, pr/stop4c-preweek-2026-11-18]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -73,6 +76,9 @@ jobs:
           gpg --version | head -1
           ssh -V
           bash tests/run.sh
+      - name: Preview edits with the native planner
+        if: matrix.version == '3.8'
+        run: python3 tests/workplace-preview.py
 
   tests:
     name: tests

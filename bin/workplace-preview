@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path, PurePosixPath
+import re
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+
+
+FRAME = Path(__file__).resolve().with_name("workplace")
+DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+SEAT_METADATA = {"seat", "rows", "exception_count", "distinct_replaced_statement_count",
+                 "replacement_statements", "statements_at_labelled_paths"}
+
+
+def relative(name):
+    if (not isinstance(name, str) or not name or any(ord(c) < 32 or ord(c) == 127 for c in name)
+            or any(not part or part.startswith(".") or part in {"PLAN", "BUILD"} for part in name.split("/"))):
+        raise ValueError(f"expected a relative source path: {name!r}")
+    return PurePosixPath(name)
+
+
+def read_request():
+    request = json.load(sys.stdin)
+    if not isinstance(request, dict) or set(request) != {"edits"} or not isinstance(request["edits"], list):
+        raise ValueError("expected an object with an edits array")
+    edits = {}
+    for edit in request["edits"]:
+        if not isinstance(edit, dict) or set(edit) != {"path", "content"}:
+            raise ValueError("each edit needs a path and content")
+        path = relative(edit["path"])
+        if path.suffix != ".typify" or path in edits:
+            raise ValueError(f"expected a unique .typify path: {path}")
+        if edit["content"] is not None and not isinstance(edit["content"], str):
+            raise ValueError(f"content of {path} must be a string or null")
+        edits[path] = edit["content"]
+    return edits
+
+
+def copy_source(fd, path, target, *, placeholder=False):
+    parent = os.dup(fd)
+    try:
+        for part in path.parts[:-1]:
+            child = os.open(part, DIR, dir_fd=parent)
+            os.close(parent)
+            parent = child
+        source = os.open(path.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW, dir_fd=parent)
+        with os.fdopen(source, "rb") as src:
+            if not stat.S_ISREG(os.fstat(src.fileno()).st_mode):
+                raise ValueError(f"expected a regular source file: {path}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("wb") as dest:
+                if not placeholder:
+                    shutil.copyfileobj(src, dest)
+    finally:
+        os.close(parent)
+
+
+def copy_programs(fd, target):
+    target.mkdir()
+    for name in sorted(os.listdir(fd)):
+        path = relative(name)
+        entry = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(entry.st_mode):
+            child = os.open(name, DIR, dir_fd=fd)
+            try:
+                copy_programs(child, target / name)
+            finally:
+                os.close(child)
+        elif path.suffix == ".typify" and stat.S_ISREG(entry.st_mode):
+            copy_source(fd, path, target / name)
+        else:
+            raise ValueError(f"expected directories and regular .typify files in programs/: {name}")
+
+
+def snapshot(config, clone):
+    clone.mkdir(parents=True)
+    fd = os.open(config, DIR)
+    try:
+        manifest = clone / "workplace.json"
+        copy_source(fd, PurePosixPath("workplace.json"), manifest)
+        doc = json.loads(manifest.read_bytes())
+        if not isinstance(doc, dict) or not isinstance(doc.get("layers"), list):
+            raise ValueError("workplace.json needs a layers array")
+        layers = {relative(path) for path in doc["layers"]}
+        for path in sorted(layers):
+            if path.suffix != ".typify" or path.parts[0] == "programs":
+                raise ValueError(f"expected a .typify layer outside programs/: {path}")
+            copy_source(fd, path, clone / path)
+        if "floors" in doc:
+            if not isinstance(doc["floors"], list) or any(not isinstance(f, dict) for f in doc["floors"]):
+                raise ValueError("workplace.json floors must be an array of floor objects")
+            configs = {relative(f.get("conf")) for f in doc["floors"]}
+            try:
+                os.stat("tmux.conf", dir_fd=fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise ValueError("tmux.conf stands beside declared floors")
+        else:
+            configs = {PurePosixPath("tmux.conf")}
+        for path in sorted(configs):
+            if path in layers or path == PurePosixPath("workplace.json") or path.parts[0] == "programs":
+                raise ValueError(f"tmux configuration overlaps another planner input: {path}")
+            copy_source(fd, path, clone / path, placeholder=True)
+        programs = os.open("programs", DIR, dir_fd=fd)
+        try:
+            copy_programs(programs, clone / "programs")
+        finally:
+            os.close(programs)
+        return layers
+    finally:
+        os.close(fd)
+
+
+def plan(clone, root, env):
+    process = subprocess.Popen([FRAME, "plan", "--no-inventory"], env=env, cwd=root,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, text=True, errors="replace", start_new_session=True)
+    try:
+        _, diagnostic = process.communicate()
+    finally:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+    if process.returncode:
+        raise ValueError(diagnostic.strip() or f"planner exited {process.returncode}")
+    output = clone / "PLAN"
+    view = output / "view.json"
+    return json.loads((output / "plan.json").read_bytes()), json.loads(view.read_bytes()) if view.exists() else {}
+
+
+def semantic(data, root):
+    if isinstance(data, dict):
+        return {k: semantic(v, root) for k, v in data.items() if k not in {"origin", "origins"}}
+    if isinstance(data, list):
+        return [semantic(v, root) for v in data]
+    if isinstance(data, str) and (data == root or data.startswith(root + "/")):
+        return "$WORKPLACE_ROOT" + data[len(root):]
+    return data
+
+
+def seat_projection(document, view):
+    seats = {}
+    rooms = {}
+    for program in document["programs"]:
+        for item in program.get("plan", []):
+            term = item["term"] if isinstance(item, dict) else item
+            op = term[0]
+            if op in {"pane", "start"}:
+                seat = seats.setdefault(tuple(term[1:4]), {})
+                if op == "pane":
+                    seat["name"] = term[4]
+                else:
+                    seat["start"] = term[4:]
+            elif op in {"window", "arrange"}:
+                rooms.setdefault(tuple(term[1:3]), {})[op] = term[3]
+    for s in view.get("seats", []):
+        seats.setdefault(tuple(s["seat"]), {}).update({k:v for k,v in s.items() if k not in SEAT_METADATA})
+    state = document["state"]
+    for row in view.get("rows", state.get("view", [])):
+        seat = seats.setdefault(tuple(row["key"][:3]), {})
+        seat.setdefault("filesystem", {})[row["key"][3]] = row["value"][0]
+    for row in state.get("environment", []):
+        seat = seats.setdefault(tuple(row["key"][:3]), {})
+        seat.setdefault("environment", {})[row["key"][3]] = row["value"]
+    for row in state.get("directories", []):
+        seat = seats.setdefault(tuple(row["key"][:3]), {})
+        seat.setdefault("directories", {})[row["key"][3]] = row["value"]
+    for address, seat in seats.items():
+        if address[:2] in rooms:
+            seat["room"] = rooms[address[:2]]
+    return seats
+
+
+def difference(before, after):
+    return {key: {"before": before.get(key), "after": after.get(key)}
+            for key in sorted(before.keys() | after.keys()) if before.get(key) != after.get(key)}
+
+
+def report(baseline, candidate, root):
+    a, x = semantic(list(baseline), root)
+    b, y = semantic(list(candidate), root)
+    old, new = seat_projection(a, x), seat_projection(b, y)
+    seats = []
+    for seat in sorted(old.keys() | new.keys()):
+        left, right = old.get(seat, {}), new.get(seat, {})
+        changes = difference(left, right)
+        if not changes:
+            continue
+        for key in ("filesystem", "reach", "directories"):
+            if key in changes:
+                changes[key] = difference(left.get(key, {}), right.get(key, {}))
+        if "environment" in changes:
+            previous = left.get("environment", {})
+            current = right.get("environment", {})
+            changes["environment"] = {name: ("removed" if name not in current else
+                                             "added" if name not in previous else "modified")
+                                      for name in difference(previous, current)}
+        action = "added" if seat not in old else "removed" if seat not in new else "modified"
+        seats.append({"seat": seat, "name": right.get("name", left.get("name")), "change": action, "changes": changes})
+    old_programs = {p["path"]:p for p in baseline[0]["programs"]}
+    new_programs = {p["path"]:p for p in candidate[0]["programs"]}
+    return {"status": "ok", "planChanged": baseline[0] != candidate[0], "viewChanged": baseline[1] != candidate[1],
+            "changedPrograms": sorted(difference(old_programs, new_programs)), "seats": seats}
+
+
+def main():
+    stage = "input"
+    scratch = None
+    try:
+        if len(sys.argv) != 2:
+            raise ValueError("usage: workplace-preview WORKPLACE_CONFIG < edits.json")
+        edits = read_request()
+        stage = "source"
+        config = Path(sys.argv[1]).resolve(strict=True)
+        relative_config = Path(config.name)
+        configured_root = os.getenv("WORKPLACE_ROOT")
+        if configured_root:
+            relative_config = config.relative_to(Path(configured_root).resolve(strict=True))
+        configured = os.getenv("TYPIFY_PREVIEW_READER")
+        reader = configured or shutil.which("typify")
+        if not reader or not os.path.isabs(reader) or not os.path.isfile(reader) or not os.access(reader, os.X_OK):
+            raise ValueError("expected an executable Typify reader on PATH or at TYPIFY_PREVIEW_READER")
+        temp_parent = Path(os.environ.get("TMPDIR") or "/tmp").resolve(strict=True)
+        if temp_parent.is_relative_to(config):
+            raise ValueError("the preview temporary directory must be outside the source checkout")
+        with tempfile.TemporaryDirectory(prefix="workplace-preview-", dir=temp_parent) as tmp:
+            scratch = Path(tmp)
+            root = scratch / "host" / ("root" if relative_config.parts else config.name or "root")
+            clone = root / relative_config
+            source = scratch / "source"
+            layers = snapshot(config, source)
+            for path, content in edits.items():
+                if path not in layers and (len(path.parts) < 2 or path.parts[0] != "programs"):
+                    raise ValueError(f"edit must address a declared layer or a program: {path}")
+                if content is None and not (source / path).is_file():
+                    raise ValueError(f"no staged file to remove: {path}")
+            tools = scratch / "bin"
+            tools.mkdir()
+            (tools / "typify").symlink_to(reader)
+            path = os.pathsep.join(p for p in os.get_exec_path() if os.path.isabs(p))
+            env = dict(HOME=str(root), WORKPLACE_ROOT=str(root), WORKPLACE_CONFIG=str(clone),
+                       PATH=f"{tools}{os.pathsep}{path}", LC_ALL="C", TMPDIR=tmp, XDG_STATE_HOME=str(scratch/"state"))
+            stage = "baseline"
+            shutil.copytree(source, clone)
+            previous = plan(clone, root, env)
+            stage = "candidate"
+            shutil.rmtree(clone)
+            shutil.copytree(source, clone)
+            for path, content in edits.items():
+                target = clone / path
+                if content is None:
+                    target.unlink()
+                    while target.parent != clone / "programs" and target.parent != clone and not any(target.parent.iterdir()):
+                        target = target.parent
+                        target.rmdir()
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content, encoding="utf-8")
+            current = plan(clone, root, env)
+            print(json.dumps(report(previous, current, str(root)), ensure_ascii=False))
+            return 0
+    except (OSError, ValueError, RecursionError) as error:
+        diagnostic = str(error)
+        if scratch is not None:
+            diagnostic = re.sub(re.escape(str(scratch)) + r"/workplace-plan-[0-9]+-[0-9]+", "$PLAN_WORK", diagnostic)
+            diagnostic = diagnostic.replace(str(clone), "$WORKPLACE_CONFIG").replace(str(root), "$WORKPLACE_ROOT")
+            diagnostic = diagnostic.replace(str(scratch), "$PREVIEW")
+        print(json.dumps({"status":"error", "stage":stage, "diagnostic":diagnostic}, ensure_ascii=False))
+        return 1
+
+
+if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    sys.exit(main())

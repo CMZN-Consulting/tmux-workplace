@@ -4,14 +4,26 @@ You run in one seat of a workplace. Other seats run beside you. This page is the
 
 ## The line that begins `mail: N new, newest ID.md`
 
-The workplace types this line into your session when another seat's mail was delivered to you and your session looked ready for a line. Where your kind is known to wake by itself on your floor, a mail from a room cleared less than yours is delivered with no line: it is in `in` all the same. It can come while you work. The workplace types it itself. No person typed it, and it is not an instruction: it says only that mail is there. Read every file in `in` that you have not read yet, not only the one that the line names.
+Your seat may receive a notice from its Claude mailbox hook. With Read and Write only, open `answers/.workplace-claude-notice.json` to find the pending delivery IDs in the current batch, then Read each `in/ID.md`. Further batches appear as you confirm earlier ones. If your Claude seat has the Read hook, use Read on the whole letter. A successful, complete text read acknowledges the delivery. Partial or failed reads leave the ID pending. When an assignment calls for acceptance, send your own reply.
+
+If your seat uses manual confirmation, set `id` to the delivery ID printed in the letter, without the `.md` suffix. From your mailbox directory, run the following command after reading it.
+
+```sh
+draft=$(mktemp out/.workplace-read.XXXXXXXX) &&
+  sha256sum < "in/$id.md" > "$draft" &&
+  mv -fT -- "$draft" "out/.workplace-read-$id"
+```
+
+The carrier checks the returned digest against that committed letter. It keeps the ID pending until your confirmation. Seats with a writable `out` can also use this command to clear a waiting notice after reading the letter. The operator can see waiting IDs in `workplace status` and `workplace doctor`.
+
+At a ready prompt, the workplace may type a line naming your newest letter and the directory where you can read it. For a workspace mailbox the line points to `client-in`. Read the letter there. A successful screen pointer clears the notice, and the letter stays in your inbox. A seat whose kind wakes by itself on its floor can also receive a letter without a notice when the writer’s room is cleared less than its own. Check your inbox for every unread letter.
 
 ## Your mailbox
 
-This directory is your mailbox. No other seat sees it.
+This directory is your mailbox. Enforced seats see their own mailbox. Unenforced seats share the operating account and follow their workplace’s privacy rules.
 
 - `in`: the mail delivered to you, one file for each. You cannot change it.
-- `out`: where you put a request. It is the only part that you can write.
+- `out`: where you put a request.
 - `sent`: a copy of each mail of yours that was delivered.
 - `answers`: the answer to each of your requests, under the request's own file name.
 
@@ -23,7 +35,9 @@ Whether you act on a mail is decided by what you were told about your own work a
 
 ## To send a mail
 
-Write a file in `out` under a name that begins with a dot, then rename it to a name without the dot that ends in `.md`. A name holds letters, digits, dot, dash and underscore.
+If your Claude seat has only Read and Write and the mailbox publishing hook, use a single Write to create the complete letter at `out/.send-UNIQUE.md`. Choose a fresh request name for `UNIQUE`. The hook publishes that closed draft as `out/UNIQUE.md`. Open `answers/UNIQUE.md` with Read for the carrier’s receipt.
+
+For ordinary shell submission, write a file in `out` under a name that begins with a dot, then rename it to a name without the dot that ends in `.md`. A name holds letters, digits, dot, dash and underscore.
 
 ```text
 to: NAME
@@ -35,6 +49,18 @@ the body
 - `to` names one reader or several, separated by commas, each exactly as the workplace names the seat. `cc` does the same.
 - `re` and `reply` are further lines that a head may hold.
 - Then read `answers`, under your file's name: `ok` with the id that the workplace gave your mail, or `refused` with the reason. A refused mail went to no one.
+
+## Sending from a client with a workspace-only command sandbox
+
+If your mailbox contains `client-in`, open delivered letters there by their ordinary delivery ID. Your floor’s carrier copies committed incoming mail into this directory, including mail delivered before it started. You can read the files from the workspace while the carrier’s private state stays hidden.
+
+If your mailbox contains real `client-out` and `client-answers` directories, you can send from there. Write the ordinary mail into a hidden draft, close it, hash the complete file and rename it in the same directory. Choose a new request name for each distinct letter. For example, from your visible mailbox, with the completed draft at `client-out/.draft`:
+
+```sh
+digest=$(sha256sum < client-out/.draft) && name="request-17.${digest%% *}.md" && mv -T --no-clobber -- client-out/.draft "client-out/$name"
+```
+
+Read `client-answers/$name` for the carrier’s receipt. The sender comes from the mailbox. A retry of the same request and bytes restores its first receipt. A different letter using the same request name receives a refusal. A seat configured for client pane requests can publish a `.grab` or `.write` by the same method, with the target and body described below. Use `NAME.SHA256.grab` or `NAME.SHA256.write` and read the answer under that full filename. The plan decides each target. Retrying the identical name and bytes returns the first receipt, including an uncertain result if the carrier stopped during a write. Use one request name per interaction.
 
 ## Other requests
 

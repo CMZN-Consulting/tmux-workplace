@@ -2,6 +2,8 @@
 
 The frame that applies a workplace's plan. tmux makes the sessions, windows and panes, and bubblewrap gives each seat the view its table declares.
 
+To plan a workplace from its Typify declarations, install the reader and put its `typify` launcher on your `PATH`. The [reader installation guide](https://github.com/CMZN-Consulting/typify/blob/v1.0.0-rc.1/mcp/README.md#run-locally) gives the Racket commands. Bun is needed only for the optional MCP server.
+
 ```text
 export WORKPLACE_ROOT=/path/the/workplace/lives/under
 export WORKPLACE_CONFIG=$WORKPLACE_ROOT/path/of/the/configuration/clone
@@ -29,6 +31,22 @@ bin/workplace doctor
 - `record verify` reads a seat's kept record of a day, or its `unstored`, `gaps` or `signed`, or the frame's record of requests, against its chain, and names the first place where they differ.
 
 What each term does is one entry of `host/binding.json`. What the loop does with any entry is `CONTRACT.md`. What a seat is told about its mailbox is `share/seat-page.md`, which every mailbox holds as `README.md`.
+
+### Preview a Typify edit
+
+The optional `bin/workplace-preview` accepts a configuration checkout and one JSON request on standard input. It requires Python 3, the frame's planning dependencies and the Typify reader. Set `TYPIFY_PREVIEW_READER` to an absolute executable to select a reader explicitly. If `WORKPLACE_ROOT` is empty or unset, the preview treats the checkout's parent as the root. With an explicit root, the checkout must be at or below it and retains that relative position in the preview.
+
+```sh
+bin/workplace-preview "$WORKPLACE_CONFIG" <<'JSON'
+{"edits":[{"path":"programs/OFFICE[5]/COMMS.typify","content":null}]}
+JSON
+```
+
+A string replaces or creates the entire UTF-8 file. A JSON null removes an existing file. Valid edit paths are unique, relative `.typify` paths in `programs/` or declared layers. An empty edit list compares two identical inputs. Only regular source files are admitted, and every file under `programs/` must use the `.typify` extension. Hidden entries, links in the source tree, and reserved `BUILD` and `PLAN` components are refused. The preview checks that the declared tmux configuration files exist and uses empty placeholders for them.
+
+The command stages a private copy, calls `workplace plan --no-inventory`, applies the proposed edits there and calls the same planner again. The flag skips the optional host-directory inventory. Both passes use the same synthetic root, reader and configuration path. The caller's plan, build, tmux sessions and source are left alone.
+
+The JSON reply reports `planChanged`, `viewChanged`, changed program paths and affected seats by address and name. Seat changes cover pane, room, start, directories, environment key names, filesystem rows and folded seat settings including reach. Filesystem rows describe declared access. Changes outside this projection can appear in the plan without a seat delta. An error reply names the failing stage and carries its diagnostic, and the command exits with status 1.
 
 An enforced seat's aliases cannot increase its host-file access. A bind through a
 symbolic link needs the same or greater permission at the resolved path's own
@@ -81,3 +99,7 @@ new configuration.
 ## Tests
 
 `bash tests/run.sh` runs every test on a tmux server of its own, under a scratch home, with `TMUX` and `TMUX_PANE` unset. `bash tests/run.sh t_views` runs one test.
+
+## License
+
+The tmux-workplace frame is licensed under the [Apache License, Version 2.0](LICENSE).

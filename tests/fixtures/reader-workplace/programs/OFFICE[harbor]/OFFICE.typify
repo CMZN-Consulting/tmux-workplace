@@ -1,0 +1,3 @@
+clearance : 1
+view : /tmp/workplace-reference-s3/harbor/charts = read-only
+view : /tmp/workplace-reference-s3/harbor/ledger = hidden

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if (( $# < 2 )); then
+  printf '%s\n' 'usage: seed-home HOME DIRECTORY [DIRECTORY ...]' >&2
+  exit 2
+fi
+seat_home=$1
+shift
+seed_tmp=$(mktemp -- "$seat_home/.seed-directories.XXXXXXXXXX")
+trap 'rm -f -- "$seed_tmp"' EXIT
+printf '%s\n' "$@" > "$seed_tmp"
+mv -fT -- "$seed_tmp" "$seat_home/seed-directories"
+trap - EXIT

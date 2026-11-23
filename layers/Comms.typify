@@ -1,0 +1,164 @@
+#lang typify
+declare : WorkplaceComms
+version : 1
+file : programs/COMMS.typify
+optional!
+is : workplace-path = canonical-path | relative-path | "."
+is : target-office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : action = "mail" | "grab" | "write" | "record"
+is : reach-state = "allowed" | "banned"
+cell : sessions = shadow
+cell : windows = shadow
+cell : panes = shadow
+cell : mail-records = shadow
+primitive : mail : workplace-path
+writes : mail : mail-records = put 1 "declared"
+effect : mail = state
+form : mail : <workplace-path>
+does : mail <workplace-path>
+cell : reach-records = shadow
+primitive : reach : text text text text action text text text text reach-state
+writes : reach : reach-records = put 9
+effect : reach = state
+term : reach-workplace : action reach-state
+rule : reach-workplace <a> <s> -> reach - - - workplace <a> - - - workplace <s>
+form : reach : <action> workplace = <reach-state>
+does : reach-workplace <action> <reach-state>
+term : reach-office : action target-office-key reach-state
+rule : reach-office <a> <ta> <s> -> reach - - - workplace <a> <ta> - - office <s>
+ensure : reach-office : target-declared = (bound sessions <2>)
+form : reach : <action> office <target-office-key> = <reach-state>
+does : reach-office <action> <target-office-key> <reach-state>
+term : reach-room : action target-office-key target-room-key reach-state
+rule : reach-room <a> <ta> <tb> <s> -> reach - - - workplace <a> <ta> <tb> - room <s>
+ensure : reach-room : target-declared = (bound windows <2> <3>)
+form : reach : <action> room <target-office-key>/<target-room-key> = <reach-state>
+does : reach-room <action> <target-office-key> <target-room-key> <reach-state>
+term : reach-seat : action target-office-key target-room-key target-seat-key reach-state
+rule : reach-seat <a> <ta> <tb> <tc> <s> -> reach - - - workplace <a> <ta> <tb> <tc> seat <s>
+ensure : reach-seat : target-declared = (bound panes <2> <3> <4>)
+form : reach : <action> seat <target-office-key>/<target-room-key>/<target-seat-key> = <reach-state>
+does : reach-seat <action> <target-office-key> <target-room-key> <target-seat-key> <reach-state>
+end!
+
+declare : OfficeComms
+version : 1
+file : programs/OFFICE[<office-key>]/COMMS.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : action = "mail" | "grab" | "write" | "record"
+is : reach-state = "allowed" | "banned"
+cell : sessions = shadow
+cell : windows = shadow
+cell : panes = shadow
+cell : reach-records = shadow
+primitive : reach : text text text text action text text text text reach-state
+writes : reach : reach-records = put 9
+effect : reach = state
+ensure : reach : source-declared = (bound sessions <office-key>)
+term : reach-workplace : action reach-state
+rule : reach-workplace <a> <s> -> reach <office-key> - - office <a> - - - workplace <s>
+form : reach : <action> workplace = <reach-state>
+does : reach-workplace <action> <reach-state>
+term : reach-office : action target-office-key reach-state
+rule : reach-office <a> <ta> <s> -> reach <office-key> - - office <a> <ta> - - office <s>
+ensure : reach-office : target-declared = (bound sessions <2>)
+form : reach : <action> office <target-office-key> = <reach-state>
+does : reach-office <action> <target-office-key> <reach-state>
+term : reach-room : action target-office-key target-room-key reach-state
+rule : reach-room <a> <ta> <tb> <s> -> reach <office-key> - - office <a> <ta> <tb> - room <s>
+ensure : reach-room : target-declared = (bound windows <2> <3>)
+form : reach : <action> room <target-office-key>/<target-room-key> = <reach-state>
+does : reach-room <action> <target-office-key> <target-room-key> <reach-state>
+term : reach-seat : action target-office-key target-room-key target-seat-key reach-state
+rule : reach-seat <a> <ta> <tb> <tc> <s> -> reach <office-key> - - office <a> <ta> <tb> <tc> seat <s>
+ensure : reach-seat : target-declared = (bound panes <2> <3> <4>)
+form : reach : <action> seat <target-office-key>/<target-room-key>/<target-seat-key> = <reach-state>
+does : reach-seat <action> <target-office-key> <target-room-key> <target-seat-key> <reach-state>
+end!
+
+declare : RoomComms
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/COMMS.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : action = "mail" | "grab" | "write" | "record"
+is : reach-state = "allowed" | "banned"
+cell : sessions = shadow
+cell : windows = shadow
+cell : panes = shadow
+cell : reach-records = shadow
+primitive : reach : text text text text action text text text text reach-state
+writes : reach : reach-records = put 9
+effect : reach = state
+ensure : reach : source-declared = (bound windows <office-key> <room-key>)
+term : reach-workplace : action reach-state
+rule : reach-workplace <a> <s> -> reach <office-key> <room-key> - room <a> - - - workplace <s>
+form : reach : <action> workplace = <reach-state>
+does : reach-workplace <action> <reach-state>
+term : reach-office : action target-office-key reach-state
+rule : reach-office <a> <ta> <s> -> reach <office-key> <room-key> - room <a> <ta> - - office <s>
+ensure : reach-office : target-declared = (bound sessions <2>)
+form : reach : <action> office <target-office-key> = <reach-state>
+does : reach-office <action> <target-office-key> <reach-state>
+term : reach-room : action target-office-key target-room-key reach-state
+rule : reach-room <a> <ta> <tb> <s> -> reach <office-key> <room-key> - room <a> <ta> <tb> - room <s>
+ensure : reach-room : target-declared = (bound windows <2> <3>)
+form : reach : <action> room <target-office-key>/<target-room-key> = <reach-state>
+does : reach-room <action> <target-office-key> <target-room-key> <reach-state>
+term : reach-seat : action target-office-key target-room-key target-seat-key reach-state
+rule : reach-seat <a> <ta> <tb> <tc> <s> -> reach <office-key> <room-key> - room <a> <ta> <tb> <tc> seat <s>
+ensure : reach-seat : target-declared = (bound panes <2> <3> <4>)
+form : reach : <action> seat <target-office-key>/<target-room-key>/<target-seat-key> = <reach-state>
+does : reach-seat <action> <target-office-key> <target-room-key> <target-seat-key> <reach-state>
+end!
+
+declare : SeatComms
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/COMMS.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : target-seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : action = "mail" | "grab" | "write" | "record"
+is : reach-state = "allowed" | "banned"
+cell : sessions = shadow
+cell : windows = shadow
+cell : panes = shadow
+cell : reach-records = shadow
+primitive : reach : text text text text action text text text text reach-state
+writes : reach : reach-records = put 9
+effect : reach = state
+ensure : reach : source-declared = (bound panes <office-key> <room-key> <seat-key>)
+term : reach-workplace : action reach-state
+rule : reach-workplace <a> <s> -> reach <office-key> <room-key> <seat-key> seat <a> - - - workplace <s>
+form : reach : <action> workplace = <reach-state>
+does : reach-workplace <action> <reach-state>
+term : reach-office : action target-office-key reach-state
+rule : reach-office <a> <ta> <s> -> reach <office-key> <room-key> <seat-key> seat <a> <ta> - - office <s>
+ensure : reach-office : target-declared = (bound sessions <2>)
+form : reach : <action> office <target-office-key> = <reach-state>
+does : reach-office <action> <target-office-key> <reach-state>
+term : reach-room : action target-office-key target-room-key reach-state
+rule : reach-room <a> <ta> <tb> <s> -> reach <office-key> <room-key> <seat-key> seat <a> <ta> <tb> - room <s>
+ensure : reach-room : target-declared = (bound windows <2> <3>)
+form : reach : <action> room <target-office-key>/<target-room-key> = <reach-state>
+does : reach-room <action> <target-office-key> <target-room-key> <reach-state>
+term : reach-seat : action target-office-key target-room-key target-seat-key reach-state
+rule : reach-seat <a> <ta> <tb> <tc> <s> -> reach <office-key> <room-key> <seat-key> seat <a> <ta> <tb> <tc> seat <s>
+ensure : reach-seat : target-declared = (bound panes <2> <3> <4>)
+form : reach : <action> seat <target-office-key>/<target-room-key>/<target-seat-key> = <reach-state>
+does : reach-seat <action> <target-office-key> <target-room-key> <target-seat-key> <reach-state>
+end!

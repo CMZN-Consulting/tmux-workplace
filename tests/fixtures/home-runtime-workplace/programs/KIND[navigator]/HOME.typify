@@ -1,0 +1,4 @@
+home : NAV_HOME = kept
+home-variable : NAV_CACHE = cache
+home-variable : NAV_LOCKS = .
+home-seed : tools/seed-home

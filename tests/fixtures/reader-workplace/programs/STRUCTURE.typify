@@ -1,0 +1,10 @@
+office : harbor = harbor
+office : orchard = orchard
+room : harbor / dock = dock : even-horizontal
+room : harbor / tower = tower : even-horizontal
+room : orchard / barn = barn : even-vertical
+seat : Harbor Pilot = harbor / dock / pilot
+seat : Harbor Keeper = harbor / dock / keeper
+seat : Harbor Watch = harbor / tower / watch
+seat : Orchard Grower = orchard / barn / grower
+seat : Orchard Picker = orchard / barn / picker

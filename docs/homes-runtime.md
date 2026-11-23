@@ -1,0 +1,26 @@
+# Private program homes and runtime environment names
+
+Definition5.37 pins four state-effect terms;5.42 and5.44 settle their formation and frame semantics. The accepted Typify reader remains4bb7584. No executable primitive or reader feature is added.
+
+| File/form | Recorded term | Auxiliary native cell key |
+| --- | --- | --- |
+| KIND[KIND]/HOME.typify: `home : VARIABLE = STATE` | `home KIND VARIABLE STATE` | home-records: KIND |
+| Same file: `home-variable : NAME = SUBPATH` | `home-variable KIND NAME SUBPATH` | home-variable-records: KIND, NAME |
+| Same file: `home-seed : PATH` | `home-seed KIND PATH` | home-seed-records: KIND |
+| RUNTIME.typify at workplace, office, room or seat: `expect : NAME` | `expect A B C SCOPE NAME` | expectation-records: A, B, C, SCOPE, NAME |
+
+Every file is optional. A kind must already be declared. A scoped Runtime file requires its office, room or seat to exist. Variable names use the ordinary environment-identifier class. STATE is kept or scratch. SUBPATH is canonical relative-path or `.`, not an absolute or parent-traversal path. Seed PATH uses the existing workplace-path class. Source values are preserved; the layer joins no path and computes no home.
+
+The native shadow cells are bookkeeping, not the frame's decisions. There is no count guard on these forms. Every original event, including equal duplicates and conflicting values, survives in the recorded stream with its source origin. The frame must consume that stream rather than infer decisions from a coalesced cell.
+
+A kept home is identified by the kind and the seat's structural keys under5.49; a scratch home is a new filesystem for the pane lifetime. Adding or moving a pane does not transfer a kept home to another seat. Changing the kind or structural keys selects another home and leaves the old home unexposed. A kind names its home through VARIABLE, and additional variables resolve against that home.
+
+An ordinary environment row cannot assign a name supplied by that seat's key, home or expected runtime values. Plan and build refuse the collision and identify both origins; no accepted ordinary value is silently replaced. A name expected by another seat alone does not create a collision here. This5.49 rule replaces the first edition's precedence expectation.
+
+The seed is an executable path, joined against the workplace root, that build calls once for a new kept home. Its arguments are the home, the start directory and the declared directories in order, with each directory included once. A later build does not seed an existing home again; a changed start directory needs manual seeding. It receives no runtime secret. A scratch home with a seed is refused. Seed code is build-time workplace code and may be inside the clone; the clone is closed inside every seat under5.40.
+
+The frame refuses differing home declarations for one kind, differing seeds for one kind and differing home-variable declarations for one kind/name, naming both origins; equal declarations count once with their origins. A home-variable or seed without a home refuses. An additional variable or expected name cannot take the kind's primary home variable. No home, additional variable or expected name may take a name reserved by the binding's fixed part: currently GNUPGHOME and SSH_AUTH_SOCK. HOME is only passed through by the binding and may be chosen as a kind's home variable. These are frame checks, not a ban built into Typify's identifier class.
+
+Expected names accumulate from workplace, office, room and seat. A narrower different name cannot erase a wider requirement. Equal declarations coalesce and retain all origins. For each required name, up/exec chooses the runtime file's value from the narrowest scope giving it. A value is nonempty single-line text, passed through the environment; names not expected by that seat are not exported. A missing name refuses that seat's start, naming the missing name. An empty or multiline entry anywhere in the runtime file refuses the whole file for every seat expecting a value, including seats that do not request the bad entry. Caller-provided names such as HOME and PATH cannot be expected. An expected value requires a seat view, so a plan with expectations and no view is refused. Values never occur in source, a plan, a record or a printed call. Changing them needs neither a plan nor a build.
+
+Definition5.5's value classes and command-word insertion remain open; this lane implements neither. Real credentials, account-token sharing, program login/updates, transcript migration, model tools and agents are not validated by these declarations. Native success also does not prove home isolation, persistence, scratch cleanup, seed execution or runtime secret delivery; those require independent frame and pane measurements. A home needs to work for a seat with no Identity key, without granting an unwanted key to open the state-directory mask.

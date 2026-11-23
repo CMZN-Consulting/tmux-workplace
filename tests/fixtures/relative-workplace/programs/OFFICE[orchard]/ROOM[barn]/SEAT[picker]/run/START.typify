@@ -1,0 +1,1 @@
+command : ["tools/probe","picker","hidden=cellar","reach=cellar/inner","ro=almanac","rw=crate-picker","list=silo","reach=silo/bin"]

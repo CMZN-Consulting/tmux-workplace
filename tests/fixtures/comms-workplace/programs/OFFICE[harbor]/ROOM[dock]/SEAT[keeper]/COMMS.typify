@@ -1,0 +1,2 @@
+reach : write room harbor/dock = banned
+reach : write seat harbor/dock/pilot = allowed

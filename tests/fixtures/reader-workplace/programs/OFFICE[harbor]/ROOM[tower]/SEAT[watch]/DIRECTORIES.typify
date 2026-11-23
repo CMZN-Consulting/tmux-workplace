@@ -1,0 +1,3 @@
+agent : navigator
+directory : harbor
+directory : harbor/charts

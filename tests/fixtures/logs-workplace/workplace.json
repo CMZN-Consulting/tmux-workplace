@@ -1,0 +1,12 @@
+{
+  "layers": [
+    "layers/Structure.typify",
+    "layers/Access.typify",
+    "layers/Agents.typify",
+    "layers/Homes.typify",
+    "layers/Runtime.typify",
+    "layers/Comms.typify",
+    "layers/Logs.typify",
+    "layers/Host.typify"
+  ]
+}

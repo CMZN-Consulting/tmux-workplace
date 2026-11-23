@@ -1,0 +1,2 @@
+view : agents/gardener = searchable-only
+view : agents/gardener/shared = read-only

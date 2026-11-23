@@ -4,6 +4,8 @@ The frame that applies a workplace's plan. tmux makes the sessions, windows and 
 
 To plan a workplace from its Typify declarations, install the reader and put its `typify` launcher on your `PATH`. The [reader installation guide](https://github.com/CMZN-Consulting/typify/blob/v1.0.0-rc.1/mcp/README.md#run-locally) gives the Racket commands. Bun is needed only for the optional MCP server.
 
+The [shared declaration layers](docs/declarations.md) define the programs the frame can apply. They include communication and recording policy and scoped SSH grants. The guide links to runnable fixtures for each.
+
 ```text
 export WORKPLACE_ROOT=/path/the/workplace/lives/under
 export WORKPLACE_CONFIG=$WORKPLACE_ROOT/path/of/the/configuration/clone

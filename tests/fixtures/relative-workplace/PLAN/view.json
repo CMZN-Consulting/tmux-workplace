@@ -1,0 +1,2164 @@
+{
+  "rows": [
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/agents"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/agents/gardener"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 5,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/agents/navigator"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/KIND[navigator]/KIND.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/agents/navigator/shared"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/KIND[navigator]/KIND.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/agents/navigator/stores/pilot"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/SEAT.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/harbor/berth"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/harbor/charts"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/OFFICE[harbor]/OFFICE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/harbor/ledger"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/OFFICE[harbor]/OFFICE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/harbor/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 12,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/orchard/crate-picker"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 10,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/orchard/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 13,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/public"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/SEAT.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/restricted"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 15,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/restricted/lower"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 16,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "pilot",
+        "/tmp/workplace-reference-s3/sealed"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 11,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/agents"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/agents/gardener"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 5,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/agents/navigator"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 4,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/harbor/berth"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/harbor/charts"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/OFFICE[harbor]/OFFICE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/harbor/ledger"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/OFFICE[harbor]/OFFICE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/harbor/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 12,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/orchard/crate-picker"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 10,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/orchard/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 13,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/public"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 14,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/restricted"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 15,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/restricted/lower"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 16,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "harbor",
+        "dock",
+        "keeper",
+        "/tmp/workplace-reference-s3/sealed"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 11,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/agents"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/agents/gardener"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 5,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/agents/navigator"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/KIND[navigator]/KIND.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/agents/navigator/shared"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/KIND[navigator]/KIND.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/harbor/berth"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 9,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/harbor/charts"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/OFFICE[harbor]/OFFICE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/harbor/ledger"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/OFFICE[harbor]/OFFICE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/harbor/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 12,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/orchard/crate-picker"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 10,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/orchard/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 13,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/public"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 14,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/restricted"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 15,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "harbor",
+        "tower",
+        "watch",
+        "/tmp/workplace-reference-s3/sealed"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 11,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/agents"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/agents/gardener"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/KIND[gardener]/KIND.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/agents/gardener/shared"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/KIND[gardener]/KIND.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/agents/gardener/stores/grower"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/SEAT.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/agents/navigator"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 4,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/harbor/berth"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 9,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/harbor/charts"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 6,
+          "path": "programs/WORKPLACE.typify"
+        },
+        {
+          "kind": "program",
+          "line": 7,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/harbor/ledger/inner"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 8,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/harbor/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 12,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/orchard/crate-picker"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 10,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/orchard/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 13,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/public"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 14,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/restricted"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 15,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "grower",
+        "/tmp/workplace-reference-s3/sealed"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 11,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 2,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/agents"
+      ],
+      "value": [
+        "searchable-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 3,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/agents/gardener"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 5,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/agents/navigator"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 4,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/harbor/berth"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 9,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/harbor/charts"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 6,
+          "path": "programs/WORKPLACE.typify"
+        },
+        {
+          "kind": "program",
+          "line": 7,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/harbor/ledger/inner"
+      ],
+      "value": [
+        "read-write"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 8,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/harbor/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 12,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/orchard/crate-picker"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/SEAT.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/orchard/scratch"
+      ],
+      "value": [
+        "scratch"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 13,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/public"
+      ],
+      "value": [
+        "read-only"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 14,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/restricted"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 15,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/restricted/lower"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 16,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "label"
+    },
+    {
+      "key": [
+        "orchard",
+        "barn",
+        "picker",
+        "/tmp/workplace-reference-s3/sealed"
+      ],
+      "value": [
+        "hidden"
+      ],
+      "origins": [
+        {
+          "kind": "program",
+          "line": 11,
+          "path": "programs/WORKPLACE.typify"
+        }
+      ],
+      "source": "statement"
+    }
+  ],
+  "seats": [
+    {
+      "seat": [
+        "harbor",
+        "dock",
+        "pilot"
+      ],
+      "kind": "navigator",
+      "clearance": {
+        "value": 3,
+        "origin": {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/SEAT.typify"
+        },
+        "origins": [
+          {
+            "kind": "program",
+            "line": 1,
+            "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/SEAT.typify"
+          }
+        ],
+        "scope": "seat"
+      },
+      "rows": 17,
+      "replacement_statements": [
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "navigator",
+              "-",
+              "-",
+              "kind",
+              "/tmp/workplace-reference-s3/agents/navigator",
+              "searchable-only"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 1,
+                "path": "programs/KIND[navigator]/KIND.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/agents/navigator",
+                "hidden"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 4,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "dock",
+              "-",
+              "room",
+              "/tmp/workplace-reference-s3/harbor/berth",
+              "hidden"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 2,
+                "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/berth",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 9,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "-",
+              "-",
+              "office",
+              "/tmp/workplace-reference-s3/harbor/charts",
+              "read-only"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 2,
+                "path": "programs/OFFICE[harbor]/OFFICE.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/charts",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 6,
+                  "path": "programs/WORKPLACE.typify"
+                },
+                {
+                  "kind": "program",
+                  "line": 7,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "-",
+              "-",
+              "office",
+              "/tmp/workplace-reference-s3/harbor/ledger",
+              "hidden"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 3,
+                "path": "programs/OFFICE[harbor]/OFFICE.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/ledger/inner",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 8,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "exception_count": 4,
+      "distinct_replaced_statement_count": 4,
+      "statements_at_labelled_paths": [
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "dock",
+              "pilot",
+              "seat",
+              "/tmp/workplace-reference-s3/public",
+              "read-write"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 2,
+                "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/SEAT.typify"
+              }
+            ]
+          },
+          "label": {
+            "value": 0,
+            "origins": [
+              {
+                "kind": "program",
+                "line": 14,
+                "path": "programs/WORKPLACE.typify"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "seat": [
+        "harbor",
+        "dock",
+        "keeper"
+      ],
+      "kind": "none",
+      "clearance": {
+        "value": 2,
+        "origin": {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify"
+        },
+        "origins": [
+          {
+            "kind": "program",
+            "line": 1,
+            "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify"
+          }
+        ],
+        "scope": "room"
+      },
+      "rows": 15,
+      "replacement_statements": [
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "dock",
+              "-",
+              "room",
+              "/tmp/workplace-reference-s3/harbor/berth",
+              "hidden"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 2,
+                "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/berth",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 9,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "-",
+              "-",
+              "office",
+              "/tmp/workplace-reference-s3/harbor/charts",
+              "read-only"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 2,
+                "path": "programs/OFFICE[harbor]/OFFICE.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/charts",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 6,
+                  "path": "programs/WORKPLACE.typify"
+                },
+                {
+                  "kind": "program",
+                  "line": 7,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "-",
+              "-",
+              "office",
+              "/tmp/workplace-reference-s3/harbor/ledger",
+              "hidden"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 3,
+                "path": "programs/OFFICE[harbor]/OFFICE.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/ledger/inner",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 8,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "exception_count": 3,
+      "distinct_replaced_statement_count": 3,
+      "statements_at_labelled_paths": []
+    },
+    {
+      "seat": [
+        "harbor",
+        "tower",
+        "watch"
+      ],
+      "kind": "navigator",
+      "clearance": {
+        "value": 1,
+        "origin": {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/OFFICE[harbor]/OFFICE.typify"
+        },
+        "origins": [
+          {
+            "kind": "program",
+            "line": 1,
+            "path": "programs/OFFICE[harbor]/OFFICE.typify"
+          }
+        ],
+        "scope": "office"
+      },
+      "rows": 15,
+      "replacement_statements": [
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "navigator",
+              "-",
+              "-",
+              "kind",
+              "/tmp/workplace-reference-s3/agents/navigator",
+              "searchable-only"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 1,
+                "path": "programs/KIND[navigator]/KIND.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/agents/navigator",
+                "hidden"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 4,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "-",
+              "-",
+              "office",
+              "/tmp/workplace-reference-s3/harbor/charts",
+              "read-only"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 2,
+                "path": "programs/OFFICE[harbor]/OFFICE.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/charts",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 6,
+                  "path": "programs/WORKPLACE.typify"
+                },
+                {
+                  "kind": "program",
+                  "line": 7,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "harbor",
+              "-",
+              "-",
+              "office",
+              "/tmp/workplace-reference-s3/harbor/ledger",
+              "hidden"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 3,
+                "path": "programs/OFFICE[harbor]/OFFICE.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/harbor/ledger/inner",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 8,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "exception_count": 3,
+      "distinct_replaced_statement_count": 3,
+      "statements_at_labelled_paths": []
+    },
+    {
+      "seat": [
+        "orchard",
+        "barn",
+        "grower"
+      ],
+      "kind": "gardener",
+      "clearance": {
+        "value": 1,
+        "origin": {
+          "kind": "program",
+          "line": 1,
+          "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/SEAT.typify"
+        },
+        "origins": [
+          {
+            "kind": "program",
+            "line": 1,
+            "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/SEAT.typify"
+          }
+        ],
+        "scope": "seat"
+      },
+      "rows": 16,
+      "replacement_statements": [
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "gardener",
+              "-",
+              "-",
+              "kind",
+              "/tmp/workplace-reference-s3/agents/gardener",
+              "searchable-only"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 1,
+                "path": "programs/KIND[gardener]/KIND.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/agents/gardener",
+                "hidden"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 5,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "exception_count": 1,
+      "distinct_replaced_statement_count": 1,
+      "statements_at_labelled_paths": []
+    },
+    {
+      "seat": [
+        "orchard",
+        "barn",
+        "picker"
+      ],
+      "kind": "none",
+      "clearance": {
+        "value": 0,
+        "origin": null,
+        "origins": [],
+        "scope": null
+      },
+      "rows": 15,
+      "replacement_statements": [
+        {
+          "statement": {
+            "term": [
+              "statement",
+              "orchard",
+              "barn",
+              "picker",
+              "seat",
+              "/tmp/workplace-reference-s3/orchard/crate-picker",
+              "hidden"
+            ],
+            "origins": [
+              {
+                "kind": "program",
+                "line": 1,
+                "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/SEAT.typify"
+              }
+            ]
+          },
+          "replaced": [
+            {
+              "term": [
+                "statement",
+                "-",
+                "-",
+                "-",
+                "workplace",
+                "/tmp/workplace-reference-s3/orchard/crate-picker",
+                "read-write"
+              ],
+              "origins": [
+                {
+                  "kind": "program",
+                  "line": 10,
+                  "path": "programs/WORKPLACE.typify"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "exception_count": 1,
+      "distinct_replaced_statement_count": 1,
+      "statements_at_labelled_paths": []
+    }
+  ]
+}

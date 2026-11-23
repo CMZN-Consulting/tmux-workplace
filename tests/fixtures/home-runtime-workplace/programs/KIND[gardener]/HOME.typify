@@ -1,0 +1,2 @@
+home : GARDEN_HOME = scratch
+home-variable : GARDEN_CACHE = cache

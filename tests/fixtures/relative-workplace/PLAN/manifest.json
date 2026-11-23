@@ -1,0 +1,171 @@
+{
+  "root": "/tmp/workplace-reference-s3",
+  "name": "config-bed25a0bf038",
+  "reader": "1.0",
+  "derivations": {
+    "assembly": "whole-bodies-v1",
+    "root-program": "root-two-lines-v1",
+    "workplace-name": "sha256-path-prefix12-v1",
+    "fold": "frame-5.17-5.18-5.24-v2"
+  },
+  "inputs": [
+    {
+      "path": "workplace.json",
+      "sha256": "17d5cef0f054a7d7f773053b6f2b056af8bfdbc6722ac0337d7020b2dbd357ba"
+    },
+    {
+      "path": "layers/Structure.typify",
+      "sha256": "2935bebfbb90b522f2fbb491ae93a67119c4020c3870cac5234b0326c6cb5724"
+    },
+    {
+      "path": "layers/Access.typify",
+      "sha256": "a132aa601a373bb9c6581a73b91e4765ead10dd2530113a358c79f5e1133ac84"
+    },
+    {
+      "path": "layers/Agents.typify",
+      "sha256": "4de12232f9273699436c9de0041d18ea4f7eb38b3ce47c0cd9783e21d79f5df4"
+    },
+    {
+      "path": "layers/Host.typify",
+      "sha256": "8c5407efd600171fe3988b87e70c5306b30c17183805a27b6a3ed61fe0bd994d"
+    },
+    {
+      "path": "programs/ENVIRONMENT.typify",
+      "sha256": "c6493c1846e8b6619b44cb02547319fe8192c90907dc6c86b8c4b4ad0f23cb2e"
+    },
+    {
+      "path": "programs/KINDS.typify",
+      "sha256": "263d2df3c37cfae174be350450ba62bf113761f497fd76fd73357a37b8718ca4"
+    },
+    {
+      "path": "programs/KIND[gardener]/KIND.typify",
+      "sha256": "24ed117f3bf8a42e9ad2d1a9a9d490ee5d3f0a5e689a591f23990eea2e960083"
+    },
+    {
+      "path": "programs/KIND[navigator]/KIND.typify",
+      "sha256": "82eb64009b966ca7df5dc7a2914881c8780ae212b5e54c666777daf4a8488afb"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/OFFICE.typify",
+      "sha256": "e8bb4b2f8a23234b66c6ff466e90ba900827c623021689908ac163108507796d"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/ROOM.typify",
+      "sha256": "421a712e6fb9fdc4a7185542e62758b58ce5e9c0e45849d9bed84e604fa9fb55"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[keeper]/DIRECTORIES.typify",
+      "sha256": "e9db2978c0a464299a906b4ae4246614168c8afb307ec803464903d6b7c45793"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[keeper]/run/START.typify",
+      "sha256": "a5b5abb63b8f6d820c015bbcb8a952de3af7b24116d72d61f10cfd42b34f2e88"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/DIRECTORIES.typify",
+      "sha256": "9386bb1495daa9b457eeb63126f8fc5a8c0358576961408825469966da43f375"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/SEAT.typify",
+      "sha256": "0ad58291326b813de68b259073f9defa9680d9fed4fa924f1560178b3c75718b"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[dock]/SEAT[pilot]/run/START.typify",
+      "sha256": "a9bcd8f4199525d2ae9de7b88748bf7247244931b39042f9a31cd8b7c1057745"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/DIRECTORIES.typify",
+      "sha256": "8cc8924510317000ad3993e00ec360e60eadf181fab9ad70b289595023499c2f"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/ENVIRONMENT.typify",
+      "sha256": "6d7977ccfb47af7e5a3de32123b8f86ff3564a91ba511987bb464e5a86149fbe"
+    },
+    {
+      "path": "programs/OFFICE[harbor]/ROOM[tower]/SEAT[watch]/run/START.typify",
+      "sha256": "b666da362703d70f3374fb59c53644767d1b51aa0bad8b0a9b30926de9e33df6"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/DIRECTORIES.typify",
+      "sha256": "c60bdd8938d7756181d3959543f705de27d79db14e81c5317cc2936300a9a9a3"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/SEAT.typify",
+      "sha256": "de959640fe7b6da6eb2096b962a6187804d151ec870995c19bb22b9e4c75c407"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[grower]/run/START.typify",
+      "sha256": "2f2a7348000eb934d115cb8c53920196f3b78b3b074ee593bdb4e973c8b26012"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/DIRECTORIES.typify",
+      "sha256": "3d3e2cbf5885e25662831b002b4c05c53619543a9db1fd336252cd058564f4b8"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/SEAT.typify",
+      "sha256": "becd7580f775e8d7b14d3d8ed72f0c51b8a83d270752562d2a8f336430eee00b"
+    },
+    {
+      "path": "programs/OFFICE[orchard]/ROOM[barn]/SEAT[picker]/run/START.typify",
+      "sha256": "35f6959d5f167bdbab2f966a1b5808e0f75ffca69f45c5413e5b4989a825ba84"
+    },
+    {
+      "path": "programs/STRUCTURE.typify",
+      "sha256": "112e2317c0439739e399d56606c113bb893a2a9476cc72528b6b54b470f97964"
+    },
+    {
+      "path": "programs/WORKPLACE.typify",
+      "sha256": "dfeb26fa93bbed693600db996cc741219aa1ea0e81391ac74a4a53ccae890bf7"
+    },
+    {
+      "path": "tmux.conf",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "generated": [
+    {
+      "path": "LanguageDeclarations.typify",
+      "sha256": "d7850f2c3ac1367dad1f3ae2adb1a8a0fa5cbb275a24704acdc74c6ed3b03cce"
+    },
+    {
+      "path": "tree/ROOT.typify",
+      "sha256": "f47c670e726038e8851dfb3d5109eaee47b383306ad48ef0e26d1313ed70387f"
+    }
+  ],
+  "source_map": [
+    {
+      "source": "layers/Structure.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 2,
+      "line_count": 46
+    },
+    {
+      "source": "layers/Access.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 48,
+      "line_count": 98
+    },
+    {
+      "source": "layers/Agents.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 146,
+      "line_count": 102
+    },
+    {
+      "source": "layers/Host.typify",
+      "source_start_line": 2,
+      "assembled_start_line": 248,
+      "line_count": 57
+    }
+  ],
+  "outputs": [
+    {
+      "path": "plan.json",
+      "sha256": "f007776cde073439b0cac818c1b193afdcddee7d7d23ac5d6fb66a4f1aab7107"
+    },
+    {
+      "path": "view.json",
+      "sha256": "cd4e82c602a8d428a3eff52879c809f342ee50442f7f498f460a0c39e718b466"
+    }
+  ]
+}

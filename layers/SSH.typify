@@ -1,0 +1,78 @@
+#lang typify
+declare : WorkplaceSSH
+version : 1
+file : programs/SSH.typify
+optional!
+is : workplace-path = canonical-path | relative-path | "."
+is : ssh-state = "granted" | "none"
+cell : ssh-keys = shadow
+primitive : ssh-key : text workplace-path
+writes : ssh-key : ssh-keys = put 1
+effect : ssh-key = state
+form : ssh-key : <workplace-path> = <text>
+does : ssh-key <text> <workplace-path>
+cell : ssh-grant-records = shadow
+primitive : ssh-grant : text text text text text ssh-state
+writes : ssh-grant : ssh-grant-records = put 5
+effect : ssh-grant = state
+ensure : ssh-grant : key-declared = (bound ssh-keys <5>)
+form : ssh-grant : <ssh-state> = <text>
+does : ssh-grant - - - workplace <text> <ssh-state>
+end!
+
+declare : OfficeSSH
+version : 1
+file : programs/OFFICE[<office-key>]/SSH.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : ssh-state = "granted" | "none"
+cell : ssh-keys = shadow
+cell : sessions = shadow
+cell : ssh-grant-records = shadow
+primitive : ssh-grant : text text text text text ssh-state
+writes : ssh-grant : ssh-grant-records = put 5
+effect : ssh-grant = state
+ensure : ssh-grant : key-declared = (bound ssh-keys <5>)
+ensure : ssh-grant : scope-declared = (bound sessions <office-key>)
+form : ssh-grant : <ssh-state> = <text>
+does : ssh-grant <office-key> - - office <text> <ssh-state>
+end!
+
+declare : RoomSSH
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SSH.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : ssh-state = "granted" | "none"
+cell : ssh-keys = shadow
+cell : windows = shadow
+cell : ssh-grant-records = shadow
+primitive : ssh-grant : text text text text text ssh-state
+writes : ssh-grant : ssh-grant-records = put 5
+effect : ssh-grant = state
+ensure : ssh-grant : key-declared = (bound ssh-keys <5>)
+ensure : ssh-grant : scope-declared = (bound windows <office-key> <room-key>)
+form : ssh-grant : <ssh-state> = <text>
+does : ssh-grant <office-key> <room-key> - room <text> <ssh-state>
+end!
+
+declare : SeatSSH
+version : 1
+file : programs/OFFICE[<office-key>]/ROOM[<room-key>]/SEAT[<seat-key>]/SSH.typify
+optional!
+is : office-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : room-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : seat-key = /[A-Za-z0-9][A-Za-z0-9_-]*/
+is : ssh-state = "granted" | "none"
+cell : ssh-keys = shadow
+cell : panes = shadow
+cell : ssh-grant-records = shadow
+primitive : ssh-grant : text text text text text ssh-state
+writes : ssh-grant : ssh-grant-records = put 5
+effect : ssh-grant = state
+ensure : ssh-grant : key-declared = (bound ssh-keys <5>)
+ensure : ssh-grant : scope-declared = (bound panes <office-key> <room-key> <seat-key>)
+form : ssh-grant : <ssh-state> = <text>
+does : ssh-grant <office-key> <room-key> <seat-key> seat <text> <ssh-state>
+end!

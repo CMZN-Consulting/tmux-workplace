@@ -1,0 +1,5 @@
+environment : harbor/dock/pilot : WORKPLACE_ROLE = baseline
+environment : harbor/dock/keeper : WORKPLACE_ROLE = baseline
+environment : harbor/tower/watch : WORKPLACE_ROLE = baseline
+environment : orchard/barn/grower : WORKPLACE_ROLE = baseline
+environment : orchard/barn/picker : WORKPLACE_ROLE = baseline

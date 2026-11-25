@@ -13,7 +13,7 @@ left=()
 for path in /tmp/wpt.* /tmp/wpt-skips.*; do
   [[ -e $path || -L $path ]] && left+=("$path")
 done
-if (( ${#left[@]} )); then
+if ((${#left[@]})); then
   printf '%s\n' "== left by another run, and not touched: ${left[*]}"
 fi
 skips=$(mktemp /tmp/wpt-skips.XXXXXX)
@@ -71,9 +71,13 @@ setup() {
   local socket_base
   socket_base=$(cd -P -- "$TMUX_TMPDIR" && pwd -P) || return 1
   [[ $socket_base != /tmp && $socket_base/tmux-$EUID/default != /tmp/tmux-$EUID/* ]] \
-    || { fail "the test would reach the machine's tmux socket directory"; return 1; }
+    || {
+      fail "the test would reach the machine's tmux socket directory"; return 1
+    }
   [[ $(stat -c %a -- "$TMUX_TMPDIR") == 700 ]] \
-    || { fail "the test's TMUX_TMPDIR is not private"; return 1; }
+    || {
+      fail "the test's TMUX_TMPDIR is not private"; return 1
+    }
   root=$scratch/root
   mkdir -p -- "$root/tools" \
     "$root/harbor/ledger" "$root/harbor/charts" "$root/harbor/berth" "$root/harbor/vault/shelf" \
@@ -116,7 +120,7 @@ collect_by_find() {
   for path in "$@"; do
     [[ -e $path || -L $path ]] || continue
     IFS=$'\t' read -r type mode uid target < <(find "$path" -maxdepth 0 -printf '%y\t%m\t%U\t%l\n')
-    while (( ${#mode} < 4 )); do mode=0$mode; done
+    while ((${#mode} < 4)); do mode=0$mode; done
     printf '%s\t%s\t%s\n' exists "$path" ""
     [[ $type == d ]] && printf '%s\t%s\t%s\n' directory "$path" ""
     [[ $type == l ]] && printf '%s\t%s\t%s\n' symlink "$path" "$target"
@@ -128,7 +132,10 @@ collect_by_find() {
 make_plan() {
   local into=${PLAN_CLONE:-$clone} filter=.
   local -a options=()
-  if (( $# )); then filter=${!#}; options=("${@:1:$#-1}"); fi
+  if (($#)); then
+    filter=${!#}
+    options=("${@:1:$#-1}")
+  fi
   rm -rf -- "$into/BUILD"
   mkdir -p -- "$into/PLAN"
   local rendered
@@ -163,9 +170,9 @@ make_plan() {
 socket_dir_of() {
   local sum alphabet=ybndrfg8ejkmcpqxot1uwisza345h769 out="" i j chunk
   sum=$(printf '%s' "$1" | sha1sum)
-  for (( i = 0; i < 30; i += 5 )); do
-    chunk=$(( 16#${sum:i:5} ))
-    for (( j = 15; j >= 0; j -= 5 )); do out+=${alphabet:$(( (chunk >> j) & 31 )):1}; done
+  for ((i = 0; i < 30; i += 5)); do
+    chunk=$((16#${sum:i:5}))
+    for ((j = 15; j >= 0; j -= 5)); do out+=${alphabet:$(((chunk >> j) & 31)):1}; done
   done
   printf '%s\n' "/run/user/$EUID/gnupg/d.$out"
 }
@@ -190,7 +197,9 @@ no_socket_dir_left() {
   while IFS= read -r home; do
     [[ -e $(socket_dir_of "$home") ]] && left+=" ${home#"$scratch"/}"
   done < <(key_homes)
-  [[ -z $left ]] || { note "    a runtime socket directory is left for:$left"; return 1; }
+  [[ -z $left ]] || {
+    note "    a runtime socket directory is left for:$left"; return 1
+  }
 }
 
 processes_naming() {
@@ -208,11 +217,11 @@ end_processes_naming() {
   local -a left
   for round in TERM KILL; do
     mapfile -t left < <(processes_naming "$1")
-    (( ${#left[@]} )) || return 0
+    ((${#left[@]})) || return 0
     kill "-$round" "${left[@]}" 2> /dev/null
-    for (( i = 0; i < 40; i++ )); do
+    for ((i = 0; i < 40; i++)); do
       mapfile -t left < <(processes_naming "$1")
-      (( ${#left[@]} )) || return 0
+      ((${#left[@]})) || return 0
       sleep 0.05
     done
   done
@@ -230,7 +239,7 @@ reopen_shut() {
   local -a shut=()
   [[ -f $scratch/shut-directories ]] || return 0
   mapfile -d '' -t shut < "$scratch/shut-directories"
-  for (( i = ${#shut[@]} - 1; i >= 0; i-- )); do chmod 0700 -- "${shut[i]}" 2> /dev/null; done
+  for ((i = ${#shut[@]} - 1; i >= 0; i--)); do chmod 0700 -- "${shut[i]}" 2> /dev/null; done
   return 0
 }
 
@@ -251,13 +260,13 @@ cleanup() {
   fi
   if [[ -n ${label-} ]] && command -v systemctl > /dev/null; then
     while IFS= read -r unit; do
-      pid=$(systemctl --user show -p MainPID --value "$unit" 2>/dev/null)
+      pid=$(systemctl --user show -p MainPID --value "$unit" 2> /dev/null)
       [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
-      cwd=$(readlink -- "/proc/$pid/cwd" 2>/dev/null) || continue
+      cwd=$(readlink -- "/proc/$pid/cwd" 2> /dev/null) || continue
       [[ $cwd == "$scratch"/* ]] || continue
-      timeout 30 systemctl --user stop -- "$unit" >/dev/null 2>&1
+      timeout 30 systemctl --user stop -- "$unit" > /dev/null 2>&1
     done < <(systemctl --user list-units --all --no-pager --output=json -- \
-      "workplace-carrier-$label.service" "workplace-carrier-$label-*.service" 2>/dev/null | jq -r '.[].unit')
+      "workplace-carrier-$label.service" "workplace-carrier-$label-*.service" 2> /dev/null | jq -r '.[].unit')
   fi
   [[ -n ${label2-} && -S ${root-}/config2/BUILD/RUN/$label2 ]] && tmux -S "$root/config2/BUILD/RUN/$label2" kill-server 2> /dev/null
   if [[ ${TMUX_TMPDIR-} == "$scratch"/* ]]; then
@@ -286,7 +295,7 @@ screen_of() {
 
 wait_for_line() {
   local title=$1 line=$2 i
-  for (( i = 0; i < 120; i++ )); do
+  for ((i = 0; i < 120; i++)); do
     if screen_of "$title" | grep -qxF -- "$line"; then return 0; fi
     sleep 0.05
   done
@@ -297,7 +306,7 @@ wait_for_probe() { wait_for_line "$1" "probe $2 done"; }
 screen_has() { screen_of "$1" | grep -qxF -- "$2"; }
 eventually() {
   local i
-  for (( i = 0; i < 60; i++ )); do
+  for ((i = 0; i < 60; i++)); do
     "$@" && return 0
     sleep 0.05
   done
@@ -310,18 +319,26 @@ exit_is() {
   shift
   "$@" > "$scratch/out" 2>&1
   local got=$?
-  [[ $got == "$want" ]] || { note "    exit $got, wanted $want; output:"; sed 's/^/    | /' "$scratch/out"; return 1; }
+  [[ $got == "$want" ]] || {
+    note "    exit $got, wanted $want; output:"
+    sed 's/^/    | /' "$scratch/out"; return 1
+  }
 }
 said() { grep -qF -- "$1" "$scratch/out"; }
 nnp_of() {
   local line
   while IFS= read -r line; do
-    [[ $line == NoNewPrivs:* ]] && { printf '%s\n' "${line//[[:space:]]/}"; return 0; }
+    [[ $line == NoNewPrivs:* ]] && {
+      printf '%s\n' "${line//[[:space:]]/}"; return 0
+    }
   done < "/proc/$1/status"
 }
 up_fixture() {
   make_plan "$@" && wp build > "$scratch/out" 2>&1 && wp up >> "$scratch/out" 2>&1 \
-    || { note "    build or up failed:"; sed 's/^/    | /' "$scratch/out"; return 1; }
+    || {
+      note "    build or up failed:"
+      sed 's/^/    | /' "$scratch/out"; return 1
+    }
 }
 seat_command() { jq -c --arg n "$1" 'select(.name == $n) | .command' "$run"/seats/*.json; }
 view_ops() {
@@ -640,11 +657,15 @@ dot_row='.state.view += [{key: ["harbor", "dock", "pilot", $root], value: ["read
 seats_as_built() { jq -c '{name, key, directory, command, environment}' "$run"/seats/*.json | sort; }
 
 t_relative_paths() {
-  FACTS_MEMBER=none up_fixture --arg root "$root" "$dot_row" || { fail "the plan written absolute does not stand"; return; }
+  FACTS_MEMBER=none up_fixture --arg root "$root" "$dot_row" || {
+    fail "the plan written absolute does not stand"; return
+  }
   seats_as_built > "$scratch/seats-absolute"
   check "keeper ran, from the plan written absolute" wait_for_probe "Harbor Keeper" keeper
   wp down > /dev/null 2>&1
-  FACTS_MEMBER=none up_fixture --arg root "$root" "$dot_row | $relative_filter" || { fail "[C4] the plan written relative to the root does not stand"; return; }
+  FACTS_MEMBER=none up_fixture --arg root "$root" "$dot_row | $relative_filter" || {
+    fail "[C4] the plan written relative to the root does not stand"; return
+  }
   check "[C4] the plan holds its paths as written" \
     test "$(jq -r '[.programs[].plan[] | if type == "object" then .term else . end | select(.[0] == "start") | .[4]] | unique | join(" ")' "$clone/BUILD/plan.json")" = "harbor orchard"
   seats_as_built > "$scratch/seats-relative"
@@ -730,7 +751,10 @@ t_fixed_part() {
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   T display -p -t "$(pane_by_title 'Harbor Pilot')" '#{pane_tty}' > "$root/harbor/berth/other"
   local i
-  for (( i = 0; i < 100; i++ )); do grep -q "term done" "$root/harbor/berth/report" 2> /dev/null && break; sleep 0.1; done
+  for ((i = 0; i < 100; i++)); do
+    grep -q "term done" "$root/harbor/berth/report" 2> /dev/null && break
+    sleep 0.1
+  done
   check "[C15] /dev/tty opens with a private /dev" grep -qx "term /dev/tty: open" "$root/harbor/berth/report"
   check "[C15] the terminal's size can be read" grep -qx "term stty: ok" "$root/harbor/berth/report"
   check "[C15] job control: a job stops" grep -qx "term job stopped: yes" "$root/harbor/berth/report"
@@ -753,7 +777,7 @@ t_server_privilege() {
   cp -- "$scratch/plan-first.json" "$scratch/plan.json"
   check "build a clone whose path is long" exit_is 0 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" build
   check "[C68] up refuses, with exit 2, a server whose socket's path would be too long for a socket" exit_is 2 env WORKPLACE_CONFIG="$second" "$BASH" "$loop" up
-  check "[C68] naming the path and its length" said "the server's socket would be $second/BUILD/RUN/$label_long, $(( ${#second} + 11 + ${#label_long} )) bytes, and a socket's path holds at most 107"
+  check "[C68] naming the path and its length" said "the server's socket would be $second/BUILD/RUN/$label_long, $((${#second} + 11 + ${#label_long})) bytes, and a socket's path holds at most 107"
   check "[C68] and starts nothing" test ! -e "$second/BUILD/RUN"
 }
 
@@ -875,7 +899,10 @@ t_down_after_the_server_restarted() {
   local first i
   first=$(T display -p -t =Harbor: '#{session_id}')
   T kill-server
-  for (( i = 0; i < 100; i++ )); do [[ -S $run/$label ]] || break; sleep 0.05; done
+  for ((i = 0; i < 100; i++)); do
+    [[ -S $run/$label ]] || break
+    sleep 0.05
+  done
   T -f /dev/null new-session -d -s stranger
   check "the stranger now holds the id the workplace's first session had" \
     test "$(T display -p -t =stranger: '#{session_id}')" = "$first"
@@ -1163,7 +1190,7 @@ end_reference_servers() {
     { read -r pid < <(tmux -S "$sock" list-sessions -F '#{pid}'); } 2> /dev/null
     tmux -S "$sock" kill-server 2> /dev/null
     [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
-    for (( i = 0; i < 100; i++ )); do
+    for ((i = 0; i < 100; i++)); do
       gone_pid "$pid" && break
       sleep 0.05
     done
@@ -1244,7 +1271,10 @@ path_without_reader() {
   printf '%s\n' "$out"
 }
 wplan() { env PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan; }
-loose_wplan() { local loop=$scratch/loose/bin/workplace; wplan; }
+loose_wplan() {
+  local loop=$scratch/loose/bin/workplace
+  wplan
+}
 statements_plan() {
   local filter=${1:-.}
   jq --arg root "$root" '
@@ -1283,7 +1313,11 @@ t_plan_assembles() {
   rm -- "$clone/programs/back\\slash.typify"
   check "plan again without it" exit_is 0 wplan
   check "[C27] the declarations are one header and each layer's body in workplace.json's order" \
-    cmp -s "$STUB_DIR/declarations" <(printf '%s\n' '#lang typify'; tail -n +2 "$clone/layers/structure.typify"; tail -n +2 "$clone/layers/access.typify")
+    cmp -s "$STUB_DIR/declarations" <(
+      printf '%s\n' '#lang typify'
+      tail -n +2 "$clone/layers/structure.typify"
+      tail -n +2 "$clone/layers/access.typify"
+    )
   check "[C27] the root program is exactly two lines: the root and the server" \
     cmp -s "$STUB_DIR/root-program" <(printf '%s\n' "workdir : $root" "server : $label : config/tmux.conf")
   check "[C27] the tree holds the generated root program and a copy of programs/, and no sibling of the root" \
@@ -1298,7 +1332,10 @@ t_plan_assembles() {
   check "[C29] the fold's version names the rules it follows" test "$(jq -r .derivations.fold "$manifest")" = frame-5.17-5.18-5.24-5.29-5.37-5.50-5.54-5.66-5.78-5.122-5.124-5.125-5.126-5.129-5.131-5.132-5.141-5.146-5.153-5.162-kind-notice-v24
   check "[C29] every input with its hash, in order: workplace.json, the layers, the programs, tmux.conf" \
     test "$(jq -r '[.inputs[] | "\(.path)=\(.sha256)"] | join(" ")' "$manifest")" = \
-    "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do s=$(sha256sum < "$clone/$f"); printf '%s ' "$f=${s%% *}"; done | sed 's/ $//')"
+    "$(for f in workplace.json layers/structure.typify layers/access.typify programs/policy.typify tmux.conf; do
+      s=$(sha256sum < "$clone/$f")
+      printf '%s ' "$f=${s%% *}"
+    done | sed 's/ $//')"
   local d r
   d=$(sha256sum < "$STUB_DIR/declarations")
   r=$(sha256sum < "$STUB_DIR/root-program")
@@ -2407,7 +2444,7 @@ t_floors() {
   local waited
   waited=$EPOCHREALTIME
   check "[C102] 5.162 (Q8): build refuses while another build holds the build's lock, after a wait of two seconds, with exit 1" exit_is 1 wp build
-  waited=$(( ${EPOCHREALTIME/./} - ${waited/./} ))
+  waited=$((${EPOCHREALTIME/./} - ${waited/./}))
   check "[C102] review of 4a: having waited the two seconds" test "$waited" -ge 1900000
   check "[C102] naming its holder" said "build refuses: another build of this workplace holds its lock, $s/build.lock: build, process 4242, since 2026-01-01T00:00:00Z"
   kill "$holder" 2> /dev/null
@@ -2415,7 +2452,7 @@ t_floors() {
   rm -rf -- "$clone/BUILD"
   check "build again" exit_is 0 wp build
   check "[C5] 5.162 (the addendum's P5): a build takes its generation's number from the counter, so that no number is taken twice" \
-    test "$(top_gen) $(< "$s/generation.next")" = "$counter $(( counter + 1 ))"
+    test "$(top_gen) $(< "$s/generation.next")" = "$counter $((counter + 1))"
   local kept_counter
   kept_counter=$(< "$s/generation.next")
   printf '%s\n' 07 > "$s/generation.next"
@@ -2534,7 +2571,8 @@ t_floors_assembly() {
   wplan > "$scratch/out" 2>&1
   check "[C100] 5.142: a bare colon in a floor's name, key or conf is no fault of the frame's: the root program carries them, and their classes are the reader's" \
     grep -qxF "floor : bri:dge : Bridge: upper : offices : unenforced : tmux-default : config/floors/bri:dge.conf : 80x24" "$STUB_DIR/root-program"
-  cp -- "$scratch/w-saved" "$clone/workplace.json"; rm -f -- "$clone/floors/bri:dge.conf"
+  cp -- "$scratch/w-saved" "$clone/workplace.json"
+  rm -f -- "$clone/floors/bri:dge.conf"
   jq '.floors[0].name = "Bri\\dge"' "$clone/workplace.json" > "$scratch/w2" && cp -- "$clone/workplace.json" "$scratch/w-saved" && cp -- "$scratch/w2" "$clone/workplace.json"
   wplan > "$scratch/out" 2>&1
   check "[C100] 5.141 point 7: the floors' members keep their places, and a backslash reaches the root program once" \
@@ -2939,7 +2977,7 @@ t_pointer_floors() {
   done
   check "[C59] 5.162: the three floors' carriers, on runs made by hand at one time, deliver the nine mails" \
     bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of grower g1.md)" "$(answer_of reaper r1.md)" "$(answer_of ivo v1.md)" \
-      "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)" "$(answer_of gleaner l1.md)" "$(answer_of watch w1.md)" "$(answer_of pilot p1.md)"
+    "$(answer_of ida d1.md)" "$(answer_of keeper k1.md)" "$(answer_of grower g2.md)" "$(answer_of gleaner l1.md)" "$(answer_of watch w1.md)" "$(answer_of pilot p1.md)"
   for f in bridge deck lodge; do rm -rf -- "$clone/BUILD/RUN/$f/carrier"; done
   wait "${carriers[@]}"
   cat -- "$s"/floors/*/comms/record > "$scratch/requests-joined"
@@ -2952,7 +2990,10 @@ t_pointer_floors() {
       | (to_entries | map(select(.value.id == $id and .value.action == "mail") | .key)) as $m
       | ($m | length) == 1 and (($k | length) == 0 or $k == [range($m[0] - ($k | length); $m[0])])' "$1" > /dev/null
   }
-  all_together() { local f=$1 id; shift; for id in "$@"; do together "$f" "$id" || return 1; done; }
+  all_together() {
+    local f=$1 id; shift
+    for id in "$@"; do together "$f" "$id" || return 1; done
+  }
   local g r v d k g2 l w p store
   g=$(idof "Orchard Grower" g1.md) r=$(idof "Orchard Reaper" r1.md) v=$(idof "Lodge Ivo" v1.md) d=$(idof "Lodge Ida" d1.md)
   k=$(idof "Harbor Keeper" k1.md) g2=$(idof "Orchard Grower" g2.md) l=$(idof "Orchard Gleaner" l1.md) w=$(idof "Harbor Watch" w1.md) p=$(idof "Harbor Pilot" p1.md)
@@ -2986,15 +3027,15 @@ t_pointer_floors() {
   check "[C59] the writer is told only that its mail was delivered" test "$(cat "$s/comms/Orchard Grower/answers/g1.md")" = "ok $g"
   check "[C59] 5.146 point 3: every reader sees its mail in in, withheld, due or none alike, the same file as the writer's sent" \
     bash -c 's=$1; shift; while (( $# )); do w=$1 id=$2 n=$3; shift 3; for (( i = 0; i < n; i++ )); do cmp -s "$s/$1/in/$id.md" "$s/$w/sent/$id.md" || exit 1; shift; done; done' _ "$store" \
-      "Orchard Grower" "$g" 5 "Harbor Keeper" "Harbor Watch" "Harbor Pilot" "Lodge Ivo" "Orchard Grower" \
-      "Orchard Reaper" "$r" 3 "Harbor Keeper" "Orchard Picker" "Orchard Grower" \
-      "Lodge Ivo" "$v" 2 "Lodge Ida" "Lodge Ira" \
-      "Lodge Ida" "$d" 2 "Lodge Ivo" "Lodge Ida" \
-      "Harbor Keeper" "$k" 1 "Orchard Picker" \
-      "Orchard Grower" "$g2" 2 "Orchard Reaper" "Orchard Gleaner" \
-      "Orchard Gleaner" "$l" 1 "Orchard Reaper" \
-      "Harbor Watch" "$w" 1 "Orchard Picker" \
-      "Harbor Pilot" "$p" 1 "Harbor Keeper"
+    "Orchard Grower" "$g" 5 "Harbor Keeper" "Harbor Watch" "Harbor Pilot" "Lodge Ivo" "Orchard Grower" \
+    "Orchard Reaper" "$r" 3 "Harbor Keeper" "Orchard Picker" "Orchard Grower" \
+    "Lodge Ivo" "$v" 2 "Lodge Ida" "Lodge Ira" \
+    "Lodge Ida" "$d" 2 "Lodge Ivo" "Lodge Ida" \
+    "Harbor Keeper" "$k" 1 "Orchard Picker" \
+    "Orchard Grower" "$g2" 2 "Orchard Reaper" "Orchard Gleaner" \
+    "Orchard Gleaner" "$l" 1 "Orchard Reaper" \
+    "Harbor Watch" "$w" 1 "Orchard Picker" \
+    "Harbor Pilot" "$p" 1 "Harbor Keeper"
 
   # A carrier stopped between a delivery's commit and the end of its decisions. It had decided for Ira by a line and
   # noted Grower in wake.json; Watch it had found due and not saved, and Ida it had not reached. The commit also gives
@@ -3011,7 +3052,10 @@ t_pointer_floors() {
   printf '%s\n' '{"at":"2026-01-01T00:00:00Z","seat":"the frame","action":"wake","target":["Lodge Ira"],"covers":["recovered-1"],"outcome":"none","reason":"its kind has no wake pattern, so no pointer is typed for it (C94)"}' >> "$s/floors/lodge/comms/record"
   printf '%s' '{"at":"2026' >> "$s/floors/lodge/comms/record"
   jq '.seats["Orchard Grower"] |= (.count += 1 | .ids += ["recovered-1"]) | del(.seats["Harbor Watch"])' "$s/comms/wake.json" > "$scratch/wake" && cat -- "$scratch/wake" > "$s/comms/wake.json"
-  ( umask 077; printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/floors/lodge/comms/serving" )
+  (
+    umask 077
+    printf '%s\n' '{"id":"recovered-1","box":"Lodge Ivo","request":"v9.md","action":"mail","seat":"Lodge Ivo"}' > "$s/floors/lodge/comms/serving"
+  )
   mkdir -p -- "$clone/BUILD/RUN/lodge/carrier"
   started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry" 2>&1 &
@@ -3173,12 +3217,14 @@ t_floors_up() {
   check "[C22] reports that floor alone" bash -c 'grep -qx "run: floor deck is up, workplace-[0-9a-f]*" "$1" && ! grep -q "floor lodge" "$1"' _ "$scratch/out"
   check "[C22] 5.160: with the shared generation and the floor's, as the top names them" \
     bash -c 'grep -qx "shared  generation $2" "$1" && grep -qx "floor   deck: generation $3" "$1"' _ "$scratch/out" \
-      "$(sed -n 's|^[0-9a-f]*  shared/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")" "$(sed -n 's|^[0-9a-f]*  floors/deck/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")"
+    "$(sed -n 's|^[0-9a-f]*  shared/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")" "$(sed -n 's|^[0-9a-f]*  floors/deck/\([0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")"
   check "[C57] 5.162: with no hold of the store's lock, status prints no holder" bash -c '! grep -q "^store " "$1"' _ "$scratch/out"
   printf '%s\n' "{\"floor\": \"deck\", \"pid\": $(carrier_pid deck), \"at\": \"2026-11-14T00:00:00Z\", \"id\": \"20261114T000000Z-000042\"}" > "$s/store.holder"
   local status_hold
   exec {status_hold}< "$s/mail"
-  flock -w 30 "$status_hold" || { fail "[C127] cannot hold the synthetic store for status"; return 1; }
+  flock -w 30 "$status_hold" || {
+    fail "[C127] cannot hold the synthetic store for status"; return 1
+  }
   check "[C57] 5.162: a running carrier named while the store lock is held is reported as its holder" exit_is 0 wp status deck
   check "[C57] naming the floor, the process, the time and the request" \
     said "store   held by the carrier of the floor deck, process $(carrier_pid deck), since 2026-11-14T00:00:00Z, for the request 20261114T000000Z-000042"
@@ -3226,7 +3272,7 @@ t_floor_blocking_config() {
   check "[C105] blocking config: build" exit_is 0 wp build
   local before=$SECONDS
   check "[C105] blocking config: up ends with refusal" exit_is 1 wp up deck
-  check "[C105] blocking config: up is bounded" test "$(( SECONDS - before ))" -lt 30
+  check "[C105] blocking config: up is bounded" test "$((SECONDS - before))" -lt 30
   check "[C105] blocking config: diagnostics identify the floor and its file" said "RUN/deck/tmux.conf"
   local socket=$run/deck/$label
   if [[ -S $socket ]]; then timeout 15 tmux -S "$socket" kill-server || fail "cannot stop the blocking-config test's server"; fi
@@ -3236,11 +3282,11 @@ t_floor_blocking_config() {
 
 t_unit_invocation_ownership() {
   local unit=workplace-carrier-default.service
-  if ! systemctl --user show-environment >/dev/null 2>&1; then
+  if ! systemctl --user show-environment > /dev/null 2>&1; then
     skip "invocation ownership: no user manager"
     return 0
   fi
-  if [[ $(systemctl --user show -p LoadState --value "$unit" 2>/dev/null) != not-found ]]; then
+  if [[ $(systemctl --user show -p LoadState --value "$unit" 2> /dev/null) != not-found ]]; then
     skip "invocation ownership: the default-named unit already belongs to another run; untouched"
     return 0
   fi
@@ -3334,10 +3380,22 @@ t_floor_config_refusals() {
   local variant expected socket
   for variant in parse hook expansion session; do
     case $variant in
-      parse) printf '%s\n' 'this-command-does-not-exist' > "$clone/floors/deck.conf"; expected="configuration does not parse" ;;
-      hook) printf '%s\n' 'set-hook -g after-select-window "display-message harmless"' > "$clone/floors/deck.conf"; expected="declares session hooks" ;;
-      expansion) printf '%s\n' 'set-option -g status-right "#(printf harmless)"' > "$clone/floors/deck.conf"; expected="shell expansion in an option" ;;
-      session) printf '%s\n' 'new-session -d -s unexpected' > "$clone/floors/deck.conf"; expected="file made sessions before the frame" ;;
+      parse)
+        printf '%s\n' 'this-command-does-not-exist' > "$clone/floors/deck.conf"
+        expected="configuration does not parse"
+        ;;
+      hook)
+        printf '%s\n' 'set-hook -g after-select-window "display-message harmless"' > "$clone/floors/deck.conf"
+        expected="declares session hooks"
+        ;;
+      expansion)
+        printf '%s\n' 'set-option -g status-right "#(printf harmless)"' > "$clone/floors/deck.conf"
+        expected="shell expansion in an option"
+        ;;
+      session)
+        printf '%s\n' 'new-session -d -s unexpected' > "$clone/floors/deck.conf"
+        expected="file made sessions before the frame"
+        ;;
     esac
     statements_plan "$floors_terms"
     check "[C105] floor config $variant: plan" exit_is 0 wplan
@@ -3374,7 +3432,9 @@ t_floor_default_refusals() {
   before=$(floor_server_digest "$socket")
   local stopped_pid
   stopped_pid=$(tmux -S "$socket" display-message -p '#{pid}')
-  [[ $stopped_pid =~ ^[1-9][0-9]*$ ]] || { fail "[C105] floor default: the synthetic server has no pid"; return 1; }
+  [[ $stopped_pid =~ ^[1-9][0-9]*$ ]] || {
+    fail "[C105] floor default: the synthetic server has no pid"; return 1
+  }
   trap 'kill -CONT "$stopped_pid" 2>/dev/null || :; exit 1' HUP INT TERM
   kill -STOP "$stopped_pid" || return 1
   check "[C105] floor default: the synthetic default server is stopped" \
@@ -3571,8 +3631,8 @@ t_floor_scoped_readback() {
   check "[C106] local destroy-unattached: status refuses" exit_is 1 wp status deck
   check "[C22] local destroy-unattached: status does not repair" test "$(on deck T show-options -Av -t "$session" destroy-unattached)" = on
   on deck T set-option -t "$session" destroy-unattached off
-  kill "$client" 2>/dev/null || :
-  wait "$client" 2>/dev/null || :
+  kill "$client" 2> /dev/null || :
+  wait "$client" 2> /dev/null || :
   exec {control_fd}>&-
   check "[C106] scoped readback: restored settings agree" exit_is 0 wp status deck
   check "[C105] scoped readback: down deck" exit_is 0 wp down deck
@@ -3622,8 +3682,8 @@ t_floor_refresh_scoped() {
   request keeper while-refused.md 'to: Harbor Pilot' 'subject: local hook' --- body
   check "[C106] scoped refresh: mail continues with the local hook present" answered_ok keeper while-refused.md
   on deck T set-hook -pu -t "$pane" pane-mode-changed
-  kill "$client" 2>/dev/null || :
-  wait "$client" 2>/dev/null || :
+  kill "$client" 2> /dev/null || :
+  wait "$client" 2> /dev/null || :
   exec {control_fd}>&-
   check "[C106] scoped refresh: down deck" exit_is 0 wp down deck
 }
@@ -3753,7 +3813,11 @@ t_floor_command_exclusion() {
   check "[C102] floor exclusion: plan" exit_is 0 wplan
   check "[C102] floor exclusion: build" exit_is 0 wp build
   local s=$HOME/.local/state/workplace/$label
-  ( umask 077; : > "$s/floors/deck/up.lock"; : > "$s/floors/deck/up.holder" )
+  (
+    umask 077
+    : > "$s/floors/deck/up.lock"
+    : > "$s/floors/deck/up.holder"
+  )
   printf '%s\n' '{"command":"up deck","pid":4242,"at":"2026-11-17T00:00:00Z"}' > "$s/floors/deck/up.holder"
   exec {held}>> "$s/floors/deck/up.lock"
   flock "$held"
@@ -3766,7 +3830,7 @@ t_floor_command_exclusion() {
     check "[C102] floor exclusion: $verb refuses the held floor" exit_is 1 wp "$verb" deck
     check "[C102] floor exclusion: $verb names the holder" said "up deck holds the floor deck, process 4242"
   done
-  check "[C102] floor exclusion: no command waits for the holder" test "$(( SECONDS - before ))" -lt 10
+  check "[C102] floor exclusion: no command waits for the holder" test "$((SECONDS - before))" -lt 10
   exec {held}>&-
   rm -rf -- "$run/deck"
   mkdir -- "$scratch/gate-bin"
@@ -3786,7 +3850,7 @@ t_floor_command_exclusion() {
   before=$SECONDS
   check "[C102] floor exclusion: down refuses during an actual up" exit_is 1 wp down deck
   check "[C102] floor exclusion: down names that up" said "up deck holds the floor deck"
-  check "[C102] floor exclusion: down returns before startup is released" test "$(( SECONDS - before ))" -lt 5
+  check "[C102] floor exclusion: down returns before startup is released" test "$((SECONDS - before))" -lt 5
   : > "$scratch/release"
   check "[C102] floor exclusion: original up completes" wait "$starter"
   check "[C102] floor exclusion: no daemon inherits the floor lock" flock -n "$s/floors/deck/up.lock" true
@@ -3850,7 +3914,7 @@ t_store_lock() {
   wait "$holder"
   check "[C59] 5.162: once it is free, the two floors' carriers deliver the nine mails" \
     bash -c 'for a in "$@"; do [[ $a == "ok "* ]] || exit 1; done' _ "$(answer_of keeper k1.md)" "$(answer_of keeper k2.md)" "$(answer_of keeper k3.md)" \
-      "$(answer_of pilot p1.md)" "$(answer_of pilot p2.md)" "$(answer_of pilot p3.md)" "$(answer_of ida i1.md)" "$(answer_of ida i2.md)" "$(answer_of ida i3.md)"
+    "$(answer_of pilot p1.md)" "$(answer_of pilot p2.md)" "$(answer_of pilot p3.md)" "$(answer_of ida i1.md)" "$(answer_of ida i2.md)" "$(answer_of ida i3.md)"
   # The carrier answers before it writes the line, so the lines are awaited.
   check "the nine mails' lines stand across their floors' records" eventually bash -c '[[ $(jq -r "select(.action == \"mail\" and .outcome == \"ok\") | .id" "$1"/floors/*/comms/record | wc -l) == 9 ]]' _ "$s"
   cat -- "$s"/floors/*/comms/record > "$scratch/requests-joined"
@@ -3893,7 +3957,9 @@ t_store_lock() {
     bash -c '[[ $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" show --name-only --format= HEAD | sort | tr "\n" " ") == "Harbor Keeper/in/$2.md Lodge Ida/sent/$2.md " ]] \
       && [[ -z $(env -i PATH="$PATH" HOME=/ GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git -C "$1" ls-files -- "Harbor Keeper/in/zz.md") ]]' _ "$store" "$(jq -r 'select(.request == "i4.md" and .action == "mail") | .id' "$s/floors/lodge/comms/record")"
   # The holder of the store's lock, seen while a delivery holds it: a poller copies S/store.holder once it stands.
-  ( for (( n = 0; n < 2000000; n++ )); do [[ -s $s/store.holder ]] && { cp -- "$s/store.holder" "$scratch/holder-seen" 2> /dev/null && [[ -s $scratch/holder-seen ]] && exit 0; }; done; exit 1 ) &
+  (
+    for ((n = 0; n < 2000000; n++)); do [[ -s $s/store.holder ]] && { cp -- "$s/store.holder" "$scratch/holder-seen" 2> /dev/null && [[ -s $scratch/holder-seen ]] && exit 0; }; done; exit 1
+  ) &
   holder=$!
   request ida i5.md "to: Harbor Keeper, Harbor Pilot" "subject: i5" --- "i5"
   check "a mail is delivered while the poller watches" answered_ok ida i5.md
@@ -3912,7 +3978,10 @@ t_store_lock() {
   printf '%s\n' y > "$store/Harbor Pilot/in/recovered-y.md"
   sgit add -- "Harbor Pilot/in/recovered-y.md"
   sgit -c user.name=t -c user.email=t@t commit -q -m "deliver recovered-y"
-  ( umask 077; jq -n -c --arg b "$base" '{id: "recovered-x", box: "Lodge Ida", request: "x.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving" )
+  (
+    umask 077
+    jq -n -c --arg b "$base" '{id: "recovered-x", box: "Lodge Ida", request: "x.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving"
+  )
   mkdir -p -- "$run/lodge/carrier"
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
   carriers=("$!")
@@ -3933,7 +4002,10 @@ t_store_lock() {
   printf '%s\n' y > "$store/Harbor Pilot/in/other-y.md"
   sgit add -- "Harbor Pilot/in/other-y.md"
   sgit -c user.name=t -c user.email=t@t commit -q -m "deliver other-y"
-  ( umask 077; jq -n -c '{id: "first-x", box: "Lodge Ida", request: "f.md", action: "mail", seat: "Lodge Ida", base: ""}' > "$s/floors/lodge/comms/serving" )
+  (
+    umask 077
+    jq -n -c '{id: "first-x", box: "Lodge Ida", request: "f.md", action: "mail", seat: "Lodge Ida", base: ""}' > "$s/floors/lodge/comms/serving"
+  )
   mkdir -p -- "$run/lodge/carrier"
   printf '%s\n' '{"slots": {}}' > "$run/lodge/state.json"
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
@@ -3946,7 +4018,10 @@ t_store_lock() {
   for f in "Lodge Ida/sent" "Harbor Keeper/in"; do printf '%s\n' z > "$store/$f/half-z.md"; done
   sgit add -- "Lodge Ida/sent/half-z.md" "Harbor Keeper/in/half-z.md"
   : > "$store/.git/index.lock"
-  ( umask 077; jq -n -c --arg b "$(sgit rev-parse HEAD)" '{id: "half-z", box: "Lodge Ida", request: "z.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving" )
+  (
+    umask 077
+    jq -n -c --arg b "$(sgit rev-parse HEAD)" '{id: "half-z", box: "Lodge Ida", request: "z.md", action: "mail", seat: "Lodge Ida", base: $b}' > "$s/floors/lodge/comms/serving"
+  )
   mkdir -p -- "$run/lodge/carrier"
   "$BASH" "$clone/BUILD/bin/workplace" carry lodge > "$scratch/carry-lodge" 2>&1 &
   carriers=("$!")
@@ -4093,8 +4168,14 @@ t_carrier_floors() {
   # Recovery under a hold (5.162 point 1): a stopped request's journal in the lodge's own state, and one in the shared
   # S/comms, which is no floor's, planted while the lodge is down; the lodge comes up while the test holds the lock.
   printf '%s\n' busy > "$d/screen"
-  ( umask 077; jq -n -c '{id: "20261115T000000Z-900001", box: "Lodge Ida", request: "f1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/floors/lodge/comms/serving" )
-  ( umask 077; jq -n -c '{id: "20261115T000000Z-900002", box: "Lodge Ida", request: "s1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/comms/serving" )
+  (
+    umask 077
+    jq -n -c '{id: "20261115T000000Z-900001", box: "Lodge Ida", request: "f1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/floors/lodge/comms/serving"
+  )
+  (
+    umask 077
+    jq -n -c '{id: "20261115T000000Z-900002", box: "Lodge Ida", request: "s1.grab", action: "grab", seat: "Lodge Ida"}' > "$s/comms/serving"
+  )
   # As above, the holder outlives every wait until the test lets it go.
   flock -o "$s/mail" sleep 300 &
   holder=$!
@@ -4212,7 +4293,7 @@ t_floors_readers() {
   pkill -P "$holder" sleep 2> /dev/null
   wait "$holder" 2> /dev/null
   rm -f -- "$s/floors/bridge/up.lock" "$s/floors/deck/up.lock" "$s/floors/lodge/up.lock"
-  ( umask 077 && : >> "$s/floors/deck/up.lock" )
+  (umask 077 && : >> "$s/floors/deck/up.lock")
   flock -o "$s/floors/deck/up.lock" sleep 6 &
   holder=$!
   check "the test holds the deck's floor lock" eventually bash -c '! flock -n "$1" true' _ "$s/floors/deck/up.lock"
@@ -4571,14 +4652,16 @@ t_plan_end_to_end() {
   clone=$reference/config
   run=$clone/BUILD/RUN
   reference_plan=$scratch/reference-plan
-  cp -a -- "$clone/PLAN" "$reference_plan" || { fail "cannot keep a copy of $clone/PLAN"; return 0; }
+  cp -a -- "$clone/PLAN" "$reference_plan" || {
+    fail "cannot keep a copy of $clone/PLAN"; return 0
+  }
   reference_root=$reference
   reference_paths=$(find "$reference" -path "$reference/config/BUILD" -prune -o -print | sort)
   local shape
   shape=$(shape_of "$reference")
   trap 'leave_reference; cleanup || exit 1' EXIT
   check "[C28] plan with the reader $(typify --version)" exit_is 0 wp plan
-  (( test_failed == 0 )) || return 0
+  ((test_failed == 0)) || return 0
   check "[C29] PLAN/ now holds the folded view" test -f "$clone/PLAN/view.json"
   check "[C28] writes plan.json byte for byte as the fixture's committed plan" test "$(sha256sum < "$clone/PLAN/plan.json" | cut -d' ' -f1)" = "$pinned"
   check "[C29] and the generated files the fixture's manifest records" \
@@ -4690,7 +4773,9 @@ t_identity_selection() {
 t_identity() {
   local program
   for program in gpg gpg-agent gpgconf gpg-connect-agent ssh-keygen ssh-add git setsid base64; do
-    command -v "$program" > /dev/null || { skip "[C35] $program is not on PATH here, so no key is made and used in a pane"; return; }
+    command -v "$program" > /dev/null || {
+      skip "[C35] $program is not on PATH here, so no key is made and used in a pane"; return
+    }
   done
   scoped_clone
   local w=$label state=$HOME/.local/state/workplace/$label
@@ -4740,7 +4825,7 @@ t_identity() {
   check "[C37] and gives each holding seat its grants, none where no ssh key reaches it" test "$(jq -c '[.seats[].grants]' "$keys")" = '[[],[],[]]'
   check "[C35] sshcontrol holds the subkey's keygrip alone, and is read-only, 0444" \
     test "$(stat -c %a "$home/sshcontrol") $(grep -cvE '^[[:space:]]*(#|$)' "$home/sshcontrol") $(cut -d' ' -f1 "$home/sshcontrol")" \
-      = "444 1 $(gpg --homedir "$home" --with-colons --with-keygrip --list-keys | awk -F: '$1 == "grp" { g = $10 } END { print g }')"
+    = "444 1 $(gpg --homedir "$home" --with-colons --with-keygrip --list-keys | awk -F: '$1 == "grp" { g = $10 } END { print g }')"
   local control
   control=$(sha256sum < "$home/sshcontrol")
   check "[C35] build leaves no agent running" no_agent_of "$state/keys"
@@ -4817,7 +4902,7 @@ t_identity() {
       found=1
       check "[C84] the user's ssh agent's socket $runtime/$agent, which stands outside, is not there" r "connect $runtime/$agent: absent"
     done
-    (( found )) || skip "[C84] no ssh agent of the user's keeps its socket in $runtime here, so its absence from a pane is shown by the empty runtime directory alone"
+    ((found)) || skip "[C84] no ssh agent of the user's keeps its socket in $runtime here, so its absence from a pane is shown by the empty runtime directory alone"
     check "[C84] keeper, under the mask, signs through its own agent" bash -c 'grep -qxF "key gpg sign: ok" "$1" && grep -qxF "key ssh sign: ok" "$1"' _ "$report"
     check "picker ran" wait_for_probe "Orchard Picker" picker
     check "[C84] picker's hidden row at the runtime directory stands as written, closed, with no mask over it" grep -qxF "list $runtime: refused" "$root/orchard/crate-picker/report"
@@ -4888,7 +4973,10 @@ ssh_terms='def s($t; $line): {term: $t, origin: {kind: "program", line: $line, p
 ssh_refused() {
   statements_plan "$key_terms | $ssh_terms | .programs[-1].recorded += [$1]"
   exit_is 1 wplan || return 1
-  said "$2" || { note "    wanted: $2"; sed 's/^/    | /' "$scratch/out"; return 1; }
+  said "$2" || {
+    note "    wanted: $2"
+    sed 's/^/    | /' "$scratch/out"; return 1
+  }
 }
 
 t_ssh_grants_fold() {
@@ -4900,7 +4988,7 @@ t_ssh_grants_fold() {
     '[["keeper",["account workplace 4","node-ec seat 6","node-rsa office 5"],[]],["pilot",[],["account","node-rsa"]],["watch",[],["account","node-rsa"]],["grower",["account workplace 4"],[]],["picker",[],[]]]'
   check "[C85] a key's path is joined to the root where it is relative, and stands as written where it is absolute" \
     test "$(jq -c '[.ssh.keys[] | [.name, .path]]' "$clone/PLAN/view.json")" \
-      = "$(jq -c -n --arg r "$root" '[["account", "\($r)/keys/account"], ["node-rsa", "\($r)/keys/node-rsa"], ["node-ec", "\($r)/keys/node-ec"]]')"
+    = "$(jq -c -n --arg r "$root" '[["account", "\($r)/keys/account"], ["node-rsa", "\($r)/keys/node-rsa"], ["node-ec", "\($r)/keys/node-ec"]]')"
   check "[C85] plan prints each key and its file" said "ssh key account: $root/keys/account (programs/SSH.typify:1)"
   check "[C85] and, for each seat, the names it is granted with their terms" \
     bash -c 'grep -qxF "  ssh key node-ec: granted, by the seat'"'"'s term (programs/SSH.typify:6)" "$1" && grep -qxF "  ssh key account: granted, by the workplace'"'"'s term (programs/SSH.typify:4)" "$1"' _ "$scratch/out"
@@ -4954,7 +5042,9 @@ reads_of() { grep -cF -- "$1" "$scratch/reads"; }
 t_ssh_key_refusals() {
   local program
   for program in ssh-keygen python3 gpg; do
-    command -v "$program" > /dev/null || { skip "[C86] $program is not on PATH here, so the refusals of a key's file are shown where it is"; return; }
+    command -v "$program" > /dev/null || {
+      skip "[C86] $program is not on PATH here, so the refusals of a key's file are shown where it is"; return
+    }
   done
   scoped_clone
   local keys=$root/keys state=$HOME/.local/state/workplace/$label case
@@ -5021,7 +5111,7 @@ t_ssh_key_refusals() {
       have[${entry##*/}]=1
       found+=("$entry")
     done
-    (( ${#found[@]} )) && ln -s -t "$without" -- "${found[@]}"
+    ((${#found[@]})) && ln -s -t "$without" -- "${found[@]}"
   done
   check "[C6] build refuses a plan that grants an ssh key where ssh-add is not on PATH, with exit 2" \
     exit_is 2 env PATH="$without" "$BASH" "$loop" build
@@ -5031,11 +5121,15 @@ t_ssh_key_refusals() {
 t_ssh_grants() {
   local program
   for program in gpg gpg-agent gpgconf gpg-connect-agent ssh-keygen ssh-add ssh git setsid base64 python3; do
-    command -v "$program" > /dev/null || { skip "[C87] $program is not on PATH here, so no ssh key is granted and used in a pane"; return; }
+    command -v "$program" > /dev/null || {
+      skip "[C87] $program is not on PATH here, so no ssh key is granted and used in a pane"; return
+    }
   done
   scoped_clone
   local w=$label state=$HOME/.local/state/workplace/$label keys=$root/keys berth=$root/harbor/berth sshd="" path name
-  for path in /usr/sbin/sshd /usr/bin/sshd /sbin/sshd; do [[ -x $path ]] && { sshd=$path; break; }; done
+  for path in /usr/sbin/sshd /usr/bin/sshd /sbin/sshd; do [[ -x $path ]] && {
+    sshd=$path; break
+  }; done
   mkdir -m 0700 -- "$keys"
   mkdir -p -- "$root/records"
   ssh-keygen -q -t ed25519 -N '' -C account-comment -f "$keys/account" < /dev/null
@@ -5070,7 +5164,7 @@ t_ssh_grants() {
     bash -c '[[ $(ls "$1/private-keys-v1.d" | wc -l) == 5 && $(ls "$2/private-keys-v1.d" | wc -l) == 3 && $(ls "$3/private-keys-v1.d" | wc -l) == 2 ]] && ! grep -q protected-private-key "$1"/private-keys-v1.d/*.key "$2"/private-keys-v1.d/*.key' _ "$home" "$grower" "$picker"
   check "[C87] sshcontrol holds the seat's own grip first, then each grant's, and is read-only, 0444" \
     test "$(grep -vE '^[[:space:]]*(#|$)' "$home/sshcontrol" | cut -d' ' -f1 | paste -sd' ') $(stat -c %a "$home/sshcontrol")" \
-      = "$(gpg --homedir "$home" --with-colons --with-keygrip --list-keys | awk -F: '$1 == "grp" { g = $10 } END { print g }') $(jq -r '[.seats[0].grants[].grip] | join(" ")' "$keys_json") 444"
+    = "$(gpg --homedir "$home" --with-colons --with-keygrip --list-keys | awk -F: '$1 == "grp" { g = $10 } END { print g }') $(jq -r '[.seats[0].grants[].grip] | join(" ")' "$keys_json") 444"
   check "[C87] the home holds ssh/NAME.pub for each grant, the line of keys.json, read-only" \
     bash -c 'for n in account node-ec node-rsa; do [[ $(< "$1/ssh/$n.pub") == "$(jq -r --arg n "$n" ".seats[0].grants[] | select(.name == \$n) | .ssh" "$2")" && $(stat -c %a "$1/ssh/$n.pub") == 444 ]] || exit 1; done' _ "$home" "$keys_json"
   check "[C87] a home with no grant has no ssh directory" test ! -e "$picker/ssh"
@@ -5107,7 +5201,7 @@ t_ssh_grants() {
   extra=$(gpgconf --homedir "$home" --list-dirs agent-extra-socket)
   for grip in $(jq -r '.seats[0].grants[].grip' "$keys_json"); do
     for program in "READKEY $grip" "EXPORT_KEY $grip" "EXPORT_KEY --openpgp $grip" "DELETE_KEY --force $grip"; do
-      [[ $(gpg-connect-agent --homedir "$home" --no-autostart -S "$extra" "$program" /bye 2>&1) == *Forbidden* ]] && forbidden=$(( forbidden + 1 ))
+      [[ $(gpg-connect-agent --homedir "$home" --no-autostart -S "$extra" "$program" /bye 2>&1) == *Forbidden* ]] && forbidden=$((forbidden + 1))
     done
   done
   check "[C90] through the extra socket the seat is shown, reading, exporting and deleting each granted key are forbidden" test "$forbidden" = 12
@@ -5128,7 +5222,7 @@ t_ssh_grants() {
   local signed="$state/records/Harbor Keeper/signed"
   check "[C91] keeper's agent logs to signed in its record a line for each ssh signature, with the second in UTC" \
     bash -c 'n=0; while IFS= read -r line; do at=$(date -u -d "${line:0:19}" +%s 2> /dev/null) || continue; (( at >= $2 && at <= $3 + 1 )) && n=$(( n + 1 )); done < <(grep -E "^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} gpg-agent\[[0-9]+\] ssh request handler for sign_request \(13\) started$" "$1"); (( n >= 3 ))' \
-      _ "$signed" "$t0" "$t1"
+    _ "$signed" "$t0" "$t1"
   local -a secrets=("a line the grants sign" "PRIVATE" "private-key")
   for name in $(jq -r '.seats[0] | .ssh, .ssh_fingerprint, (.grants[] | .ssh, .fingerprint, .grip)' "$keys_json"); do
     [[ $name == ssh-* || $name == ecdsa-* ]] && continue
@@ -5223,7 +5317,10 @@ refused_by() {
   else
     exit_is "$exit" wplan || return 1
   fi
-  said "$message" || { note "    wanted: $message"; sed 's/^/    | /' "$scratch/out"; return 1; }
+  said "$message" || {
+    note "    wanted: $message"
+    sed 's/^/    | /' "$scratch/out"; return 1
+  }
 }
 write_seed() {
   printf '%s\n' '#!/usr/bin/env bash' 'home=$1' 'shift' 'printf "%s\n" "$@" > "$home/seeded"' \
@@ -5507,7 +5604,11 @@ t_values() {
   check "[C6] and starts nothing" bash -c '[[ ! -e $1 ]]' _ "$run"
   check "[C49] up" exit_is 0 wp up
   cp -- "$scratch/out" "$scratch/said-up"
-  sha() { local sum; sum=$(printf '%s' "$1" | sha256sum); printf '%s\n' "${sum%% *}"; }
+  sha() {
+    local sum
+    sum=$(printf '%s' "$1" | sha256sum)
+    printf '%s\n' "${sum%% *}"
+  }
   r() { grep -qxF -- "$2" "$1"; }
   check "keeper ran" wait_for_probe "Harbor Keeper" keeper
   check "[C49] keeper is given its own value, the narrowest, exactly as written" r "$root/harbor/berth/keeper" "secret WPT_TOKEN: sha256 $(sha "$keeper_token")"
@@ -5778,8 +5879,10 @@ request() {
 answer_of() {
   local file i
   file=$(state_of)/comms/$(box_of "$1")/answers/$2
-  for (( i = 0; i < 1200; i++ )); do
-    [[ -s $file ]] && { cat -- "$file"; return 0; }
+  for ((i = 0; i < 1200; i++)); do
+    [[ -s $file ]] && {
+      cat -- "$file"; return 0
+    }
     sleep 0.05
   done
   printf '%s\n' "no answer"
@@ -5787,12 +5890,17 @@ answer_of() {
 answered() {
   local got
   got=$(answer_of "$1" "$2" | head -n 1)
-  [[ $got == "$3" ]] || { note "    the answer to $2 is: $got"; note "    wanted: $3"; return 1; }
+  [[ $got == "$3" ]] || {
+    note "    the answer to $2 is: $got"
+    note "    wanted: $3"; return 1
+  }
 }
 answered_ok() {
   local got
   got=$(answer_of "$1" "$2" | head -n 1)
-  [[ $got =~ ^ok\ [0-9]{8}T[0-9]{6}Z-[0-9]{6}$ ]] || { note "    the answer to $2 is: $got"; return 1; }
+  [[ $got =~ ^ok\ [0-9]{8}T[0-9]{6}Z-[0-9]{6}$ ]] || {
+    note "    the answer to $2 is: $got"; return 1
+  }
 }
 # The carrier answers a request first and writes its line of the record after it, so a check that reads that line
 # waits here first for a line of the record for the request $2 of the seat $1, whatever its outcome, a torn line
@@ -5808,7 +5916,7 @@ line_recorded() {
     record_floor=$(jq -r --arg n "$seat" '.seats[] | select(.name == $n) | .floor' "$clone/BUILD/shared/$(top_gen)/mail.json")
     file="$(state_of)/floors/$record_floor/comms/record"
   fi
-  for (( i = 0; i < 1200; i++ )); do
+  for ((i = 0; i < 1200; i++)); do
     jq -R -e --arg s "$seat" --arg r "$2" 'fromjson? | objects | select(.seat == $s and .request == $r)' "$file" > /dev/null 2>&1 && return 0
     sleep 0.05
   done
@@ -5821,12 +5929,12 @@ store_commits() { env -i PATH="$PATH" HOME="$scratch" GIT_CONFIG_NOSYSTEM=1 GIT_
 records() {
   local file
   file=$(state_of)/comms/record
-  printf '%s\n' "$(( $(grep -c '' "$file") - $(jq -c 'select(.seat == "the frame" and (.outcome == "none" or .outcome == "withheld"))' "$file" | grep -c '') ))"
+  printf '%s\n' "$(($(grep -c '' "$file") - $(jq -c 'select(.seat == "the frame" and (.outcome == "none" or .outcome == "withheld"))' "$file" | grep -c '')))"
 }
 record_lines_reach() {
   local i
-  for (( i = 0; i < 300; i++ )); do
-    (( $(records) >= $1 )) && return 0
+  for ((i = 0; i < 300; i++)); do
+    (($(records) >= $1)) && return 0
     sleep 0.05
   done
   return 1
@@ -6103,7 +6211,7 @@ t_comms_carrier() {
     test "$(jq -r 'select(.seat != "the frame") | "\(.seat):\(.request)"' "$s/comms/record" | tr '\n' ',')" = "Harbor Keeper:a1.md,Harbor Pilot:b1.md,Harbor Keeper:a2.md,Harbor Pilot:b2.md,Harbor Keeper:a3.md,Harbor Pilot:b3.md,"
   mapfile -t ats < <(jq -r 'select(.seat == "Harbor Keeper") | .at' "$s/comms/record")
   check "[C57] a pass a second: three passes span two seconds or more" \
-    test $(( $(date -u -d "${ats[2]}" +%s) - $(date -u -d "${ats[0]}" +%s) )) -ge 2
+    test $(($(date -u -d "${ats[2]}" +%s) - $(date -u -d "${ats[0]}" +%s))) -ge 2
   check "[C57] the carrier runs outside every view: in this shell's mount and user namespaces" \
     test "$(stat -L -c %i "/proc/$pid/ns/mnt") $(stat -L -c %i "/proc/$pid/ns/user")" = "$(stat -L -c %i /proc/self/ns/mnt) $(stat -L -c %i /proc/self/ns/user)"
   if [[ $(nnp_of $$) == NoNewPrivs:1 ]]; then
@@ -6140,14 +6248,20 @@ t_comms_carrier() {
   check "[C57] which is gone" bash -c '! stat -L "/proc/$1/cwd" > /dev/null 2>&1' _ "$pid2"
   local delivered
   delivered=$(jq -r 'select(.request == "late.md") | .id' "$s/comms/record")
-  ( umask 077; jq -n -c --arg id "$delivered" '{id: $id, box: "Harbor Watch", request: "again.md", action: "mail", seat: "Harbor Watch"}' > "$s/comms/serving" )
+  (
+    umask 077
+    jq -n -c --arg id "$delivered" '{id: $id, box: "Harbor Watch", request: "again.md", action: "mail", seat: "Harbor Watch"}' > "$s/comms/serving"
+  )
   check "[C57] up, after a carrier that stopped once it had delivered a mail" exit_is 0 wp up
   check "[C57] the mail it delivered is answered as delivered when the carrier starts again" answered watch again.md "ok $delivered"
   check "down" exit_is 0 wp down
   printf '%s\n' stray > "$s/mail/Harbor Keeper/in/stray.md"
   printf '%s\n' half > "$s/mail/Harbor Keeper/in/20261112T000000Z-999999.md"
   printf '%s\n' half > "$s/mail/Harbor Keeper/sent/20261112T000000Z-999999.md"
-  ( umask 077; jq -n -c '{id: "20261112T000000Z-999999", box: "Harbor Keeper", request: "half.md", action: "mail", seat: "Harbor Keeper"}' > "$s/comms/serving" )
+  (
+    umask 077
+    jq -n -c '{id: "20261112T000000Z-999999", box: "Harbor Keeper", request: "half.md", action: "mail", seat: "Harbor Keeper"}' > "$s/comms/serving"
+  )
   check "[C57] up, after a carrier that stopped while it delivered a mail" exit_is 0 wp up
   check "[C57] the mail is answered as delivered to none" \
     answered keeper half.md "refused the carrier stopped while it served this, and it went to none; leave it in out again"
@@ -6190,7 +6304,7 @@ file_comes_to() {
 
 eventually_long() {
   local i
-  for (( i = 0; i < 600; i++ )); do
+  for ((i = 0; i < 600; i++)); do
     "$@" && return 0
     sleep 0.1
   done
@@ -6215,9 +6329,11 @@ t_comms_mail() {
   check "pilot ran" wait_for_probe "Harbor Pilot" pilot
   check "grower ran" wait_for_probe "Orchard Grower" grower
   file=$scratch/m1
-  { printf '%s\n' "from: Harbor Keeper" "to: Harbor Keeper, Harbor Watch" "subject: the first" "cc: Orchard Grower" "id: forged" \
+  {
+    printf '%s\n' "from: Harbor Keeper" "to: Harbor Keeper, Harbor Watch" "subject: the first" "cc: Orchard Grower" "id: forged" \
       "re: 20261112T000000Z-000001" "reply: needed" "at: forged" ---
-    printf 'line one\n\0 a NUL, bytes that are not UTF-8: \xff\xfe, and no newline at the end'; } > "$file"
+    printf 'line one\n\0 a NUL, bytes that are not UTF-8: \xff\xfe, and no newline at the end'
+  } > "$file"
   request_raw pilot m1.md "$file"
   check "[C59] a mail is served" answered_ok pilot m1.md
   id=$(answer_of pilot m1.md)
@@ -6228,9 +6344,11 @@ t_comms_mail() {
   file="$s/mail/Harbor Keeper/in/$id.md"
   at=$(sed -n 2p "$file")
   check "[C59] the frame writes the id and its own time as at" bash -c '[[ $1 =~ ^at\ [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]' _ "${at/:/}"
-  { printf '%s\n' "id: $id" "$at" "from: Harbor Pilot" "to: Harbor Keeper, Harbor Watch" "subject: the first" "cc: Orchard Grower" \
+  {
+    printf '%s\n' "id: $id" "$at" "from: Harbor Pilot" "to: Harbor Keeper, Harbor Watch" "subject: the first" "cc: Orchard Grower" \
       "re: 20261112T000000Z-000001" "reply: needed" ---
-    printf 'line one\n\0 a NUL, bytes that are not UTF-8: \xff\xfe, and no newline at the end'; } > "$scratch/m1-wanted"
+    printf 'line one\n\0 a NUL, bytes that are not UTF-8: \xff\xfe, and no newline at the end'
+  } > "$scratch/m1-wanted"
   check "[C59] then the writer as from and its other lines as they stood, its own from, id and at dropped, and the body byte for byte" \
     cmp -s "$file" "$scratch/m1-wanted"
   check "[C59] every copy is the same" bash -c 'cmp -s "$1" "$2" && cmp -s "$1" "$3" && cmp -s "$1" "$4"' _ "$file" \
@@ -6244,14 +6362,17 @@ t_comms_mail() {
   request grower r02.md "to: Orchard Picker, Harbor Keeper" "subject: barred" --- "body"
   request pilot r01.md "to: Harbor Keeper, Ghost" "subject: a ghost" --- "body"
   local head=() n
-  for (( n = 0; n < 19; n++ )); do head+=("re: $n"); done
+  for ((n = 0; n < 19; n++)); do head+=("re: $n"); done
   request pilot r03.md "to: Harbor Keeper" "subject: long" "${head[@]}" --- "body"
   request pilot r04.md "to: Harbor Keeper" "subject: s" "priority: high" --- "body"
   request pilot r05.md "subject: s" --- "body"
   request pilot r06.md "to: Harbor Keeper" --- "body"
   request pilot r07.md "to: Harbor Keeper" "subject: s" "body with no line of dashes"
-  { printf '%s\n' "to: Harbor Keeper" "subject: big" ---; head -c 255000 /dev/zero | tr '\0' x; } > "$scratch/big"
-  head -c "$(( 256000 - $(stat -c %s "$scratch/big") ))" /dev/zero | tr '\0' y >> "$scratch/big"
+  {
+    printf '%s\n' "to: Harbor Keeper" "subject: big" ---
+    head -c 255000 /dev/zero | tr '\0' x
+  } > "$scratch/big"
+  head -c "$((256000 - $(stat -c %s "$scratch/big")))" /dev/zero | tr '\0' y >> "$scratch/big"
   cp -- "$scratch/big" "$scratch/big2"
   printf z >> "$scratch/big2"
   request_raw watch r08.md "$scratch/big2"
@@ -6387,9 +6508,15 @@ t_comms_mail() {
     bash -c '! grep -qE "line one|probe pilot|hello|world|kill-server|yyyy|body" "$1"' _ "$s/comms/record"
   local page=$tool/share/seat-page.md parts firsts words suffixes word sfx x f n=0 head=() answers=()
   local by_name="refused its name is not letters, digits, dot, dash and underscore ending in .md, .grab or .write; it is removed"
-  parts=$( { ls -A -- "$s/mail/Orchard Picker"; ls -A -- "$s/comms/Orchard Picker"; } | LC_ALL=C sort -u)
+  parts=$({
+    ls -A -- "$s/mail/Orchard Picker"
+    ls -A -- "$s/comms/Orchard Picker"
+  } | LC_ALL=C sort -u)
   firsts=$(for f in "$s"/comms/*/answers/*; do IFS=' ' read -r x _ < "$f" && printf '%s\n' "$x"; done | LC_ALL=C sort -u)
-  words=$( { sed '/^## Other requests$/,$d' "$page" | grep -oE '`[a-z]+`' | tr -d '`'; sed '/^## Other requests$/,$d' "$page" | sed -n '/^```text$/,/^---$/p' | sed -n 's/^\([a-z][a-z]*\):.*/\1/p'; } \
+  words=$({
+    sed '/^## Other requests$/,$d' "$page" | grep -oE '`[a-z]+`' | tr -d '`'
+    sed '/^## Other requests$/,$d' "$page" | sed -n '/^```text$/,/^---$/p' | sed -n 's/^\([a-z][a-z]*\):.*/\1/p'
+  } \
     | LC_ALL=C sort -u | grep -vxF -f <(printf '%s\n' $parts $firsts))
   for word in $words; do
     case $word in
@@ -6403,7 +6530,7 @@ t_comms_mail() {
     answered_ok pilot home.md
   suffixes=$(grep -oE '`[.][a-z]+`' "$page" | tr -d '`' | LC_ALL=C sort -u)
   for sfx in $suffixes .txt; do
-    n=$(( n + 1 ))
+    n=$((n + 1))
     request picker "home$n$sfx" "seat: Ghost"
     answers+=("$sfx|$(answer_of picker "home$n$sfx" | head -n 1)")
   done
@@ -6425,7 +6552,9 @@ t_comms_mail() {
 t_comms_from_a_pane() {
   scoped_clone
   mkdir -p -- "$root/mailbox" "$root/tools/requests"
-  command -v python3 > /dev/null || { skip "[C61] python3 is not on PATH here, and the probe's race, its watch on out and its socket need it"; return 0; }
+  command -v python3 > /dev/null || {
+    skip "[C61] python3 is not on PATH here, and the probe's race, its watch on out and its socket need it"; return 0
+  }
   local s q=$root/tools/requests
   s=$(state_of)
   printf '%s\n' "to: Harbor Keeper" "subject: leak" --- "the ledger's secret" > "$root/harbor/ledger/letter-keeper"
@@ -6560,7 +6689,6 @@ t_comms_from_a_pane() {
   check "down" exit_is 0 wp down
 }
 
-
 wake_kinds='| kinds([["harbor", "dock", "keeper", "clerk"], ["harbor", "dock", "pilot", "courier"], ["harbor", "tower", "watch", "clerk"],
     ["orchard", "barn", "grower", "clerk"], ["orchard", "barn", "picker", "courier"]])'
 wake_terms='| .programs[-1].recorded += [m(["wake", "clerk", "^waiting>$"]; 9)]'
@@ -6677,7 +6805,11 @@ t_wake() {
   check "from three seats" answered_ok picker k4.md
   check "at about one pass" answered_ok grower k5.md
   check "a second mail to watch is served" answered_ok picker p2.md
-  newest=$( { answer_of pilot k3.md; answer_of picker k4.md; answer_of grower k5.md; } | sed 's/^ok //' | LC_ALL=C sort | tail -n 1)
+  newest=$({
+    answer_of pilot k3.md
+    answer_of picker k4.md
+    answer_of grower k5.md
+  } | sed 's/^ok //' | LC_ALL=C sort | tail -n 1)
   p2=$(answer_of picker p2.md) p2=${p2#ok }
   sleep 4
   check "[C94] no second pointer goes to a reader within a minute, though its mail waits and its pane is ready" \
@@ -6807,8 +6939,8 @@ t_typing_apart() {
 
 read_more() {
   local i
-  for (( i = 0; i < 250; i++ )); do
-    (( $(cat -- "$1" 2> /dev/null | grep -c .) > $2 )) && return 0
+  for ((i = 0; i < 250; i++)); do
+    (($(cat -- "$1" 2> /dev/null | grep -c .) > $2)) && return 0
     sleep 0.02
   done
   return 1
@@ -6919,7 +7051,13 @@ t_records_in_panes() {
   s=$(state_of)
   day=$(date -u +%F)
   hostile=$root/tools/hostile
-  { printf 'BEGIN-HOSTILE'; printf '\0\xff\xfe'; printf '%s' "#{pane_id}#(touch $root/pwned1)\$(touch $root/pwned2)%n%s%x" "\`touch $root/pwned3\`"; printf '\033[31m'; printf 'END-HOSTILE'; } > "$hostile"
+  {
+    printf 'BEGIN-HOSTILE'
+    printf '\0\xff\xfe'
+    printf '%s' "#{pane_id}#(touch $root/pwned1)\$(touch $root/pwned2)%n%s%x" "\`touch $root/pwned3\`"
+    printf '\033[31m'
+    printf 'END-HOSTILE'
+  } > "$hostile"
   mkdir -p -- "$root/records/Harbor Pilot"
   printf '%s\n' forged > "$root/records/Harbor Pilot/$day.pane"
   printf '%s\n' planted > "$root/records/planted"
@@ -7107,20 +7245,27 @@ t_records_verify() {
   local first second o l
   first=$(jq -r --arg f "Harbor Keeper/$day.pane" 'select(.file == $f) | .hash' "$(state_of)/records/chain" | head -n 1)
   check "[C72] the first hash is SHA-256 over 64 zeros and the bytes it covers" \
-    test "$({ printf '%064d' 0; head -c "$(jq -r '.[1]' <<< "${entries[0]}")" "$file"; } | sha256sum | cut -d' ' -f1)" = "$first"
+    test "$({
+      printf '%064d' 0
+      head -c "$(jq -r '.[1]' <<< "${entries[0]}")" "$file"
+    } | sha256sum | cut -d' ' -f1)" = "$first"
   check "[C75] record verify says that the file agrees with its chain" exit_is 0 wp record verify "Harbor Keeper" "$day"
   check "[C75] up to its whole length" said "Harbor Keeper/$day.pane agrees with its chain up to byte $(stat -c %s "$file"), its whole length"
   cp -- "$file" "$scratch/kept"
   o=$(jq -r '.[0]' <<< "${entries[1]}") l=$(jq -r '.[1]' <<< "${entries[1]}")
-  printf 'Z' | dd of="$file" bs=1 seek=$(( o + l / 2 )) conv=notrunc status=none
+  printf 'Z' | dd of="$file" bs=1 seek=$((o + l / 2)) conv=notrunc status=none
   check "[C80] a byte changed is named, with exit 1" exit_is 1 wp record verify "Harbor Keeper" "$day"
   check "[C80] at the first place it shows: the entry that covers it" said "differs from its chain in the $l bytes from byte $o, which its entry of $(jq -r '.[2]' <<< "${entries[1]}") covers"
   cp -- "$scratch/kept" "$file"
-  truncate -s $(( o + 5 )) "$file"
+  truncate -s $((o + 5)) "$file"
   check "[C80] a file cut short is named" exit_is 1 wp record verify "Harbor Keeper" "$day"
-  check "[C80] at the byte where it ends, with the entry that covers that byte" said "is cut short at byte $(( o + 5 )): its chain's entry of $(jq -r '.[2]' <<< "${entries[1]}") covers the $l bytes from byte $o"
+  check "[C80] at the byte where it ends, with the entry that covers that byte" said "is cut short at byte $((o + 5)): its chain's entry of $(jq -r '.[2]' <<< "${entries[1]}") covers the $l bytes from byte $o"
   cp -- "$scratch/kept" "$file"
-  { head -c 1 "$scratch/kept"; printf 'a line added\n'; tail -c +2 "$scratch/kept"; } > "$file"
+  {
+    head -c 1 "$scratch/kept"
+    printf 'a line added\n'
+    tail -c +2 "$scratch/kept"
+  } > "$file"
   check "[C80] a line added in the middle is named" exit_is 1 wp record verify "Harbor Keeper" "$day"
   check "[C80] at the first entry it shows in" said "differs from its chain in the $(jq -r '.[1]' <<< "${entries[0]}") bytes from byte 0"
   rm -f -- "$file"
@@ -7423,7 +7568,9 @@ files_under() { find "$1" ! -type d 2> /dev/null | grep -c ''; }
 t_unbuild_keys() {
   local program
   for program in gpg gpg-agent gpgconf ssh-keygen ssh-add setsid base64; do
-    command -v "$program" > /dev/null || { skip "[C99] $program is not on PATH here, so no key home is made for unbuild to remove"; return; }
+    command -v "$program" > /dev/null || {
+      skip "[C99] $program is not on PATH here, so no key home is made for unbuild to remove"; return
+    }
   done
   scoped_clone
   local s homes before pane home n
@@ -7464,8 +7611,8 @@ t_unbuild_keys() {
   check "[C99] unbuild" exit_is 0 wp unbuild
   check "[C99] it names the key homes it removed" said "unbuild: removed the key homes in $s/keys, 3 homes, $n files, first removing their runtime socket directories, which ends any agent of them:"
   check "[C99] and no file stands beneath S/keys" test ! -e "$s/keys"
-  (( agent )) && check "[C99] the agent of a key home has ended" eventually_long no_agent_of "$home"
-  if (( agent )) && [[ $socket == /run/user/* && -d /run/user/$EUID/gnupg && -r /run/user/$EUID/gnupg ]]; then
+  ((agent)) && check "[C99] the agent of a key home has ended" eventually_long no_agent_of "$home"
+  if ((agent)) && [[ $socket == /run/user/* && -d /run/user/$EUID/gnupg && -r /run/user/$EUID/gnupg ]]; then
     check "[C99] and its runtime socket directory, which stood while it ran, is gone: removing the home alone ends the agent and leaves the directory" test ! -e "$socket"
   else
     skip "[C99] no agent's socket directory stood in a readable /run/user/$EUID/gnupg here, so that unbuild leaves none is measured where one does"
@@ -7537,8 +7684,8 @@ t_records_by_day() {
     "if [[ \$# == 2 && \$1 == -u && \$2 == +%F ]]; then echo 2030-01-01; elif [[ \$# == 2 && \$1 == -u && \$2 == +%Y-%m-%dT%H:%M:%SZ ]]; then cat '$scratch/sent-at'; else exec '$(command -v date)' \"\$@\"; fi" > "$clock/date"
   chmod +x -- "$clock/date"
   for round in "2030-01-02T00:10:00Z|ten minutes after the day's end|taken" "2030-01-02T00:10:01Z|ten minutes and a second after the day's end|not taken" \
-               "2029-12-31T23:50:00Z|ten minutes before the day's start|taken" "2029-12-31T23:49:59Z|ten minutes and a second before the day's start|not taken"; do
-    n=$(( n + 1 ))
+    "2029-12-31T23:50:00Z|ten minutes before the day's start|taken" "2029-12-31T23:49:59Z|ten minutes and a second before the day's start|not taken"; do
+    n=$((n + 1))
     IFS='|' read -r sent when round <<< "$round"
     states=$scratch/state-margin-$n
     printf '%s\n' "$sent" > "$scratch/sent-at"
@@ -7576,7 +7723,6 @@ t_records_by_day() {
   check "[C75] and says that no entry covers it" said "Harbor Keeper/2030-01-01.pane: no entry of the chain covers it yet; it holds $(stat -c %s "$d/2030-01-01.pane") bytes"
 }
 
-
 t_alias_access_review() {
   local runner=$scratch/alias-review-guard id data base path target expected
   local -a entries
@@ -7593,8 +7739,8 @@ t_alias_access_review() {
       '.[] | select(.id == $id) | walk(if type == "string" then gsub("@R@"; $base) | gsub("@UID@"; $uid) else . end)' "$fixtures/alias-review-cases.json")
     mapfile -d '' -t entries < <(jq --raw-output0 '(.links // [])[] | .[]' <<< "$data")
     local i
-    for ((i=0; i<${#entries[@]}; i+=2)); do
-      path=$base/${entries[i]} target=${entries[i+1]}
+    for ((i = 0; i < ${#entries[@]}; i += 2)); do
+      path=$base/${entries[i]} target=${entries[i + 1]}
       mkdir -p -- "${path%/*}"
       ln -s -- "$target" "$path"
     done
@@ -7630,8 +7776,8 @@ t_alias_access() {
     printf '%s\n' synthetic > "$casebase/tree/vault/value"
     mapfile -d '' -t entries < <(jq --raw-output0 '.links[] | .[]' <<< "$data")
     local i
-    for (( i=0; i+1<${#entries[@]}; i+=2 )); do
-      ln -s -- "${entries[i+1]}" "$casebase/${entries[i]}"
+    for ((i = 0; i + 1 < ${#entries[@]}; i += 2)); do
+      ln -s -- "${entries[i + 1]}" "$casebase/${entries[i]}"
     done
     statements_plan '('"$data"') as $case | '"$(jq -n --arg b "$casebase" '$b')"' as $base
       | .programs[-1].recorded = ([st("-"; "-"; "-"; "workplace"; "/"; "searchable-only"; 1)]
@@ -7650,7 +7796,6 @@ t_alias_access() {
     [[ ! -d $clone/BUILD ]] || rm -rf -- "$clone/BUILD"
   done < <(jq -r '.[].id' "$fixtures/alias-cases.json")
 }
-
 
 t_alias_access_rechecks() {
   scoped_clone
@@ -7722,7 +7867,6 @@ t_alias_access_file_cover() {
   check "file cover: host received the permitted write" test "$(cat "$root/file-data/open")" = writable
   check "file cover: down" exit_is 0 wp down
 }
-
 
 t_alias_access_mask_failure() {
   scoped_clone
@@ -7903,7 +8047,7 @@ tests=(
   t_the_runtime_directory
   t_source_and_contract
 )
-(( $# )) && tests=("$@")
+(($#)) && tests=("$@")
 
 for name in "${tests[@]}"; do
   note "== $name"
@@ -7916,16 +8060,18 @@ for name in "${tests[@]}"; do
     exit "$test_failed"
   )
   status=$?
-  total=$(( total + 1 ))
-  if (( status )); then
-    failures=$(( failures + 1 ))
+  total=$((total + 1))
+  if ((status)); then
+    failures=$((failures + 1))
     failed_tests+=("$name")
   fi
 done
-note "== $(( total - failures )) of $total tests passed"
+note "== $((total - failures)) of $total tests passed"
 if [[ -s $skips ]]; then
   note "== $(grep -c '' "$skips") checks skipped, each with its reason:"
   sed 's/^/   /' "$skips"
 fi
 rm -f -- "$skips"
-(( failures == 0 )) || { note "failed: ${failed_tests[*]}"; exit 1; }
+((failures == 0)) || {
+  note "failed: ${failed_tests[*]}"; exit 1
+}

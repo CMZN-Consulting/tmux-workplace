@@ -11,16 +11,8 @@
     "arrange",
     "start"
   ],
-  "spares": [
-    "spare-window",
-    "spare-pane"
-  ],
-  "unique": [
-    [
-      "pane",
-      4
-    ]
-  ],
+  "spares": ["spare-window", "spare-pane"],
+  "unique": [["pane", 4]],
   "inherit": [
     "TERM",
     "COLORTERM",
@@ -44,67 +36,44 @@
     "tmux": {
       "argv": [
         {
-          "if-slot": [
-            "floor-timeout"
-          ],
+          "if-slot": ["floor-timeout"],
           "args": [
             {
-              "slot": [
-                "program",
-                "timeout"
-              ]
+              "slot": ["program", "timeout"]
             },
             "--foreground",
             "--kill-after=1",
             {
-              "slot": [
-                "floor-timeout"
-              ]
+              "slot": ["floor-timeout"]
             }
           ]
         },
         {
-          "unless-slot": [
-            "unenforced"
-          ],
+          "unless-slot": ["unenforced"],
           "args": [
             {
-              "slot": [
-                "program",
-                "setpriv"
-              ]
+              "slot": ["program", "setpriv"]
             },
             "--no-new-privs"
           ]
         },
         {
-          "slot": [
-            "program",
-            "tmux"
-          ]
+          "slot": ["program", "tmux"]
         },
         "-S",
         {
-          "slot": [
-            "socket-path"
-          ]
+          "slot": ["socket-path"]
         },
         "-f",
         {
-          "slot": [
-            "config"
-          ]
+          "slot": ["config"]
         },
         {
-          "if-slot": [
-            "frame-set"
-          ],
+          "if-slot": ["frame-set"],
           "args": [
             "-f",
             {
-              "slot": [
-                "frame-set"
-              ]
+              "slot": ["frame-set"]
             }
           ]
         },
@@ -142,33 +111,20 @@
         "wake",
         "wake-own"
       ],
-      "programs": [
-        "bwrap"
-      ],
+      "programs": ["bwrap"],
       "root": "/",
       "hides": "hidden",
-      "must-exist": [
-        "read-only",
-        "read-write"
-      ],
+      "must-exist": ["read-only", "read-write"],
       "head": [
         {
-          "slot": [
-            "program",
-            "bwrap"
-          ]
+          "slot": ["program", "bwrap"]
         },
         "--unshare-user",
         "--unshare-pid",
         "--unshare-ipc",
         "--die-with-parent"
       ],
-      "after-root": [
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev"
-      ],
+      "after-root": ["--proc", "/proc", "--dev", "/dev"],
       "tail": [
         "--chdir",
         {
@@ -220,107 +176,74 @@
       },
       "claims": {
         "term": "claim",
-        "key": [
-          1,
-          2,
-          3,
-          4
-        ],
+        "key": [1, 2, 3, 4],
         "value": 5
       },
-      "directory-states": [
-        "hidden",
-        "searchable-only",
-        "scratch"
-      ],
+      "directory-states": ["hidden", "searchable-only", "scratch"],
       "after-rows": [
         {
-          "if-slot": [
-            "clone"
-          ],
+          "if-slot": ["clone"],
           "args": [
             "--perms",
             "0000",
             "--tmpfs",
             {
-              "slot": [
-                "clone"
-              ]
+              "slot": ["clone"]
             }
           ]
         },
         {
-          "if-slot": [
-            "tmux-dir"
-          ],
+          "if-slot": ["tmux-dir"],
           "args": [
             "--perms",
             "0000",
             "--tmpfs",
             {
-              "slot": [
-                "tmux-dir"
-              ]
+              "slot": ["tmux-dir"]
             }
           ]
         },
         {
-          "if-slot": [
-            "tmux-default-dir"
-          ],
+          "if-slot": ["tmux-default-dir"],
           "args": [
             "--perms",
             "0000",
             "--tmpfs",
             {
-              "slot": [
-                "tmux-default-dir"
-              ]
+              "slot": ["tmux-default-dir"]
             }
           ]
         },
         {
-          "if-slot": [
-            "mask-journal-var"
-          ],
+          "if-slot": ["mask-journal-var"],
           "args": [
             "--perms",
             "0000",
             "--tmpfs",
             {
-              "slot": [
-                "mask-journal-var"
-              ]
+              "slot": ["mask-journal-var"]
             }
           ]
         },
         {
-          "if-slot": [
-            "mask-journal-run"
-          ],
+          "if-slot": ["mask-journal-run"],
           "args": [
             "--perms",
             "0000",
             "--tmpfs",
             {
-              "slot": [
-                "mask-journal-run"
-              ]
+              "slot": ["mask-journal-run"]
             }
           ]
         },
         {
-          "if-slot": [
-            "mask-journal-sockets"
-          ],
+          "if-slot": ["mask-journal-sockets"],
           "args": [
             "--perms",
             "0000",
             "--tmpfs",
             {
-              "slot": [
-                "mask-journal-sockets"
-              ]
+              "slot": ["mask-journal-sockets"]
             }
           ]
         },
@@ -372,9 +295,7 @@
           }
         },
         {
-          "if-slot": [
-            "state-root"
-          ],
+          "if-slot": ["state-root"],
           "unless-slot": [
             "state-pass",
             {
@@ -392,9 +313,7 @@
             "0000",
             "--tmpfs",
             {
-              "slot": [
-                "state-root"
-              ]
+              "slot": ["state-root"]
             }
           ]
         },
@@ -416,9 +335,7 @@
             "0111",
             "--tmpfs",
             {
-              "slot": [
-                "state-root"
-              ]
+              "slot": ["state-root"]
             }
           ]
         },
@@ -440,9 +357,7 @@
             "0700",
             "--tmpfs",
             {
-              "slot": [
-                "key-view"
-              ]
+              "slot": ["key-view"]
             },
             "--ro-bind",
             {
@@ -467,9 +382,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "key-view"
-                  ]
+                  "slot": ["key-view"]
                 },
                 "/pubring.kbx"
               ]
@@ -497,9 +410,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "key-view"
-                  ]
+                  "slot": ["key-view"]
                 },
                 "/trustdb.gpg"
               ]
@@ -527,9 +438,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "key-view"
-                  ]
+                  "slot": ["key-view"]
                 },
                 "/gpg.conf"
               ]
@@ -552,9 +461,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "key-view"
-                  ]
+                  "slot": ["key-view"]
                 },
                 "/S.gpg-agent"
               ]
@@ -577,9 +484,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "key-view"
-                  ]
+                  "slot": ["key-view"]
                 },
                 "/S.gpg-agent.ssh"
               ]
@@ -589,9 +494,7 @@
             [
               "GNUPGHOME",
               {
-                "slot": [
-                  "key-view"
-                ]
+                "slot": ["key-view"]
               }
             ],
             [
@@ -599,9 +502,7 @@
               {
                 "concat": [
                   {
-                    "slot": [
-                      "key-view"
-                    ]
+                    "slot": ["key-view"]
                   },
                   "/S.gpg-agent.ssh"
                 ]
@@ -641,9 +542,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "key-view"
-                  ]
+                  "slot": ["key-view"]
                 },
                 "/ssh"
               ]
@@ -666,9 +565,7 @@
           "args": [
             "--remount-ro",
             {
-              "slot": [
-                "key-view"
-              ]
+              "slot": ["key-view"]
             }
           ]
         },
@@ -797,9 +694,7 @@
             "0755",
             "--tmpfs",
             {
-              "slot": [
-                "mail-path"
-              ]
+              "slot": ["mail-path"]
             },
             "--bind",
             {
@@ -819,9 +714,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "mail-path"
-                  ]
+                  "slot": ["mail-path"]
                 },
                 "/out"
               ]
@@ -844,9 +737,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "mail-path"
-                  ]
+                  "slot": ["mail-path"]
                 },
                 "/in"
               ]
@@ -869,9 +760,7 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "mail-path"
-                  ]
+                  "slot": ["mail-path"]
                 },
                 "/sent"
               ]
@@ -894,49 +783,37 @@
             {
               "concat": [
                 {
-                  "slot": [
-                    "mail-path"
-                  ]
+                  "slot": ["mail-path"]
                 },
                 "/answers"
               ]
             },
             "--ro-bind",
             {
-              "slot": [
-                "mail-page"
-              ]
+              "slot": ["mail-page"]
             },
             {
               "concat": [
                 {
-                  "slot": [
-                    "mail-path"
-                  ]
+                  "slot": ["mail-path"]
                 },
                 "/README.md"
               ]
             },
             "--remount-ro",
             {
-              "slot": [
-                "mail-path"
-              ]
+              "slot": ["mail-path"]
             }
           ]
         },
         {
-          "if-slot": [
-            "record-path"
-          ],
+          "if-slot": ["record-path"],
           "args": [
             "--perms",
             "0755",
             "--tmpfs",
             {
-              "slot": [
-                "record-path"
-              ]
+              "slot": ["record-path"]
             }
           ],
           "ro-bind-pairs": {
@@ -956,9 +833,7 @@
           "args-after": [
             "--remount-ro",
             {
-              "slot": [
-                "record-path"
-              ]
+              "slot": ["record-path"]
             }
           ]
         },
@@ -996,16 +871,12 @@
       ],
       "without-view-environment": [
         {
-          "if-slot": [
-            "frame-set"
-          ],
+          "if-slot": ["frame-set"],
           "environment": [
             [
               "TMUX_TMPDIR",
               {
-                "slot": [
-                  "tmux-tmpdir"
-                ]
+                "slot": ["tmux-tmpdir"]
               }
             ]
           ]
@@ -1097,35 +968,17 @@
   },
   "paths": {
     "recorded": {
-      "statement": [
-        5
-      ],
-      "label": [
-        1
-      ],
-      "claim": [
-        4
-      ],
-      "record-directory": [
-        4
-      ],
-      "home-seed": [
-        2
-      ],
-      "mail": [
-        1
-      ],
-      "record-path": [
-        1
-      ],
-      "ssh-key": [
-        2
-      ]
+      "statement": [5],
+      "label": [1],
+      "claim": [4],
+      "record-directory": [4],
+      "home-seed": [2],
+      "mail": [1],
+      "record-path": [1],
+      "ssh-key": [2]
     },
     "cells": {
-      "view": [
-        3
-      ]
+      "view": [3]
     }
   },
   "primitives": {
@@ -1133,17 +986,13 @@
       "arity": 2,
       "set": [
         [
-          [
-            "server"
-          ],
+          ["server"],
           {
             "arg": 1
           }
         ],
         [
-          [
-            "config"
-          ],
+          ["config"],
           {
             "path": 2
           }
@@ -1167,16 +1016,8 @@
         "tmux",
         "start-server",
         {
-          "if-slot": [
-            "floor-bootstrap"
-          ],
-          "args": [
-            ";",
-            "set-option",
-            "-s",
-            "exit-empty",
-            "off"
-          ]
+          "if-slot": ["floor-bootstrap"],
+          "args": [";", "set-option", "-s", "exit-empty", "off"]
         },
         ";",
         "show-options",
@@ -1196,75 +1037,46 @@
         "#{pid} #{socket_path}"
       ],
       "capture": [
-        [
-          "option",
-          "destroy-unattached"
-        ],
-        [
-          "option",
-          "exit-unattached"
-        ],
-        [
-          "option",
-          "exit-empty"
-        ],
-        [
-          "server-pid"
-        ],
-        [
-          "socket"
-        ]
+        ["option", "destroy-unattached"],
+        ["option", "exit-unattached"],
+        ["option", "exit-empty"],
+        ["server-pid"],
+        ["socket"]
       ],
       "verify": [
         [
           "equals",
           {
-            "slot": [
-              "option",
-              "destroy-unattached"
-            ]
+            "slot": ["option", "destroy-unattached"]
           },
           "off"
         ],
         [
           "equals",
           {
-            "slot": [
-              "option",
-              "exit-unattached"
-            ]
+            "slot": ["option", "exit-unattached"]
           },
           "off"
         ],
         {
-          "unless-slot": [
-            "floor-bootstrap"
-          ],
+          "unless-slot": ["floor-bootstrap"],
           "args": [
             [
               "equals",
               {
-                "slot": [
-                  "option",
-                  "exit-empty"
-                ]
+                "slot": ["option", "exit-empty"]
               },
               "on"
             ]
           ]
         },
         {
-          "if-slot": [
-            "floor-bootstrap"
-          ],
+          "if-slot": ["floor-bootstrap"],
           "args": [
             [
               "equals",
               {
-                "slot": [
-                  "option",
-                  "exit-empty"
-                ]
+                "slot": ["option", "exit-empty"]
               },
               "off"
             ]
@@ -1273,9 +1085,7 @@
         [
           "floor-server-privileges-if-running",
           {
-            "slot": [
-              "server-pid"
-            ]
+            "slot": ["server-pid"]
           }
         ]
       ]
@@ -1408,22 +1218,15 @@
         "#{session_id} #{window_id} #{pid}",
         "--",
         {
-          "slot": [
-            "program",
-            "tmux"
-          ]
+          "slot": ["program", "tmux"]
         },
         "-S",
         {
-          "slot": [
-            "socket-path"
-          ]
+          "slot": ["socket-path"]
         },
         "wait-for",
         {
-          "slot": [
-            "run"
-          ]
+          "slot": ["run"]
         }
       ],
       "capture": [
@@ -1482,9 +1285,7 @@
           "@workplace"
         ],
         "is": {
-          "slot": [
-            "run"
-          ]
+          "slot": ["run"]
         },
         "call": [
           "tmux",
@@ -1514,23 +1315,17 @@
         },
         "@workplace",
         {
-          "slot": [
-            "run"
-          ]
+          "slot": ["run"]
         },
         ";",
         "set-option",
         "-g",
         "@workplace-clone",
         {
-          "slot": [
-            "clone"
-          ]
+          "slot": ["clone"]
         },
         {
-          "if-slot": [
-            "frame-set"
-          ],
+          "if-slot": ["frame-set"],
           "args": [
             ";",
             "set-option",
@@ -1576,9 +1371,7 @@
           "@workplace"
         ],
         "is": {
-          "slot": [
-            "run"
-          ]
+          "slot": ["run"]
         }
       }
     },
@@ -1656,22 +1449,15 @@
         "#{window_id} #{pane_id}",
         "--",
         {
-          "slot": [
-            "program",
-            "tmux"
-          ]
+          "slot": ["program", "tmux"]
         },
         "-S",
         {
-          "slot": [
-            "socket-path"
-          ]
+          "slot": ["socket-path"]
         },
         "wait-for",
         {
-          "slot": [
-            "run"
-          ]
+          "slot": ["run"]
         }
       ],
       "capture": [
@@ -1712,9 +1498,7 @@
         "synchronize-panes",
         "off"
       ],
-      "then-if-slot": [
-        "frame-set"
-      ]
+      "then-if-slot": ["frame-set"]
     },
     "pane": {
       "arity": 4,
@@ -1795,22 +1579,15 @@
         "#{pane_id}",
         "--",
         {
-          "slot": [
-            "program",
-            "tmux"
-          ]
+          "slot": ["program", "tmux"]
         },
         "-S",
         {
-          "slot": [
-            "socket-path"
-          ]
+          "slot": ["socket-path"]
         },
         "wait-for",
         {
-          "slot": [
-            "run"
-          ]
+          "slot": ["run"]
         },
         ";",
         "select-layout",
@@ -1960,9 +1737,7 @@
       "call": [
         "tmux",
         {
-          "if-slot": [
-            "enforced-floor"
-          ],
+          "if-slot": ["enforced-floor"],
           "args": [
             "set-option",
             "-p",
@@ -2054,9 +1829,7 @@
           "concat": [
             "WORKPLACE_ROOT=",
             {
-              "slot": [
-                "root"
-              ]
+              "slot": ["root"]
             }
           ]
         },
@@ -2065,17 +1838,13 @@
           "concat": [
             "WORKPLACE_CONFIG=",
             {
-              "slot": [
-                "clone"
-              ]
+              "slot": ["clone"]
             }
           ]
         },
         "--",
         {
-          "slot": [
-            "bash"
-          ]
+          "slot": ["bash"]
         },
         {
           "file": "bin/workplace"
@@ -2158,144 +1927,23 @@
     }
   },
   "structure": {
-    "exactly-one": [
-      "server"
-    ],
+    "exactly-one": ["server"],
     "unique-keys": [
-      [
-        "session",
-        [
-          1
-        ]
-      ],
-      [
-        "window",
-        [
-          1,
-          2
-        ]
-      ],
-      [
-        "arrange",
-        [
-          1,
-          2
-        ]
-      ],
-      [
-        "pane",
-        [
-          1,
-          2,
-          3
-        ]
-      ],
-      [
-        "start",
-        [
-          1,
-          2,
-          3
-        ]
-      ]
+      ["session", [1]],
+      ["window", [1, 2]],
+      ["arrange", [1, 2]],
+      ["pane", [1, 2, 3]],
+      ["start", [1, 2, 3]]
     ],
     "requires": [
-      [
-        "session",
-        [
-          1
-        ],
-        "window",
-        [
-          1
-        ]
-      ],
-      [
-        "window",
-        [
-          1
-        ],
-        "session",
-        [
-          1
-        ]
-      ],
-      [
-        "window",
-        [
-          1,
-          2
-        ],
-        "pane",
-        [
-          1,
-          2
-        ]
-      ],
-      [
-        "window",
-        [
-          1,
-          2
-        ],
-        "arrange",
-        [
-          1,
-          2
-        ]
-      ],
-      [
-        "arrange",
-        [
-          1,
-          2
-        ],
-        "window",
-        [
-          1,
-          2
-        ]
-      ],
-      [
-        "pane",
-        [
-          1,
-          2
-        ],
-        "window",
-        [
-          1,
-          2
-        ]
-      ],
-      [
-        "pane",
-        [
-          1,
-          2,
-          3
-        ],
-        "start",
-        [
-          1,
-          2,
-          3
-        ]
-      ],
-      [
-        "start",
-        [
-          1,
-          2,
-          3
-        ],
-        "pane",
-        [
-          1,
-          2,
-          3
-        ]
-      ]
+      ["session", [1], "window", [1]],
+      ["window", [1], "session", [1]],
+      ["window", [1, 2], "pane", [1, 2]],
+      ["window", [1, 2], "arrange", [1, 2]],
+      ["arrange", [1, 2], "window", [1, 2]],
+      ["pane", [1, 2], "window", [1, 2]],
+      ["pane", [1, 2, 3], "start", [1, 2, 3]],
+      ["start", [1, 2, 3], "pane", [1, 2, 3]]
     ],
     "floors": {
       "floor": "floor",
@@ -2315,45 +1963,17 @@
   },
   "directories": {
     "recorded": "record-directory",
-    "seat": [
-      1,
-      2,
-      3
-    ],
+    "seat": [1, 2, 3],
     "path": 4
   },
-  "kept-names": [
-    "GNUPGHOME",
-    "SSH_AUTH_SOCK"
-  ],
+  "kept-names": ["GNUPGHOME", "SSH_AUTH_SOCK"],
   "keys": {
-    "floor": [
-      1
-    ],
-    "house": [
-      1,
-      2
-    ],
-    "session": [
-      1
-    ],
-    "window": [
-      1,
-      2
-    ],
-    "arrange": [
-      1,
-      2
-    ],
-    "pane": [
-      1,
-      2,
-      3
-    ],
-    "start": [
-      1,
-      2,
-      3
-    ]
+    "floor": [1],
+    "house": [1, 2],
+    "session": [1],
+    "window": [1, 2],
+    "arrange": [1, 2],
+    "pane": [1, 2, 3],
+    "start": [1, 2, 3]
   }
 }

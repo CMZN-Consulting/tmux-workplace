@@ -2,12 +2,12 @@
 
 Logs.typify adds four state-effect recorded terms to the unchanged accepted Typify reader. It adds no executable primitive, recording implementation or reader feature.
 
-| Program | Source form | Recorded term |
-| --- | --- | --- |
+| Program                                              | Source form             | Recorded term                   |
+| ---------------------------------------------------- | ----------------------- | ------------------------------- |
 | LOGS.typify at workplace, office, room or seat scope | `record : WHAT = STATE` | `record A B C SCOPE WHAT STATE` |
-| Workplace LOGS.typify | `record-limit : BYTES` | `record-limit BYTES` |
-| Workplace LOGS.typify | `record-chain : SINK` | `record-chain SINK` |
-| Workplace LOGS.typify | `record-path : PATH` | `record-path PATH` |
+| Workplace LOGS.typify                                | `record-limit : BYTES`  | `record-limit BYTES`            |
+| Workplace LOGS.typify                                | `record-chain : SINK`   | `record-chain SINK`             |
+| Workplace LOGS.typify                                | `record-path : PATH`    | `record-path PATH`              |
 
 WHAT is pane or programs. STATE is kept or none. Missing structural keys are represented by `-`, as in the other scoped layers. The three global-setting forms are available only in programs/LOGS.typify. Every file is optional. Office, room and seat records require their structural target to have been declared.
 

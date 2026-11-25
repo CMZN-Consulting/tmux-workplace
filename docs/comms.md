@@ -2,9 +2,9 @@
 
 The optional Comms body records two policy terms. It supplies no carrier, mailbox binding, tmux operation or network restriction. The accepted Typify reader remains pinned. Native validation checks formation and recorded event emission; independent frame and runtime measurements establish the operational properties.
 
-| Form position | Recorded term |
-| --- | --- |
-| programs/COMMS.typify: `mail : PATH` | `mail PATH` |
+| Form position                                   | Recorded term                                    |
+| ----------------------------------------------- | ------------------------------------------------ |
+| programs/COMMS.typify: `mail : PATH`            | `mail PATH`                                      |
 | COMMS.typify at workplace, office, room or seat | `reach A B C SCOPE ACTION TA TB TC TSCOPE STATE` |
 
 Each source scope comes from its file position. Unused structural keys are the literal `-`. Targets have four explicit forms:

@@ -1,6 +1,6 @@
 t_generation_counter_leftovers() {
   mkdir -p -- "$scratch/counter-build/shared/7" "$scratch/counter-build/floors/deck/11"
-  cat > "$scratch/counter-driver" <<'BASH'
+  cat > "$scratch/counter-driver" << 'BASH'
 source <(sed -nE '/^(build_(state_lock|generation_next|state_begin)|generation_state_entries)\(\) \{$/,/^}$/p' "$1")
 counter_state=$2 build_dir=$3
 state_root() { printf '%s\n' "$counter_state"; }
@@ -34,7 +34,8 @@ t_generations_entry_lock() {
   check "[C117] fixture builds" exit_is 0 wp build
   local real_tmux s action pid kind selected_locale=C
   real_tmux=$(command -v tmux) s=$(state_of)
-  if [[ -z $(env LC_ALL=C.UTF-8 "$BASH" -c : 2>&1) ]]; then selected_locale=C.UTF-8
+  if [[ -z $(env LC_ALL=C.UTF-8 "$BASH" -c : 2>&1) ]]; then
+    selected_locale=C.UTF-8
   else skip "[C117] no C.UTF-8 caller locale is installed; lock lifetime is still measured with C"; fi
   mkdir -- "$scratch/generations-tmux"
   printf '%s\n' '#!/usr/bin/env bash' \
@@ -56,18 +57,23 @@ t_generations_entry_lock() {
     fi
     rm -f -- "$scratch/generations-entered"
     printf '%s\n' "$kind" > "$scratch/generations-gate"
-    timeout --kill-after=1 20 env LC_ALL="$selected_locale" PATH="$scratch/generations-tmux:$PATH" "$BASH" "$loop" "${arguments[@]}" > "$scratch/generations-$action.log" 2>&1 & pid=$!
+    timeout --kill-after=1 20 env LC_ALL="$selected_locale" PATH="$scratch/generations-tmux:$PATH" "$BASH" "$loop" "${arguments[@]}" > "$scratch/generations-$action.log" 2>&1 &
+    pid=$!
     if ! eventually_long test -e "$scratch/generations-entered"; then
       fail "[C117] $action did not reach its native gate"
       rm -f -- "$scratch/generations-gate"
-      wait "$pid" 2>/dev/null
+      wait "$pid" 2> /dev/null
       cat "$scratch/generations-$action.log"
       return 1
     fi
     check "[C117] $action holds the shared generations lock through its native work" bash -c '! flock -n -x "$1" true' _ "$s/generations.lock"
     rm -- "$scratch/generations-gate"
-    if wait "$pid"; then check "[C117] $action completes after its gate opens" true
-    else fail "[C117] $action failed after its gate opened"; cat "$scratch/generations-$action.log"; return 1; fi
+    if wait "$pid"; then
+      check "[C117] $action completes after its gate opens" true
+    else
+      fail "[C117] $action failed after its gate opened"
+      cat "$scratch/generations-$action.log"; return 1
+    fi
     check "[C117] $action leaves no generations lock inherited by its living children" flock -n -x "$s/generations.lock" true
     check "[C117] $action keeps the caller's locale across its command boundary" test "$(on deck T show-environment -g LC_ALL)" = "LC_ALL=$selected_locale"
   done
@@ -133,7 +139,9 @@ t_generation_admission_model() {
   check "[C118] admission component fixture plans" exit_is 0 wplan
   local base=$scratch/admission-base next=$scratch/admission-next faults=$scratch/admission-faults
   generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
-  [[ -s $base ]] || { fail "[C118] the admission fixture has no projected model"; return 1; }
+  [[ -s $base ]] || {
+    fail "[C118] the admission fixture has no projected model"; return 1
+  }
   jq '.slices.deck.terms += [["start","harbor","dock","extra",".",["/usr/bin/true"]]]' "$base" > "$next"
   generation_test_faults "$base" "$next" deck "$faults"
   check "[C118] the component permits a change confined to the requested floor" jq -e 'length==0' "$faults"
@@ -200,9 +208,9 @@ t_generation_key_prerequisites() {
   floors_clone
   statements_plan "$floors_terms"' | .programs[-1].recorded += [{term:["key","lodge","east","-","room","held"],origin:at(2)}]'
   check "[C120] the key prerequisite fixture plans" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C120] the initial build makes a real synthetic key" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s before after
   s=$(state_of)
   before=$(find "$s/floors/lodge/keys" -type f -printf '%P %i %m %s\n' -exec sha256sum -- '{}' \; | sha256sum)
@@ -226,9 +234,9 @@ t_generation_published_metadata() {
     m(["record-path","records"];3),m(["record-chain","file"];4),
     m(["key","lodge","east","-","room","held"];5)]'
   check "[C121] the metadata fixture plans" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C121] its whole build publishes the three floor slices" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local generation shared floor name
   generation=$(top_gen) shared=$clone/BUILD/shared/$(top_gen)
   check "[C121] the shared projection pins the root, state and configuration edition" jq -e --arg root "$root" --arg state "$(state_of)" \
@@ -248,7 +256,10 @@ t_generation_published_metadata() {
 }
 
 generation_tree_digest() {
-  { find "$@" -printf '%p %i %m %s\n'; find "$@" -type f -exec sha256sum -- '{}' \;; } | sort | sha256sum
+  {
+    find "$@" -printf '%p %i %m %s\n'
+    find "$@" -type f -exec sha256sum -- '{}' \;
+  } | sort | sha256sum
 }
 
 generation_top_floor() {
@@ -266,17 +277,17 @@ t_generation_large_document() {
     m(["record-path","records"];22), m(["record-chain","file"];23)]
     | .programs[-1].recorded += [range(100;1300) as $line | st("-";"-";"-";"workplace";"/";"read-only";$line)]'
   check "[C122] the large folded-document fixture plans" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] its compact folded view exceeds the single-argument limit" bash -c '(( $(jq -c . "$1" | wc -c) > 196608 ))' _ "$clone/PLAN/view.json"
   check "[C122] a large folded view passes the whole-build equality check" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C106] a large folded view still produces the exact allowed record link" \
     test "$(readlink "$root/records/Orchard Grower/Harbor Keeper")" = "$(state_of)/floors/deck/records/Harbor Keeper"
   check "[C122] a floor rebuild accepts the same large document" exit_is 0 wp build lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   if [[ $(nnp_of $$) == NoNewPrivs:0 ]]; then
     check "[C122] the large-document carrier starts on the synthetic default socket" exit_is 0 wp up bridge
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
     printf '%s\n' 'to: Orchard Grower' 'subject: large-document transport' --- body > "$root/mailbox/Orchard Picker/out/large.md"
     check "[C122] the carrier reads the large shared view and serves a real request" answered_ok picker large.md
     check "[C122] the synthetic default floor stops" exit_is 0 wp down bridge
@@ -290,11 +301,11 @@ t_generation_floor_rebuild() {
   floors_clone
   statements_plan "$floors_terms"
   check "[C122] the floor-rebuild fixture plans" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] its initial whole build succeeds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] the witness floor starts" exit_is 0 wp up deck
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s bridge_before deck_before deck_line deck_pid lodge_line lodge_pid generation next_count
   s=$(state_of)
   bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")
@@ -302,9 +313,9 @@ t_generation_floor_rebuild() {
   deck_line=$(generation_top_floor deck) deck_pid=$(on deck T display-message -p '#{pid}')
   statements_plan "$floors_terms $lodge_west"
   check "[C122] adding a room on lodge makes a new plan" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] build lodge publishes only its floor and a shared generation" exit_is 0 wp build lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] the running floor keeps its exact top entry" test "$(generation_top_floor deck)" = "$deck_line"
   check "[C122] the running floor's generation and state keep their bytes, inodes and modes" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$s/floors/deck")" = "$deck_before"
   check "[C122] the down floor is also left byte for byte" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
@@ -313,22 +324,27 @@ t_generation_floor_rebuild() {
   check "[C122] rebuilding more than one floor is a usage error" exit_is 2 wp build lodge deck
   check "[C122] a running floor must be stopped before rebuilding" exit_is 1 wp build deck
   check "[C122] the refusal names the existing run" said "RUN/deck stands; down deck first"
-  generation=$(generation_top_floor lodge); generation=${generation%/MANIFEST}; generation=${generation##*/}
+  generation=$(generation_top_floor lodge)
+  generation=${generation%/MANIFEST}
+  generation=${generation##*/}
   next_count=$(cat "$s/generation.next")
-  ( umask 077; jq -nc --argjson n "$generation" '{pid:1,generation:$n,at:"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  (
+    umask 077
+    jq -nc --argjson n "$generation" '{pid:1,generation:$n,at:"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING"
+  )
   check "[C122] an already-committed matching edition recovers by removing its marker" exit_is 0 wp build lodge
   check "[C122] that recovery reports its exact operation" said "generation $generation was committed; its marker is removed"
   check "[C122] marker recovery allocates no new generation" test "$(cat "$s/generation.next")" = "$next_count"
   check "[C122] the rebuilt rooms floor starts" exit_is 0 wp up lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] its newly added seat exists" bash -c '"$1" -S "$2" list-panes -a -F "#{pane_title}" | grep -qxF "Lodge Ivo"' _ "$(command -v tmux)" "$run/lodge/$label"
   check "[C122] stop the floor of offices for its own change" exit_is 0 wp down deck
   lodge_line=$(generation_top_floor lodge) lodge_pid=$(on lodge T display-message -p '#{pid}')
   statements_plan "$floors_terms $lodge_west $harbor_yard"
   check "[C122] an added room on a floor of offices plans" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] a floor of offices rebuilds through the same interface" exit_is 0 wp build deck
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C122] the rooms floor keeps its top entry" test "$(generation_top_floor lodge)" = "$lodge_line"
   check "[C122] and its living server" test "$(on lodge T display-message -p '#{pid}')" = "$lodge_pid"
   check "[C122] the third floor remains byte for byte after both builds" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
@@ -345,7 +361,7 @@ t_generation_floor_admission() {
   statements_plan "$admission_terms"
   check "[C123] the admission fixture plans" exit_is 0 wplan
   check "[C123] its initial whole build succeeds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local original count s entry title change expected before
   original=$(cat "$clone/workplace.json") s=$(state_of)
   count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
@@ -361,11 +377,11 @@ t_generation_floor_admission() {
     title=${entry%%|*} entry=${entry#*|} change=${entry%|*} expected=${entry##*|}
     statements_plan "$admission_terms | $change"
     check "[C123] $title is a valid plan before floor admission" exit_is 0 wplan
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
     if [[ $title == 'unrelated mail' ]]; then
       check "[C123] the unrelated mail case really adds its previously banned route" jq -e \
         'any(.seats[]; .seat==["orchard","barn","grower"] and (.reach.mail|index("Harbor Keeper"))!=null)' "$clone/PLAN/view.json"
-      (( test_failed == 0 )) || return 1
+      ((test_failed == 0)) || return 1
     fi
     check "[C123] $title requires a whole build" exit_is 1 wp build lodge
     check "[C123] the refusal identifies $title" said "$expected"
@@ -398,13 +414,13 @@ t_generation_label_admission() {
   statements_plan "$floors_terms $policy"
   check "[C123] the searchable-only label fixture plans" exit_is 0 wplan
   check "[C123] its initial whole build succeeds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   s=$(state_of) count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
   generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
   for value in closed 1; do
     statements_plan "$floors_terms $policy"' | .programs[-1].recorded += [lb("harbor/private";"'"$value"'";3)]'
     check "[C123] adding a $value label below searchable-only plans" exit_is 0 wplan
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
     generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$next"
     check "[C123] the $value label changes no private floor slice" generation_test_changes "$base" "$next" '[]'
     check "[C123] the shared projection keeps the joined $value label" jq -e --arg path "$root/harbor/private" --argjson value "$(if [[ $value == closed ]]; then printf '"closed"'; else printf '%s' "$value"; fi)" \
@@ -413,7 +429,7 @@ t_generation_label_admission() {
     check "[C123] that refusal identifies the global labels" said 'global (labels)'
     check "[C123] rejecting a $value label preserves BUILD" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
     check "[C123] rejecting a $value label allocates no generation" test "$(cat "$s/generation.next")" = "$count"
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
   done
   baseline="$floors_terms $policy"' | .programs[-1].recorded += [lb("harbor/private";"1";3),lb("orchard/private";"closed";4)]'
   statements_plan "$baseline"
@@ -427,11 +443,11 @@ t_generation_label_admission() {
   statements_plan "$baseline"
   check "[C123] the labelled whole-build edition plans" exit_is 0 wplan
   check "[C123] the labelled edition builds as a whole" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   statements_plan "$baseline"' | .programs[-1].recorded |= (map(if .term[0]=="label" then .term[1]=($root+"/"+.term[1]) | .origin=at(999) else . end) | reverse) | .programs[-1].recorded += [.programs[-1].recorded[0]]'
   check "[C123] the same labels with absolute paths and duplicates plan" exit_is 0 wplan
   check "[C123] unchanged normalized labels permit a floor build" exit_is 0 wp build lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
   for change in 'map(select(.term[0]!="label"))' 'map(if .term[0]=="label" and .term[2]=="1" then .term[2]="2" else . end)'; do
     statements_plan "$baseline | .programs[-1].recorded |= ($change)"
@@ -457,7 +473,7 @@ t_generation_ssh_admission() {
   check "[C123] the ungranted key declaration fixture plans" exit_is 0 wplan
   check "[C123] no fixture seat is granted either key" jq -e 'all(.seats[]; ((.ssh.granted // [])|length)==0)' "$clone/PLAN/view.json"
   check "[C123] a whole build accepts ungranted canonical non-key files without parsing them" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local base=$scratch/ssh-base next=$scratch/ssh-next s count before change
   generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$base"
   check "[C123] the global projection retains both joined declarations" jq -e --arg root "$root" \
@@ -467,7 +483,7 @@ t_generation_ssh_admission() {
   generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$next"
   check "[C118] equivalent ungranted declarations preserve the whole projection" jq -ne --slurpfile a "$base" --slurpfile b "$next" '$a[0]==$b[0]'
   check "[C123] equivalent declarations permit an ordinary floor build" exit_is 0 wp build lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   s=$(state_of) count=$(cat "$s/generation.next") before=$(generation_tree_digest "$clone/BUILD")
   local -a changes=(
     'map(select(.term[0]!="ssh-key" or .term[1]!="orphan"))'
@@ -478,14 +494,14 @@ t_generation_ssh_admission() {
   for change in "${changes[@]}"; do
     statements_plan "$baseline | .programs[-1].recorded |= ($change)"
     check "[C123] changing an ungranted key declaration is a valid plan" exit_is 0 wplan
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
     generation_test_project "$clone/PLAN/plan.json" "$clone/PLAN/view.json" "$next"
     check "[C118] an ungranted declaration change alters no private floor slice" generation_test_changes "$base" "$next" '[]'
     check "[C123] changing an ungranted key declaration requires a whole build" exit_is 1 wp build lodge
     check "[C123] that refusal names the repeated ssh key declarations" said 'global (ssh_keys)'
     check "[C123] refusing an ungranted key change preserves BUILD" test "$(generation_tree_digest "$clone/BUILD")" = "$before"
     check "[C123] refusing an ungranted key change allocates no generation" test "$(cat "$s/generation.next")" = "$count"
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
   done
 }
 
@@ -497,7 +513,7 @@ t_generation_key_identity() {
     {term:["key","harbor","dock","-","room","held"],origin:at(3)}]'
   check "[C124] the key identity fixture plans" exit_is 0 wplan
   check "[C124] its whole build makes real keys on two floors" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s home generation expected before next actual
   s=$(state_of) generation=$(top_gen) home=$(state_of)/floors/lodge/keys/01
   expected=$(jq -r '.seats[0].fingerprint' "$clone/BUILD/floors/lodge/$generation/keys.json")
@@ -512,16 +528,21 @@ t_generation_key_identity() {
   rm -rf -- "$home"
   mv -- "$scratch/kept-key-home" "$home"
   check "[C124] the restored genuine key starts" exit_is 0 wp up lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C124] stop the genuine key's floor" exit_is 0 wp down lodge
   before=$(generation_tree_digest "$home/private-keys-v1.d") next=$(cat "$s/generation.next")
-  ( umask 077; jq -nc --argjson n "$generation" '{pid:1,generation:$n,at:"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  (
+    umask 077
+    jq -nc --argjson n "$generation" '{pid:1,generation:$n,at:"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING"
+  )
   check "[C124] committed-marker recovery does not remake real keys" exit_is 0 wp build lodge
   check "[C124] the private key files keep their bytes, inodes and modes" test "$(generation_tree_digest "$home/private-keys-v1.d")" = "$before"
   check "[C124] marker recovery also preserves the generation count" test "$(cat "$s/generation.next")" = "$next"
   check "[C124] an ordinary floor build then makes a fresh identity" exit_is 0 wp build lodge
-  (( test_failed == 0 )) || return 1
-  actual=$(generation_top_floor lodge); actual=${actual%/MANIFEST}; actual=${actual##*/}
+  ((test_failed == 0)) || return 1
+  actual=$(generation_top_floor lodge)
+  actual=${actual%/MANIFEST}
+  actual=${actual##*/}
   check "[C124] the fresh build's fingerprint differs" test "$(jq -r '.seats[0].fingerprint' "$clone/BUILD/floors/lodge/$actual/keys.json")" != "$expected"
 }
 
@@ -532,7 +553,7 @@ t_generation_reader_retry() {
   check "[C125] the reader fixture plans" exit_is 0 wplan
   check "[C125] the reader fixture builds" exit_is 0 wp build
   check "[C125] its unchanged target floor starts" exit_is 0 wp up deck
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local real_jq old command expected pid result number=0
   local -a call
   real_jq=$(command -v jq)
@@ -544,28 +565,45 @@ t_generation_reader_retry() {
   chmod +x -- "$scratch/reader-bin/jq"
   for command in status why doctor record exec; do
     case $command in
-      status) call=(status deck); expected=0 ;;
-      why) call=(why "Harbor Keeper" /); expected=0 ;;
-      doctor) call=(doctor); expected=0 ;;
-      record) call=(record verify "Harbor Keeper" 2026-11-18); expected=2 ;;
-      exec) call=(exec --print -- "Harbor Keeper"); expected=0 ;;
+      status)
+        call=(status deck)
+        expected=0
+        ;;
+      why)
+        call=(why "Harbor Keeper" /)
+        expected=0
+        ;;
+      doctor)
+        call=(doctor)
+        expected=0
+        ;;
+      record)
+        call=(record verify "Harbor Keeper" 2026-11-18)
+        expected=2
+        ;;
+      exec)
+        call=(exec --print -- "Harbor Keeper")
+        expected=0
+        ;;
     esac
-    number=$(( number + 1 ))
+    number=$((number + 1))
     old=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
     printf '%s\n' "$clone/BUILD/$old/plan.json" > "$scratch/reader-gate"
     rm -f -- "$scratch/reader-entered"
-    timeout --kill-after=1 30 env PATH="$scratch/reader-bin:$PATH" "$BASH" "$loop" "${call[@]}" > "$scratch/reader-$command.out" 2> "$scratch/reader-$command.error" & pid=$!
+    timeout --kill-after=1 30 env PATH="$scratch/reader-bin:$PATH" "$BASH" "$loop" "${call[@]}" > "$scratch/reader-$command.out" 2> "$scratch/reader-$command.error" &
+    pid=$!
     if ! eventually_long test -e "$scratch/reader-entered"; then
       fail "[C125] $command did not reach its old-generation read gate"
       rm -f -- "$scratch/reader-gate"
-      wait "$pid" 2>/dev/null
+      wait "$pid" 2> /dev/null
       return 1
     fi
     check "[C125] publish during the $command read" exit_is 0 wp build lodge
     if [[ -d $clone/BUILD/$old ]]; then mv -- "$clone/BUILD/$old" "$scratch/reader-retired-$number"; fi
     check "[C125] the blocked reader's shared directory is retired" test ! -e "$clone/BUILD/$old"
     rm -- "$scratch/reader-gate"
-    result=0; wait "$pid" || result=$?
+    result=0
+    wait "$pid" || result=$?
     check "[C125] $command retries and preserves its native result" test "$result" = "$expected"
     check "[C125] $command emits no diagnostic from the retired generation" bash -c '! grep -qF "$1" "$2"' _ "$old" "$scratch/reader-$command.error"
     if [[ $command == status ]]; then
@@ -580,7 +618,9 @@ t_generation_reader_retry() {
 }
 
 t_generation_exec_values() {
-  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then skip "[C125] final exec PID on an unenforced floor needs an unbarred caller"; return 0; fi
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "[C125] final exec PID on an unenforced floor needs an unbarred caller"; return 0
+  fi
   scoped_clone
   floors_clone
   jq '(.floors[] | select(.key=="bridge")).socket="run"' "$clone/workplace.json" > "$scratch/config-next"
@@ -592,19 +632,21 @@ t_generation_exec_values() {
     | terms_of("orchard/barn/grower/seat.typify"; if .[0]=="start" then .[4]=$root+"/harbor/berth" | .[5]=([$root+"/tools/exec-probe",$root+"/harbor/berth/exec-values"]|tojson) else . end)'
   check "[C125] the exec value fixture plans" exit_is 0 wplan
   check "[C125] it builds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local payload=$'two words\twith $ and "quotes" = end' s pid result
   local -a observed
   s=$(state_of)
   printf '%s' "$payload" | jq -Rs '{workplace:{WPT_TOKEN:.}}' > "$s/values.json"
   chmod 0600 -- "$s/values.json"
   check "[C125] the value-bearing Administration fixture starts" exit_is 0 wp up bridge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C125] print prepares the value expansion without revealing its text" exit_is 0 wp exec --print -- "Orchard Grower"
   check "[C125] print retains the value placeholder" grep -qF WORKPLACE_VALUE_WPT_TOKEN "$scratch/out"
   check "[C125] print contains no actual value" bash -c '! grep -qF "$1" "$2"' _ "$payload" "$scratch/out"
-  "$BASH" "$loop" exec -- "Orchard Grower" > "$scratch/exec-native.out" 2> "$scratch/exec-native.error" & pid=$!
-  result=0; wait "$pid" || result=$?
+  "$BASH" "$loop" exec -- "Orchard Grower" > "$scratch/exec-native.out" 2> "$scratch/exec-native.error" &
+  pid=$!
+  result=0
+  wait "$pid" || result=$?
   check "[C125] the prepared command executes successfully" test "$result" = 0
   mapfile -d '' -t observed < "$root/harbor/berth/exec-values"
   check "[C125] the final program retains the public exec process's PID" test "${observed[0]-}" = "$pid"
@@ -619,12 +661,15 @@ t_generation_retention() {
   statements_plan "$floors_terms"' | .programs[-1].recorded += [{term:["key","harbor","dock","-","room","held"],origin:at(2)}]'
   check "[C126] the retention fixture plans" exit_is 0 wplan
   check "[C126] its whole build succeeds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s real_connect action pid old middle top bridge_before result
   s=$(state_of) real_connect=$(command -v gpg-connect-agent)
   mkdir -p -- "$clone/BUILD/floors/bridge/99/.work" "$scratch/retention-bin"
   printf '%s\n' bridge-leftover > "$clone/BUILD/floors/bridge/99/.work/data"
-  ( umask 077; printf '%s\n' '{"pid":1,"generation":99,"at":"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/bridge/BUILDING" )
+  (
+    umask 077
+    printf '%s\n' '{"pid":1,"generation":99,"at":"2026-11-18T00:00:00Z"}' > "$clone/BUILD/floors/bridge/BUILDING"
+  )
   bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")
   printf '%s\n' '#!/usr/bin/env bash' 'for word in "$@"; do' \
     "  if [[ \$word == 'GETINFO pid' && -f '$scratch/retention-gate' ]]; then" \
@@ -638,14 +683,16 @@ t_generation_retention() {
       check "[C126] its program has ended" eventually_long on deck dead_pane 'Harbor Keeper'
       call=(restart deck 'Harbor Keeper')
     fi
-    old=$(top_gen) top=$(sha256sum < "$clone/BUILD/MANIFEST"); top=${top%% *}
+    old=$(top_gen) top=$(sha256sum < "$clone/BUILD/MANIFEST")
+    top=${top%% *}
     : > "$scratch/retention-gate"
     rm -f -- "$scratch/retention-entered"
-    timeout --kill-after=1 30 env PATH="$scratch/retention-bin:$PATH" "$BASH" "$loop" "${call[@]}" > "$scratch/retention-$action.out" 2>&1 & pid=$!
+    timeout --kill-after=1 30 env PATH="$scratch/retention-bin:$PATH" "$BASH" "$loop" "${call[@]}" > "$scratch/retention-$action.out" 2>&1 &
+    pid=$!
     if ! eventually_long test -e "$scratch/retention-entered"; then
       fail "[C126] $action did not reach its native GnuPG gate"
       rm -f -- "$scratch/retention-gate"
-      wait "$pid" 2>/dev/null
+      wait "$pid" 2> /dev/null
       cat "$scratch/retention-$action.out"
       return 1
     fi
@@ -656,9 +703,12 @@ t_generation_retention() {
     check "[C126] $action retains the shared generation it began reading" test -d "$clone/BUILD/shared/$old"
     check "[C126] its hold also retains the intervening shared generation" test -d "$clone/BUILD/shared/$middle"
     rm -- "$scratch/retention-gate"
-    result=0; wait "$pid" || result=$?
+    result=0
+    wait "$pid" || result=$?
     check "[C126] $action completes from its retained snapshot" test "$result" = 0
-    if (( result )); then cat "$scratch/retention-$action.out"; return 1; fi
+    if ((result)); then
+      cat "$scratch/retention-$action.out"; return 1
+    fi
     check "[C126] $action records exactly its starting top and paths" jq -e --arg sha "$top" --arg shared "shared/$old" \
       '.top==$sha and .generations.shared==$shared and (.generations.floor|startswith("floors/deck/"))' "$run/deck/state.json"
     check "[C126] status names retained shared generations" exit_is 0 wp status deck
@@ -679,19 +729,21 @@ t_generation_retention() {
   check "[C126] stop the witness and its real key agents" exit_is 0 wp down deck
 }
 
-
 t_generation_phase_reports() {
   scoped_clone
   floors_clone
   statements_plan "$floors_terms"
   check "[C127] the phase fixture plans" exit_is 0 wplan
   check "[C127] the phase fixture builds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s current next pid result bridge_before real_mv
   s=$(state_of)
   mkdir -p -- "$clone/BUILD/floors/lodge/777/.work"
   printf '%s\n' abandoned > "$clone/BUILD/floors/lodge/777/.work/data"
-  ( umask 077; printf '%s\n' '{"pid":123,"generation":777,"at":"2026-11-18T00:01:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  (
+    umask 077
+    printf '%s\n' '{"pid":123,"generation":777,"at":"2026-11-18T00:01:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING"
+  )
   check "[C127] bare status refuses an interrupted floor" exit_is 1 wp status
   check "[C127] the interruption is distinguished from a corrupt manifest" said 'stopped before its commit'
   check "[C127] a partial marker is not a manifest mismatch" bash -c '! grep -qF "build: does not match its manifest" "$1"' _ "$scratch/out"
@@ -703,9 +755,14 @@ t_generation_phase_reports() {
   check "[C127] doctor names the recovery operation" said 'partial the floor lodge is part-built'
   check "[C127] up cannot use the interrupted floor" exit_is 1 wp up lodge
   check "[C127] no interrupted run was made" test ! -e "$run/lodge"
-  current=$(generation_top_floor lodge); current=${current%/MANIFEST}; current=${current##*/}
+  current=$(generation_top_floor lodge)
+  current=${current%/MANIFEST}
+  current=${current##*/}
   next=$(cat "$s/generation.next")
-  ( umask 077; jq -nc --argjson n "$current" '{pid:123,generation:$n,at:"2026-11-18T00:01:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING" )
+  (
+    umask 077
+    jq -nc --argjson n "$current" '{pid:123,generation:$n,at:"2026-11-18T00:01:00Z"}' > "$clone/BUILD/floors/lodge/BUILDING"
+  )
   check "[C127] status distinguishes a committed marker" exit_is 1 wp status lodge
   check "[C127] its message names the actual committed generation" said "build committed generation $current and stopped before it removed its marker"
   check "[C127] its timestamp is identified as the start" said 'it began at 2026-11-18T00:01:00Z'
@@ -719,7 +776,10 @@ t_generation_phase_reports() {
   check "[C127] doctor names that leftover as a note" said "note    $clone/BUILD/floors/lodge/777:"
   mkdir -p -- "$clone/BUILD/floors/bridge/888/.work" "$scratch/phase-bin"
   printf '%s\n' keep > "$clone/BUILD/floors/bridge/888/.work/data"
-  ( umask 077; printf '%s\n' '{"pid":321,"generation":888,"at":"2026-11-18T00:02:00Z"}' > "$clone/BUILD/floors/bridge/BUILDING" )
+  (
+    umask 077
+    printf '%s\n' '{"pid":321,"generation":888,"at":"2026-11-18T00:02:00Z"}' > "$clone/BUILD/floors/bridge/BUILDING"
+  )
   bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")
   real_mv=$(command -v mv)
   printf '%s\n' '#!/usr/bin/env bash' "if [[ \${!#} == '$clone/BUILD/floors/lodge/BUILDING' ]]; then" \
@@ -727,10 +787,12 @@ t_generation_phase_reports() {
     'fi' "exec '$real_mv' \"\$@\"" > "$scratch/phase-bin/mv"
   chmod +x -- "$scratch/phase-bin/mv"
   : > "$scratch/phase-gate"
-  timeout --kill-after=1 30 env PATH="$scratch/phase-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/phase-build.out" 2>&1 & pid=$!
+  timeout --kill-after=1 30 env PATH="$scratch/phase-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/phase-build.out" 2>&1 &
+  pid=$!
   if ! eventually_long test -e "$scratch/phase-entered"; then
     fail "[C127] the builder did not reach its native marker gate"
-    rm -f -- "$scratch/phase-gate"; wait "$pid" 2>/dev/null
+    rm -f -- "$scratch/phase-gate"
+    wait "$pid" 2> /dev/null
     cat "$scratch/phase-build.out"; return 1
   fi
   check "[C127] status of the running build succeeds before any marker stands" exit_is 0 wp status lodge
@@ -743,7 +805,8 @@ t_generation_phase_reports() {
   check "[C127] doctor identifies the live build as a note" said 'note    build lodge runs'
   check "[C127] the untouched floor remains healthy during both states" exit_is 0 wp status deck
   rm -- "$scratch/phase-gate"
-  result=0; wait "$pid" || result=$?
+  result=0
+  wait "$pid" || result=$?
   check "[C127] the real builder resumes and publishes" test "$result" = 0
   check "[C127] the other floor's marker and tree remain untouched" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$bridge_before"
   check "[C127] the completed build is no longer reported as running" exit_is 0 wp status lodge
@@ -757,7 +820,7 @@ t_generation_store_report() {
   statements_plan "$floors_terms | $comms_terms"
   check "[C127] the store-holder fixture plans" exit_is 0 wplan
   check "[C127] its initial build succeeds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s real_mv pid result
   s=$(state_of) real_mv=$(command -v mv)
   mkdir -- "$scratch/store-bin"
@@ -767,20 +830,26 @@ t_generation_store_report() {
     'fi' "exec '$real_mv' \"\$@\"" > "$scratch/store-bin/mv"
   chmod +x -- "$scratch/store-bin/mv"
   : > "$scratch/store-gate"
-  timeout --kill-after=1 30 env PATH="$scratch/store-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/store-build.out" 2>&1 & pid=$!
+  timeout --kill-after=1 30 env PATH="$scratch/store-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/store-build.out" 2>&1 &
+  pid=$!
   if ! eventually_long test -e "$scratch/store-entered"; then
     fail "[C127] the builder did not reach its store-locked top commit"
-    rm -f -- "$scratch/store-gate"; wait "$pid" 2>/dev/null
+    rm -f -- "$scratch/store-gate"
+    wait "$pid" 2> /dev/null
     cat "$scratch/store-build.out"; return 1
   fi
   check "[C127] the actual store lock is held during publication" bash -c '! flock -n "$1" true' _ "$s/mail"
   check "[C127] status succeeds during the store hold" exit_is 0 wp status lodge
   check "[C127] status identifies a build rather than a carrier" said "store   held by build lodge, process $(jq -r .pid "$scratch/build-store-holder"), since "
   rm -- "$scratch/store-gate"
-  result=0; wait "$pid" || result=$?
+  result=0
+  wait "$pid" || result=$?
   check "[C127] the store-held publisher completes" test "$result" = 0
   check "[C127] the publisher removes its holder" test ! -e "$s/store.holder"
-  ( umask 077; cat "$scratch/build-store-holder" > "$s/store.holder" )
+  (
+    umask 077
+    cat "$scratch/build-store-holder" > "$s/store.holder"
+  )
   check "[C127] a stale store holder leaves status successful" exit_is 0 wp status lodge
   check "[C127] status distinguishes a free lock from the stale named process" said 'but nobody holds the lock; the next hold replaces it'
   rm -- "$s/store.holder"
@@ -823,7 +892,7 @@ t_generation_interruptions() {
     m(["key","harbor","dock","-","room","held"];3)]'
   check "[C128] the interruption fixture plans" exit_is 0 wplan
   check "[C128] its whole build succeeds with real keys and mail" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s point result bridge_before bridge_line bridge_box deck_before deck_line deck_pid next before hold
   s=$(state_of)
   generation_interrupt_stubs
@@ -834,14 +903,16 @@ t_generation_interruptions() {
   check "[C128] a real bridge build is killed before its top commit" test "$result" = 137
   check "[C128] that builder reached the named top operation" test "$(cat "$scratch/interrupt-hit")" = K3
   check "[C128] the down bridge really remains part-built" test -f "$clone/BUILD/floors/bridge/BUILDING"
-  (( test_failed == 0 )) || { cat "$scratch/bridge-interruption.out"; return 1; }
+  ((test_failed == 0)) || {
+    cat "$scratch/bridge-interruption.out"; return 1
+  }
   bridge_box=$s/comms/Orchard\ Grower
   check "[C128] the down floor's answers directory existed" test -d "$bridge_box/answers"
   rmdir -- "$bridge_box/answers"
   bridge_before=$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge" "$s/mail/Orchard Grower" "$bridge_box")
   bridge_line=$(generation_top_floor bridge)
   check "[C128] the witness deck starts while bridge is interrupted" exit_is 0 wp up deck
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   deck_line=$(generation_top_floor deck) deck_pid=$(on deck T display-message -p '#{pid}')
   deck_before=$(generation_tree_digest "$clone/BUILD/floors/deck" "$s/floors/deck/keys/01/private-keys-v1.d")
   for point in K1 K2 K3 K4 K5 D1; do
@@ -854,9 +925,10 @@ t_generation_interruptions() {
       "$BASH" "$loop" build lodge > "$scratch/interruption-$point.out" 2>&1
     result=$?
     [[ $point != K1 ]] || exec {hold}<&-
-    if [[ $point == D1 ]]; then check "[C128] D1 is a native key-generation refusal" test "$result" = 2
+    if [[ $point == D1 ]]; then
+      check "[C128] D1 is a native key-generation refusal" test "$result" = 2
     else check "[C128] $point kills the actual publishing builder" test "$result" = 137; fi
-    check "[C128] $point reached its named operation" test "$(cat "$scratch/interrupt-hit" 2>/dev/null)" = "$point"
+    check "[C128] $point reached its named operation" test "$(cat "$scratch/interrupt-hit" 2> /dev/null)" = "$point"
     check "[C128] $point keeps the witness floor healthy" exit_is 0 wp status deck
     check "[C128] $point preserves the witness top entry" test "$(generation_top_floor deck)" = "$deck_line"
     check "[C128] $point preserves its immutable tree and private-key files" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$s/floors/deck/keys/01/private-keys-v1.d")" = "$deck_before"
@@ -869,9 +941,14 @@ t_generation_interruptions() {
       check "[C128] $point explains that the marker stands" said 'BUILDING marker stands'
       check "[C128] $point leaves no partial run" test ! -e "$run/lodge"
     fi
-    if [[ $point == K4 ]]; then before=$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d"); next=$(cat "$s/generation.next"); fi
+    if [[ $point == K4 ]]; then
+      before=$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")
+      next=$(cat "$s/generation.next")
+    fi
     check "[C128] recovery after $point succeeds" exit_is 0 wp build lodge
-    if (( test_failed )); then cat "$scratch/interruption-$point.out"; return 1; fi
+    if ((test_failed)); then
+      cat "$scratch/interruption-$point.out"; return 1
+    fi
     if [[ $point == K4 ]]; then
       check "[C128] committed-marker recovery keeps private-key bytes, inodes and modes" test "$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")" = "$before"
       check "[C128] committed-marker recovery allocates no generation" test "$(cat "$s/generation.next")" = "$next"
@@ -890,16 +967,18 @@ t_generation_pause_isolation() {
   check "[C128] the pause fixture plans" exit_is 0 wplan
   check "[C128] its whole build succeeds" exit_is 0 wp build
   check "[C128] start the witness before pausing another build" exit_is 0 wp up deck
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s pid result
   s=$(state_of)
   generation_interrupt_stubs
   : > "$scratch/interrupt-gate"
   timeout --kill-after=2 60 env PATH="$scratch/interrupt-bin:$PATH" WORKPLACE_TEST_POINT=PAUSE \
-    "$BASH" "$loop" build lodge > "$scratch/interruption-pause.out" 2>&1 & pid=$!
+    "$BASH" "$loop" build lodge > "$scratch/interruption-pause.out" 2>&1 &
+  pid=$!
   if ! eventually_long test -e "$scratch/interrupt-hit"; then
     fail "[C128] the builder did not reach its native key-generation pause"
-    rm -f -- "$scratch/interrupt-gate"; wait "$pid" 2>/dev/null
+    rm -f -- "$scratch/interrupt-gate"
+    wait "$pid" 2> /dev/null
     cat "$scratch/interruption-pause.out"; return 1
   fi
   check "[C128] the other floor's status does not wait for the paused build" exit_is 0 wp status deck
@@ -909,7 +988,8 @@ t_generation_pause_isolation() {
   check "[C128] down of another floor does not wait" exit_is 0 wp down deck
   check "[C128] up of another floor does not wait" exit_is 0 wp up deck
   rm -- "$scratch/interrupt-gate"
-  result=0; wait "$pid" || result=$?
+  result=0
+  wait "$pid" || result=$?
   check "[C128] the key generation resumes and publishes" test "$result" = 0
   check "[C128] end the restarted witness" exit_is 0 wp down deck
 }
@@ -936,12 +1016,12 @@ t_generation_live_handoff() {
   check "[C129] it builds with records, keys and cross-floor mail" exit_is 0 wp build
   check "[C129] the witness starts" exit_is 0 wp up deck
   check "[C129] the changing floor starts" exit_is 0 wp up lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s line server carrier panes agent key_home private prefix day file gaps edition key previous next id
   s=$(state_of) line=$(generation_top_floor deck) server=$(on deck T display-message -p '#{pid}') carrier=$(carrier_pid deck)
   panes=$(on deck T list-panes -a -F '#{pane_id} #{pane_pid}')
   key_home=$s/floors/deck/keys/01
-  agent=$(gpg-connect-agent --homedir "$key_home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')
+  agent=$(gpg-connect-agent --homedir "$key_home" --no-autostart 'GETINFO pid' /bye 2> /dev/null | sed -n 's/^D //p')
   check "[C129] the witness's actual key agent is identified" test -n "$agent"
   private=$(generation_tree_digest "$clone/BUILD/floors/deck" "$key_home/private-keys-v1.d")
   day=$(date -u +%F) file=$s/floors/deck/records/Harbor\ Keeper/$day.pane
@@ -954,16 +1034,18 @@ t_generation_live_handoff() {
     prefix=$(stat -c %s -- "$scratch/record-prefix")
     previous=$(jq -r '.seats[0].fingerprint' "$clone/BUILD/$(generation_top_floor lodge | sed 's/^[^ ]*  //;s|/MANIFEST$||')/keys.json")
     check "[C129] down the changing floor for $edition" exit_is 0 wp down lodge
-    if [[ $edition == added ]]; then statements_plan "$base $extra"
+    if [[ $edition == added ]]; then
+      statements_plan "$base $extra"
     else statements_plan "$base $extra"' | .programs |= map(select(.path | startswith("lodge/east/") | not))'; fi
     check "[C129] the $edition edition plans" exit_is 0 wplan
     check "[C129] the actual floor publisher commits $edition" exit_is 0 wp build lodge
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
     next=$(jq -r '.seats[0].fingerprint' "$clone/BUILD/$(generation_top_floor lodge | sed 's/^[^ ]*  //;s|/MANIFEST$||')/keys.json")
     check "[C129] the changed floor receives a fresh key for $edition" test "$next" != "$previous"
     request keeper "handoff-$edition.md" 'to: Lodge Ira' 'subject: live handoff' --- body
     check "[C129] the old live carrier admits the new edition's seat while its floor is down" carrier_test_answer keeper "handoff-$edition.md" ok
-    id=$(answer_of keeper "handoff-$edition.md"); id=${id#ok }
+    id=$(answer_of keeper "handoff-$edition.md")
+    id=${id#ok }
     check "[C129] the writer and reader retain their own identities after $edition" bash -c '[[ -f $1/mail/"Lodge Ira"/in/$2.md && -f $1/mail/"Harbor Keeper"/sent/$2.md ]]' _ "$s" "$id"
     if [[ $edition == removed ]]; then
       request keeper old-seat.md 'to: Lodge Ida' 'subject: removed' --- body
@@ -978,7 +1060,7 @@ t_generation_live_handoff() {
     check "[C129] $edition preserves the witness's immutable tree and private keys" test "$(generation_tree_digest "$clone/BUILD/floors/deck" "$key_home/private-keys-v1.d")" = "$private"
     check "[C129] $edition preserves every witness pane's id and process" test "$(on deck T list-panes -a -F '#{pane_id} #{pane_pid}')" = "$panes"
     check "[C129] $edition preserves the witness server and carrier" test "$(on deck T display-message -p '#{pid}')/$(carrier_pid deck)" = "$server/$carrier"
-    check "[C129] $edition preserves the actual witness key agent" test "$(gpg-connect-agent --homedir "$key_home" --no-autostart 'GETINFO pid' /bye 2>/dev/null | sed -n 's/^D //p')" = "$agent"
+    check "[C129] $edition preserves the actual witness key agent" test "$(gpg-connect-agent --homedir "$key_home" --no-autostart 'GETINFO pid' /bye 2> /dev/null | sed -n 's/^D //p')" = "$agent"
     check "[C129] $edition retains all previous recorded bytes as a prefix" bash -c 'head -c "$1" -- "$2" | cmp -s -- - "$3"' _ "$prefix" "$file" "$scratch/record-prefix"
     check "[C129] type a witness marker after $edition" exit_is 0 on deck T send-keys -t "$(on deck pane_by_title 'Harbor Keeper')" "handoff-$edition" Enter
     check "[C129] output after $edition is still recorded" eventually_long grep -qF "handoff-$edition" "$file"
@@ -997,7 +1079,7 @@ t_generation_state_refusals() {
   statements_plan "$floors_terms | $comms_terms"' | .programs[-1].recorded += [m(["key","lodge","east","-","room","held"];2)]'
   check "[C130] the state-entry fixture plans" exit_is 0 wplan
   check "[C130] it builds with keys and communications" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s row relative kind mode path existed count top keys other
   local -a cases=(
     'store.holder|file|644' 'store.holder|dir|700' 'build.holder|file|644'
@@ -1017,9 +1099,18 @@ t_generation_state_refusals() {
   for row in "${cases[@]}"; do
     IFS='|' read -r relative kind mode <<< "$row"
     path=$s/$relative existed=0
-    if [[ -e $path || -L $path ]]; then mv -- "$path" "$scratch/state-original"; existed=1; fi
+    if [[ -e $path || -L $path ]]; then
+      mv -- "$path" "$scratch/state-original"
+      existed=1
+    fi
     case $kind in
-      file) ( umask 077; printf '%s\n' '{}' > "$path" ); chmod "$mode" -- "$path" ;;
+      file)
+        (
+          umask 077
+          printf '%s\n' '{}' > "$path"
+        )
+        chmod "$mode" -- "$path"
+        ;;
       dir) mkdir -m "$mode" -- "$path" ;;
       link) ln -s -- "$scratch/state-link-target" "$path" ;;
     esac
@@ -1028,12 +1119,12 @@ t_generation_state_refusals() {
     check "[C130] up refuses the same $relative" exit_is 1 wp up lodge
     check "[C130] no rejected state starts a run" test ! -e "$run/lodge"
     if [[ $kind == dir ]]; then rmdir -- "$path"; else rm -- "$path"; fi
-    (( ! existed )) || mv -- "$scratch/state-original" "$path"
+    ((! existed)) || mv -- "$scratch/state-original" "$path"
     check "[C130] rejecting $relative consumes no generation" test "$(cat "$s/generation.next")" = "$count"
     check "[C130] rejecting $relative preserves the published top" test "$(sha256sum < "$clone/BUILD/MANIFEST")" = "$top"
     check "[C130] rejecting $relative preserves the existing private keys" test "$(generation_tree_digest "$s/floors/lodge/keys/01/private-keys-v1.d")" = "$keys"
     check "[C130] rejecting $relative leaves the other floor byte for byte" test "$(generation_tree_digest "$clone/BUILD/floors/bridge" "$s/floors/bridge")" = "$other"
-    (( test_failed == 0 )) || return 1
+    ((test_failed == 0)) || return 1
   done
   check "[C130] the link target was never written" grep -qxF 'synthetic outside target' "$scratch/state-link-target"
   check "[C130] valid own-floor state remains usable" exit_is 0 wp up lodge
@@ -1056,7 +1147,7 @@ t_generation_state_commit() {
   statements_plan "$floors_terms | $comms_terms"
   check "[C130] the state-commit fixture plans" exit_is 0 wplan
   check "[C130] its whole build succeeds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s real_flock pid result top
   s=$(state_of) real_flock=$(command -v flock) top=$(sha256sum < "$clone/BUILD/MANIFEST")
   mkdir -- "$scratch/state-commit-bin"
@@ -1066,16 +1157,22 @@ t_generation_state_commit() {
     'fi' "exec '$real_flock' \"\$@\"" > "$scratch/state-commit-bin/flock"
   chmod +x -- "$scratch/state-commit-bin/flock"
   : > "$scratch/state-commit-gate"
-  timeout --kill-after=1 30 env PATH="$scratch/state-commit-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/state-commit.out" 2>&1 & pid=$!
+  timeout --kill-after=1 30 env PATH="$scratch/state-commit-bin:$PATH" "$BASH" "$loop" build lodge > "$scratch/state-commit.out" 2>&1 &
+  pid=$!
   if ! eventually_long test -e "$scratch/state-commit-entered"; then
     fail "[C130] the builder did not reach its native store-lock gate"
-    rm -f -- "$scratch/state-commit-gate"; wait "$pid" 2>/dev/null
+    rm -f -- "$scratch/state-commit-gate"
+    wait "$pid" 2> /dev/null
     cat "$scratch/state-commit.out"; return 1
   fi
-  ( umask 077; printf '%s\n' '{}' > "$s/store.holder" )
+  (
+    umask 077
+    printf '%s\n' '{}' > "$s/store.holder"
+  )
   chmod 0644 -- "$s/store.holder"
   rm -- "$scratch/state-commit-gate"
-  result=0; wait "$pid" || result=$?
+  result=0
+  wait "$pid" || result=$?
   check "[C130] the store-locked recheck refuses the late invalid holder" test "$result" = 1
   check "[C130] the refusal identifies its kind or mode" grep -qF "$s/store.holder is not a file" "$scratch/state-commit.out"
   check "[C130] the rejected commit preserves the old published top" test "$(sha256sum < "$clone/BUILD/MANIFEST")" = "$top"
@@ -1095,7 +1192,7 @@ t_generation_state_busy_store() {
   statements_plan "$floors_terms | $comms_terms"
   check "[C130] the busy-store entry fixture plans" exit_is 0 wplan
   check "[C130] its whole build succeeds" exit_is 0 wp build
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s real_stat pid result fd
   s=$(state_of) real_stat=$(command -v stat)
   mkdir -- "$scratch/state-busy-bin"
@@ -1105,17 +1202,24 @@ t_generation_state_busy_store() {
   chmod +x -- "$scratch/state-busy-bin/stat"
   exec {fd}< "$s/mail"
   flock -x "$fd" || return 1
-  ( umask 077; printf '%s\n' '{"floor":"deck","pid":1,"at":"2026-11-18T00:00:00Z"}' > "$s/store.holder" )
-  timeout --kill-after=1 40 env PATH="$scratch/state-busy-bin:$PATH" "$BASH" "$loop" build lodge {fd}<&- > "$scratch/state-busy.out" 2>&1 & pid=$!
+  (
+    umask 077
+    printf '%s\n' '{"floor":"deck","pid":1,"at":"2026-11-18T00:00:00Z"}' > "$s/store.holder"
+  )
+  timeout --kill-after=1 40 env PATH="$scratch/state-busy-bin:$PATH" "$BASH" "$loop" build lodge {fd}<&- > "$scratch/state-busy.out" 2>&1 &
+  pid=$!
   if ! eventually_long test -f "$clone/BUILD/floors/lodge/BUILDING"; then
     fail "[C130] an active store holder made the early state check refuse or wait"
-    rm -f -- "$s/store.holder"; exec {fd}<&-; wait "$pid" 2>/dev/null
+    rm -f -- "$s/store.holder"
+    exec {fd}<&-
+    wait "$pid" 2> /dev/null
     cat "$scratch/state-busy.out"; return 1
   fi
   check "[C130] the early check does not inspect another holder's volatile metadata" test ! -e "$scratch/state-busy-probed"
   rm -- "$s/store.holder"
   exec {fd}<&-
-  result=0; wait "$pid" || result=$?
+  result=0
+  wait "$pid" || result=$?
   check "[C130] publication succeeds after the active store holder releases it" test "$result" = 0
   check "[C130] no stale holder probe was used" test ! -e "$scratch/state-busy-probed"
 }
@@ -1132,22 +1236,24 @@ t_generation_wake_handoff() {
   check "[C131] the wake-change fixture plans" exit_is 0 wplan
   check "[C131] it builds" exit_is 0 wp build
   check "[C131] its unchanged sending floor starts" exit_is 0 wp up deck
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local s first second carrier
   s=$(state_of) carrier=$(carrier_pid deck)
   request keeper old-wake.md 'to: Lodge Ivo' 'subject: before kind change' --- body
   check "[C131] mail to the down reader is delivered" carrier_test_answer keeper old-wake.md ok
-  first=$(answer_of keeper old-wake.md); first=${first#ok }
+  first=$(answer_of keeper old-wake.md)
+  first=${first#ok }
   check "[C131] the registered wake leaves its exact id due" eventually_long jq -e --arg id "$first" \
     'any(.seats[]; .name=="Lodge Ivo" and (.ids|index($id))!=null)' "$s/comms/wake.json"
   statements_plan "$base"' | kinds([["harbor","dock","keeper","clerk"],["lodge","west","ivo","courier"]])'
   check "[C131] the reader kind change plans" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C131] a real floor build publishes that kind change" exit_is 0 wp build lodge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   request keeper new-wake.md 'to: Lodge Ivo' 'subject: after kind change' --- body
   check "[C131] the same live sending carrier delivers after publication" carrier_test_answer keeper new-wake.md ok
-  second=$(answer_of keeper new-wake.md); second=${second#ok }
+  second=$(answer_of keeper new-wake.md)
+  second=${second#ok }
   check "[C131] the new no-pattern kind is decided none, not due" eventually_long jq -R -s -e --arg id "$second" \
     '[split("\n")[]|fromjson?|objects|select(.seat=="the frame" and .covers==[$id] and .target==["Lodge Ivo"] and .outcome=="none")]|length>0' "$s/floors/deck/comms/record"
   check "[C131] the new id is absent from the due set" jq -e --arg id "$second" 'all(.seats[]; (.ids|index($id))==null)' "$s/comms/wake.json"
@@ -1161,7 +1267,9 @@ t_generation_wake_handoff() {
 }
 
 t_generation_bridge_handoff() {
-  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then skip "[C132] unenforced bridge handoff needs an unbarred caller"; return 0; fi
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "[C132] unenforced bridge handoff needs an unbarred caller"; return 0
+  fi
   scoped_clone
   floors_clone
   mkdir -p -- "$root/mailbox"
@@ -1175,7 +1283,7 @@ t_generation_bridge_handoff() {
   check "[C132] it builds" exit_is 0 wp build
   check "[C132] its destination starts" exit_is 0 wp up deck
   check "[C132] its unenforced bridge starts on the synthetic default socket" exit_is 0 wp up bridge
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   local carrier s
   s=$(state_of) carrier=$(carrier_pid bridge)
   request grower before.grab 'seat: Harbor Keeper'
@@ -1183,10 +1291,10 @@ t_generation_bridge_handoff() {
   check "[C132] the existing target goes down for a real rebuild" exit_is 0 wp down deck
   statements_plan "$base $harbor_yard"' | terms_of("harbor/yard/sentry/seat.typify"; if .[0]=="start" then .[5]=(.[5]|fromjson|.[1]="sentinel"|tojson) else . end)'
   check "[C132] an office-floor addition plans" exit_is 0 wplan
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C132] its real floor build publishes while the bridge stays up" exit_is 0 wp build deck
   check "[C132] the rebuilt office floor starts" exit_is 0 wp up deck
-  (( test_failed == 0 )) || return 1
+  ((test_failed == 0)) || return 1
   check "[C132] the new target actually runs its distinctive program" eventually_long on deck screen_has 'Harbor Sentry' 'probe sentinel done'
   request grower added.grab 'seat: Harbor Sentry'
   check "[C132] the old bridge carrier grabs the newly published seat" carrier_test_answer grower added.grab ok

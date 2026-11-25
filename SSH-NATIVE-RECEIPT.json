@@ -38,47 +38,35 @@
       "id": "unknown-name-none",
       "exit_code": 1,
       "seconds": 11.318153371990775,
-      "diagnostic_codes": [
-        "E_ENSURE"
-      ],
+      "diagnostic_codes": ["E_ENSURE"],
       "matched": true
     },
     {
       "id": "unknown-office",
       "exit_code": 1,
       "seconds": 11.944035813998198,
-      "diagnostic_codes": [
-        "E_ENSURE"
-      ],
+      "diagnostic_codes": ["E_ENSURE"],
       "matched": true
     },
     {
       "id": "unknown-room",
       "exit_code": 1,
       "seconds": 12.20609862600395,
-      "diagnostic_codes": [
-        "E_ENSURE"
-      ],
+      "diagnostic_codes": ["E_ENSURE"],
       "matched": true
     },
     {
       "id": "unknown-seat",
       "exit_code": 1,
       "seconds": 11.548984790992108,
-      "diagnostic_codes": [
-        "E_ENSURE",
-        "E_ENSURE",
-        "E_ENSURE"
-      ],
+      "diagnostic_codes": ["E_ENSURE", "E_ENSURE", "E_ENSURE"],
       "matched": true
     },
     {
       "id": "bad-state",
       "exit_code": 1,
       "seconds": 11.036174622000544,
-      "diagnostic_codes": [
-        "E_CLASS"
-      ],
+      "diagnostic_codes": ["E_CLASS"],
       "matched": true
     },
     {
@@ -90,13 +78,7 @@
     }
   ],
   "source_and_predictions_unchanged": true,
-  "name_witnesses": [
-    "plain",
-    "İşlem-α",
-    "鍵[#]%+@=",
-    "n:=x",
-    "café"
-  ],
+  "name_witnesses": ["plain", "İşlem-α", "鍵[#]%+@=", "n:=x", "café"],
   "measured": "Exact emitted SSH and Identity terms with origins; duplicate occurrences; declared-name and scoped-structure guards; bad state; optional absence; native acceptance of policy-only contradictions/forbidden names. No executable plan entry ran.",
   "not_established": [
     "all legal Unicode names",

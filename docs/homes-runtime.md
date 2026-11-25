@@ -2,12 +2,12 @@
 
 Definition5.37 pins four state-effect terms;5.42 and5.44 settle their formation and frame semantics. The accepted Typify reader remains4bb7584. No executable primitive or reader feature is added.
 
-| File/form | Recorded term | Auxiliary native cell key |
-| --- | --- | --- |
-| KIND[KIND]/HOME.typify: `home : VARIABLE = STATE` | `home KIND VARIABLE STATE` | home-records: KIND |
-| Same file: `home-variable : NAME = SUBPATH` | `home-variable KIND NAME SUBPATH` | home-variable-records: KIND, NAME |
-| Same file: `home-seed : PATH` | `home-seed KIND PATH` | home-seed-records: KIND |
-| RUNTIME.typify at workplace, office, room or seat: `expect : NAME` | `expect A B C SCOPE NAME` | expectation-records: A, B, C, SCOPE, NAME |
+| File/form                                                          | Recorded term                     | Auxiliary native cell key                 |
+| ------------------------------------------------------------------ | --------------------------------- | ----------------------------------------- |
+| KIND[KIND]/HOME.typify: `home : VARIABLE = STATE`                  | `home KIND VARIABLE STATE`        | home-records: KIND                        |
+| Same file: `home-variable : NAME = SUBPATH`                        | `home-variable KIND NAME SUBPATH` | home-variable-records: KIND, NAME         |
+| Same file: `home-seed : PATH`                                      | `home-seed KIND PATH`             | home-seed-records: KIND                   |
+| RUNTIME.typify at workplace, office, room or seat: `expect : NAME` | `expect A B C SCOPE NAME`         | expectation-records: A, B, C, SCOPE, NAME |
 
 Every file is optional. A kind must already be declared. A scoped Runtime file requires its office, room or seat to exist. Variable names use the ordinary environment-identifier class. STATE is kept or scratch. SUBPATH is canonical relative-path or `.`, not an absolute or parent-traversal path. Seed PATH uses the existing workplace-path class. Source values are preserved; the layer joins no path and computes no home.
 

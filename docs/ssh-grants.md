@@ -2,9 +2,9 @@
 
 The optional SSH body records two state-effect terms. It reads no private key, loads no agent and opens no socket. Its contract follows definition5.66, the amendments of5.69 and K1 of5.79.
 
-| Source file | Form | Recorded term |
-| --- | --- | --- |
-| programs/SSH.typify | `ssh-key : PATH = NAME` | `ssh-key NAME PATH` |
+| Source file                                   | Form                                                      | Recorded term                      |
+| --------------------------------------------- | --------------------------------------------------------- | ---------------------------------- |
+| programs/SSH.typify                           | `ssh-key : PATH = NAME`                                   | `ssh-key NAME PATH`                |
 | SSH.typify at workplace, office, room or seat | `ssh-grant : granted = NAME` or `ssh-grant : none = NAME` | `ssh-grant A B C SCOPE NAME STATE` |
 
 The surface puts NAME last; the recorded argument order stays as shown above. For example:

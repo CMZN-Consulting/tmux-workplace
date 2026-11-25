@@ -1,6 +1,6 @@
 carrier_test_answer() {
-  local file="$(state_of)/comms/$(box_of "$1")/answers/$2" wanted=$3 seconds=${4:-15} end=$(( EPOCHSECONDS + ${4:-15} )) first
-  while (( EPOCHSECONDS < end )); do
+  local file="$(state_of)/comms/$(box_of "$1")/answers/$2" wanted=$3 seconds=${4:-15} end=$((EPOCHSECONDS + ${4:-15})) first
+  while ((EPOCHSECONDS < end)); do
     if [[ -s $file ]]; then
       IFS= read -r first < "$file"
       if [[ $wanted == ok ]]; then [[ $first =~ ^ok\ [0-9]{8}T[0-9]{6}Z-[0-9]{6}$ ]]; else [[ $first == "$wanted" ]]; fi
@@ -39,7 +39,7 @@ t_floor_capture_interruption() {
   check "[C105] capture interruption: it is actually stopped" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
   check "[C105] capture interruption: captured bytes have no filesystem name while the command runs" bash -c 'a=("$1"/*); [[ ! -e ${a[0]} ]]' _ "$scratch/capture-files"
   check "[C105] capture interruption: kill the stopped capture process" kill -KILL "$pid"
-  wait "$pid" 2>/dev/null
+  wait "$pid" 2> /dev/null
   check "[C105] capture interruption: no readable capture file survives the kill" bash -c 'a=("$1"/*); [[ ! -e ${a[0]} ]]' _ "$scratch/capture-files"
 }
 
@@ -99,7 +99,7 @@ t_carrier_git_deadlines() {
     start=${EPOCHREALTIME/./}
     request ida "$mode.md" "to: Harbor Keeper" "subject: other floor" --- body
     if carrier_test_answer ida "$mode.md" ok 8; then
-      check "[C107] $mode: the other floor delivers within eight seconds of the blocked transaction" test "$(( ${EPOCHREALTIME/./} - start ))" -lt 8000000
+      check "[C107] $mode: the other floor delivers within eight seconds of the blocked transaction" test "$((${EPOCHREALTIME/./} - start))" -lt 8000000
     else
       fail "[C107] $mode: the other floor did not deliver within eight seconds"
       return 1
@@ -146,7 +146,10 @@ t_carrier_request_recovery() {
   check "[C108] start the source carrier with only the rename gate" exit_is 0 env PATH="$scratch/mv-wrapper:$PATH" "$BASH" "$loop" up deck
   check "[C108] start the other floor" exit_is 0 wp up lodge
   : > "$scratch/rename-stop"
-  ( umask 022; request keeper lost.md "to: Lodge Ida" "subject: never lost" --- body )
+  (
+    umask 022
+    request keeper lost.md "to: Lodge Ida" "subject: never lost" --- body
+  )
   check "[C108] the actual take rename completes at the gate" eventually_long test -s "$scratch/rename-entered"
   pid=$(cat "$scratch/rename-entered")
   check "[C108] the source carrier is stopped between rename and next instruction" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
@@ -163,7 +166,8 @@ t_carrier_request_recovery() {
     fail "[C108] the original request was lost across the take rename"
     return 1
   fi
-  id=$(answer_of keeper lost.md); id=${id#ok }
+  id=$(answer_of keeper lost.md)
+  id=${id#ok }
   check "[C108] recovered request has exactly one delivery commit" test "$(store_commits)" = 1
   check "[C108] the unserved take was returned without a fabricated refusal" bash -c '[[ $(jq -s --arg r lost.md "[.[] | select(.request == \$r)] | length" "$1") == 1 ]] && ! grep -qF "\"id\":\"$2\"" "$1"' _ "$record" "$original"
   request ida other.md "to: Harbor Keeper" "subject: other writer" --- body
@@ -171,20 +175,29 @@ t_carrier_request_recovery() {
   check "[C108] floor records contain only their own request writers" eventually_long bash -c 'jq -s -e "all(.[] | select(.seat != \"the frame\"); .seat != \"Lodge Ida\")" "$1/floors/deck/comms/record" >/dev/null && jq -s -e "any(.[]; .seat == \"Lodge Ida\" and .request == \"other.md\")" "$1/floors/lodge/comms/record" >/dev/null' _ "$s"
   check "[C108] stop the source for planted later windows" exit_is 0 wp down deck
   line=$(jq -c --arg id "$id" 'select(.id == $id and .action == "mail")' "$record")
-  ( umask 077; jq -nc --arg id "$id" --argjson record "$line" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"lost.md",action:"mail",stage:"recorded",rec:0,record:$record,answer:("ok " + $id + "\n")}' > "$c/serving" )
+  (
+    umask 077
+    jq -nc --arg id "$id" --argjson record "$line" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"lost.md",action:"mail",stage:"recorded",rec:0,record:$record,answer:("ok " + $id + "\n")}' > "$c/serving"
+  )
   rm -f -- "$s/comms/Harbor Keeper/answers/lost.md"
   check "[C108] recover after the record but before journal removal" exit_is 0 wp up deck
   check "[C108] the saved answer is restored" answered_ok keeper lost.md
   check "[C108] dedupe appends no second request line" test "$(jq -s --arg id "$id" '[.[] | select(.id == $id and .request == "lost.md")] | length' "$record")" = 1
   check "[C108] stop for an interrupted action" exit_is 0 wp down deck
   rec=$(stat -c %s -- "$record")
-  ( umask 077; jq -nc --arg id "$unknown_id" --argjson rec "$rec" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.write",action:"write",stage:"acting",rec:$rec,target:["Lodge Ida"],written:"3 abc"}' > "$c/serving" )
+  (
+    umask 077
+    jq -nc --arg id "$unknown_id" --argjson rec "$rec" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.write",action:"write",stage:"acting",rec:$rec,target:["Lodge Ida"],written:"3 abc"}' > "$c/serving"
+  )
   check "[C108] recover with no further request waiting" exit_is 0 wp up deck
   check "[C108] interrupted write is answered without pretending success" answered keeper uncertain.write "refused the carrier stopped while it served this, and whether it acted is not known"
   check "[C108] its unknown line retains the original target and charged text" eventually_long bash -c 'jq -e "select(.request == \"uncertain.write\" and .outcome == \"unknown\" and .target == [\"Lodge Ida\"] and .length == 3 and .sha256 == \"abc\")" "$1" >/dev/null' _ "$record"
   check "[C108] stop for an invalid recorded base" exit_is 0 wp down deck
   rec=$(stat -c %s -- "$record")
-  ( umask 077; jq -nc --argjson rec "$rec" '{id:"invalid-base",box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.md",action:"mail",stage:"delivering",rec:$rec,base:"ffffffffffffffffffffffffffffffffffffffff"}' > "$c/serving" )
+  (
+    umask 077
+    jq -nc --argjson rec "$rec" '{id:"invalid-base",box:"Harbor Keeper",seat:"Harbor Keeper",request:"uncertain.md",action:"mail",stage:"delivering",rec:$rec,base:"ffffffffffffffffffffffffffffffffffffffff"}' > "$c/serving"
+  )
   printf '%s\n' preserve > "$s/mail/Lodge Ida/in/invalid-base.md"
   check "[C108] invalid base is handled by bounded recovery retries" exit_is 0 wp up deck
   check "[C108] no delivery verdict is invented for an unreadable commit range" answered keeper uncertain.md "refused the carrier could not tell whether this was delivered; look in the store for deliver invalid-base before resubmitting this request"
@@ -223,10 +236,12 @@ t_carrier_pointer_recovery() {
   chmod +x -- "$scratch/tmux-wrapper/tmux"
   check "[C109] start source floor" exit_is 0 wp up deck
   check "[C109] start destination with the typing-only gate" exit_is 0 env PATH="$scratch/tmux-wrapper:$PATH" "$BASH" "$loop" up lodge
-  pid=$(carrier_pid lodge); printf '%s\n' "$pid" > "$scratch/pointer-pid"
+  pid=$(carrier_pid lodge)
+  printf '%s\n' "$pid" > "$scratch/pointer-pid"
   request keeper one.md "to: Lodge Ida" "subject: one" --- body
   check "[C109] first mail delivers while the reader is busy" answered_ok keeper one.md
-  id=$(answer_of keeper one.md); id=${id#ok }
+  id=$(answer_of keeper one.md)
+  id=${id#ok }
   : > "$scratch/pointer-stop"
   printf '%s\n' ready > "$root/screens/screen"
   check "[C109] actual tmux typing reaches the gate" eventually_long test -s "$scratch/pointer-entered"
@@ -235,7 +250,7 @@ t_carrier_pointer_recovery() {
     check "[C109] pointer evidence was journalled before the effect" true
   else
     fail "[C109] pointer evidence was missing before the effect"
-    kill -KILL "$pid" 2>/dev/null
+    kill -KILL "$pid" 2> /dev/null
     return 1
   fi
   check "[C109] kill only the stopped carrier" kill -KILL "$pid"
@@ -247,17 +262,23 @@ t_carrier_pointer_recovery() {
   check "[C109] uncertain pointer IDs remain due with a retry timestamp" eventually_long bash -c 'jq -e --arg id "$2" ".seats[\"Lodge Ida\"] | .ids==[\$id] and .last>0" "$1" >/dev/null' _ "$s/comms/wake.json" "$id"
   request keeper two.md "to: Lodge Ida" "subject: two" --- body
   check "[C109] later mail delivers independently" answered_ok keeper two.md
-  other=$(answer_of keeper two.md); other=${other#ok }
+  other=$(answer_of keeper two.md)
+  other=${other#ok }
   check "[C109] stop the reader for the successful-record window" exit_is 0 wp down lodge
   rec=$(stat -c %s -- "$record") start=$EPOCHSECONDS
-  ( umask 077; jq -nc --arg id "$id" --argjson rec "$rec" --argjson start "$start" '{box:"Lodge Ida",target:"Lodge Ida",ids:[$id],start:$start,rec:$rec,length:3,sha256:"abc",outcome:"ok",reason:""}' > "$c/.pointing/Lodge Ida" )
-  flock -o "$s/mail" sleep 60 & holder=$!
+  (
+    umask 077
+    jq -nc --arg id "$id" --argjson rec "$rec" --argjson start "$start" '{box:"Lodge Ida",target:"Lodge Ida",ids:[$id],start:$start,rec:$rec,length:3,sha256:"abc",outcome:"ok",reason:""}' > "$c/.pointing/Lodge Ida"
+  )
+  flock -o "$s/mail" sleep 60 &
+  holder=$!
   check "[C109] hold the shared store while the local pointer record is recovered" eventually bash -c '! flock -n "$1" true' _ "$s/mail"
   check "[C109] reader starts despite the store holder" exit_is 0 wp up lodge
   check "[C109] successful outcome is recorded even before settlement can take the lock" eventually_long bash -c 'jq -e --arg id "$2" "select(.action==\"wake\" and .covers==[\$id] and .outcome==\"ok\")" "$1" >/dev/null' _ "$record" "$id"
   wp status lodge > "$scratch/pointer-status" 2>&1
   check "[C109] status excludes already-pointed IDs while settlement waits" grep -qF 'Lodge Ida (lodge/east/ida): 1 delivered and not yet pointed out' "$scratch/pointer-status"
-  pkill -P "$holder" sleep 2> /dev/null; wait "$holder" 2> /dev/null
+  pkill -P "$holder" sleep 2> /dev/null
+  wait "$holder" 2> /dev/null
   check "[C109] settle removes only the pointed ID and preserves later delivery" eventually_long bash -c '[[ $(jq -c ".seats[\"Lodge Ida\"] | [.ids,.count]" "$1") == "[[\"$2\"],1]" ]] && [[ ! -e $3 ]]' _ "$s/comms/wake.json" "$other" "$c/.pointing/Lodge Ida"
   check "[C109] stop reader" exit_is 0 wp down lodge
   check "[C109] stop source" exit_is 0 wp down deck
@@ -301,7 +322,8 @@ t_carrier_cross_floor() {
   request picker banned.write "seat: Harbor Watch" --- "forbidden-cross-floor"
   check "[C110] a denied cross-floor write remains denied" answered picker banned.write "refused the plan does not let Orchard Picker write to Harbor Watch"
   check "[C110] denied text was never typed" bash -c '! grep -qF forbidden-cross-floor "$1"' _ "$root/harbor/charts/cross-typed"
-  flock -o "$s/floors/deck/type.lock" sleep 60 & holder=$!
+  flock -o "$s/floors/deck/type.lock" sleep 60 &
+  holder=$!
   check "[C110] another carrier holds the destination typing slot" eventually bash -c '! flock -n "$1" true' _ "$s/floors/deck/type.lock"
   request grower locked.write "seat: Harbor Watch" --- "after-type-reservation"
   pid=$(carrier_pid bridge)
@@ -309,7 +331,8 @@ t_carrier_cross_floor() {
   check "[C110] busy typing leaves the original request in out with no answer" bash -c '[[ -f $1/out/locked.write && ! -e $1/answers/locked.write ]]' _ "$s/comms/Orchard Grower"
   request picker meanwhile.md "to: Harbor Watch" "subject: not blocked by typing" --- body
   check "[C110] another seat can deliver mail while typing is reserved" answered_ok picker meanwhile.md
-  pkill -P "$holder" sleep 2> /dev/null; wait "$holder" 2> /dev/null
+  pkill -P "$holder" sleep 2> /dev/null
+  wait "$holder" 2> /dev/null
   check "[C110] the waiting write proceeds when its typing slot is free" answered_ok grower locked.write
   check "[C110] the reserved line reached the destination" eventually_long grep -qxF after-type-reservation "$root/harbor/charts/cross-typed"
   check "[C110] change the destination pane's run mark for a refusal probe" exit_is 0 on deck T set-option -p -t "$pane" @workplace stale
@@ -356,7 +379,10 @@ t_carrier_closed_wakes() {
   jq -c '.seats["Gone Again"]={name:"Gone Again",ids:["gone-2"],count:1,since:"2026-11-18T00:00:00Z",last:0} | .seats["Bridge Canary"]={name:"Bridge Canary",ids:["canary"],count:1,since:"2026-11-18T00:00:00Z",last:0}' "$s/comms/wake.json" > "$scratch/wake-new"
   cp -- "$scratch/wake-new" "$s/comms/wake.json"
   rec=$(stat -c %s -- "$record")
-  ( umask 077; jq -nc --argjson rec "$rec" '{box:"Gone Again",target:"Gone Again",ids:["gone-2"],start:0,rec:$rec,outcome:"closed",reason:"no build makes the seat Gone Again"}' > "$c/.pointing/Gone Again" )
+  (
+    umask 077
+    jq -nc --argjson rec "$rec" '{box:"Gone Again",target:"Gone Again",ids:["gone-2"],start:0,rec:$rec,outcome:"closed",reason:"no build makes the seat Gone Again"}' > "$c/.pointing/Gone Again"
+  )
   check "[C111] another floor starts before the interrupted claimant recovers" exit_is 0 wp up bridge
   check "[C111] the second carrier completes a later closure in the same pass" eventually_long bash -c 'jq -e "select(.covers==[\"canary\"] and .outcome==\"closed\")" "$1" >/dev/null' _ "$s/floors/bridge/comms/record"
   check "[C111] recover a closure already claimed in the local journal" exit_is 0 wp up deck
@@ -382,11 +408,15 @@ t_carrier_recovery_decisions() {
   check "[C108] fixture builds" exit_is 0 wp build
   local s store c id=resumed-mail real_git real_mv pid
   s=$(state_of) store=$s/mail c=$s/floors/deck/comms
-  real_git=$(command -v git); real_mv=$(command -v mv)
+  real_git=$(command -v git)
+  real_mv=$(command -v mv)
   for path in 'Harbor Pilot/in' 'Lodge Ida/in' 'Harbor Keeper/sent'; do printf '%s\n' recovery > "$store/$path/$id.md"; done
   check "[C108] stage the synthetic delivery under the store lock" exit_is 0 flock -o "$store" env -i PATH="$PATH" HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$real_git" -C "$store" add -- .
   check "[C108] commit that delivery under the store lock" exit_is 0 flock -o "$store" env -i PATH="$PATH" HOME="$store" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null "$real_git" -C "$store" -c user.name=fixture -c user.email=fixture@example.test commit -qm "deliver $id"
-  ( umask 077; jq -nc --arg id "$id" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"resumed.md",action:"mail",stage:"delivering",base:"",rec:0}' > "$c/serving" )
+  (
+    umask 077
+    jq -nc --arg id "$id" '{id:$id,box:"Harbor Keeper",seat:"Harbor Keeper",request:"resumed.md",action:"mail",stage:"delivering",base:"",rec:0}' > "$c/serving"
+  )
   printf '%s\n' '#!/usr/bin/env bash' 'dest=${!#}' \
     "'$real_mv' \"\$@\" || exit" \
     "if [[ \$dest == '$s/comms/wake.json' && -f '$scratch/recovery-stop' ]] && jq -e --arg id '$id' '(.seats[\"Harbor Pilot\"].ids // [] | index(\$id)) != null and (.seats[\"Lodge Ida\"].ids // [] | index(\$id)) == null' \"\$dest\" >/dev/null; then" \
@@ -396,13 +426,14 @@ t_carrier_recovery_decisions() {
   mkdir -p -- "$run/deck/carrier"
   printf '%s\n' '{"slots":{}}' > "$run/deck/state.json"
   : > "$scratch/recovery-stop"
-  PATH="$scratch/recovery-mv:$PATH" "$BASH" "$clone/BUILD/bin/workplace" carry deck > "$scratch/recovery-first.log" 2>&1 & pid=$!
+  PATH="$scratch/recovery-mv:$PATH" "$BASH" "$clone/BUILD/bin/workplace" carry deck > "$scratch/recovery-first.log" 2>&1 &
+  pid=$!
   check "[C108] recovery stops after the first reader's due decision" eventually_long test -s "$scratch/recovery-entered"
   check "[C108] the actual recovery carrier is stopped" eventually_long grep -q '^State:.*T' "/proc/$pid/status"
   check "[C108] kill the carrier between its two readers" kill -KILL "$pid"
-  wait "$pid" 2>/dev/null
+  wait "$pid" 2> /dev/null
   rm -f -- "$scratch/recovery-stop"
-  flock -o "$store" python3 - "$s/comms/wake.json" <<'PY'
+  flock -o "$store" python3 - "$s/comms/wake.json" << 'PY'
 import json,os,sys
 p=sys.argv[1]
 with open(p) as f:v=json.load(f)
@@ -410,7 +441,8 @@ v['seats']['Harbor Pilot'].update(ids=[],count=0,since=None)
 with open(p+'.fixture','w') as f:json.dump(v,f)
 os.replace(p+'.fixture',p)
 PY
-  "$BASH" "$clone/BUILD/bin/workplace" carry deck > "$scratch/recovery-second.log" 2>&1 & pid=$!
+  "$BASH" "$clone/BUILD/bin/workplace" carry deck > "$scratch/recovery-second.log" 2>&1 &
+  pid=$!
   check "[C108] a second recovery completes and answers the delivery" answered keeper resumed.md "ok $id"
   check "[C108] the already-pointed first reader is not made due again" test "$(jq -c '.seats["Harbor Pilot"].ids' "$s/comms/wake.json")" = '[]'
   check "[C108] the unfinished second reader still receives its due decision" test "$(jq -c '.seats["Lodge Ida"].ids' "$s/comms/wake.json")" = '["resumed-mail"]'
@@ -447,7 +479,7 @@ t_carrier_record_links() {
   jq --arg path "$obsolete" --arg target "$s/floors/deck/records/Former" '.links += [{path:$path,target:$target}]' "$stamp" > "$scratch/link-stamp"
   cat -- "$scratch/link-stamp" > "$stamp"
   rm -f -- "$link"
-  python3 - "$clone/BUILD/MANIFEST" <<'PY'
+  python3 - "$clone/BUILD/MANIFEST" << 'PY'
 import os,re,sys
 p=sys.argv[1]
 with open(p) as f:lines=f.readlines()
@@ -457,7 +489,8 @@ for i,v in zip(indices,values):lines[i]=v
 with open(p+'.fixture','w') as f:f.writelines(lines)
 os.replace(p+'.fixture',p)
 PY
-  top=$(sha256sum "$clone/BUILD/MANIFEST"); top=${top%% *}
+  top=$(sha256sum "$clone/BUILD/MANIFEST")
+  top=${top%% *}
   check "[C112] the semantically unchanged top now has a distinct digest" test "$top" != "$old_top"
   check "[C112] carrier refreshes after that top change" eventually_long bash -c '[[ $(jq -r .top "$1") == "$2" && -L $3 && ! -e $4 && ! -L $4 ]]' _ "$stamp" "$top" "$link" "$obsolete"
   check "[C112] refresh preserves an unowned file in the view" grep -qxF local "$sentinel"
@@ -517,7 +550,10 @@ t_carrier_chain_replay() {
   ' "$scratch/replay-chain" > "$scratch/replay-pair"
   length=$(jq -sr '.[1].length' "$scratch/replay-pair")
   printf -v bad_previous '%064d' 1
-  forged_hash=$({ printf '%s' "$bad_previous"; head -c "$length" "$(record_of keeper)/$day.pane"; } | sha256sum)
+  forged_hash=$({
+    printf '%s' "$bad_previous"
+    head -c "$length" "$(record_of keeper)/$day.pane"
+  } | sha256sum)
   forged_hash=${forged_hash%% *}
   jq -sc --arg previous "$bad_previous" --arg hash "$forged_hash" '.[1].previous=$previous | .[1].hash=$hash | .[]' "$scratch/replay-pair" > "$d/chain"
   check "[C113] an offset alone does not authorize a replay with a forged previous hash" exit_is 1 wp record verify "Harbor Keeper" "$day"
@@ -533,9 +569,11 @@ carrier_test_publish_shared() {
   local next=$1 number=$2 old line hash name
   old=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
   [[ -n $old && ! -e $clone/BUILD/shared/$number ]] || return 1
-  hash=$(sha256sum < "$next/MANIFEST");hash=${hash%% *}
+  hash=$(sha256sum < "$next/MANIFEST")
+  hash=${hash%% *}
   while IFS= read -r line; do
-    if [[ ${line#*  } == "$old/MANIFEST" ]]; then printf '%s  shared/%s/MANIFEST\n' "$hash" "$number"
+    if [[ ${line#*  } == "$old/MANIFEST" ]]; then
+      printf '%s  shared/%s/MANIFEST\n' "$hash" "$number"
     else printf '%s\n' "$line"; fi
   done < "$clone/BUILD/MANIFEST" > "$scratch/publish-top-$number"
   flock -o "$(state_of)/mail" "$BASH" -c '
@@ -580,7 +618,8 @@ t_carrier_index_reload() {
   request keeper unknown.md "to: Lodge Ivo" "subject: unknown before publication" --- body
   check "[C114] the original index does not invent a new name" answered keeper unknown.md "refused name 1 of its to line is not a seat the plan makes, by its exact name, so the mail goes to none"
   old=$(sed -n 's|^[0-9a-f]\{64\}  \(shared/[0-9]*\)/MANIFEST$|\1|p' "$clone/BUILD/MANIFEST")
-  next=$scratch/shared-next-50;cp -a -- "$clone/BUILD/$old" "$next"
+  next=$scratch/shared-next-50
+  cp -a -- "$clone/BUILD/$old" "$next"
   mkdir -m 0700 -p -- "$s/mail/Lodge Ivo/in" "$s/mail/Lodge Ivo/sent" "$s/comms/Lodge Ivo/out" "$s/comms/Lodge Ivo/answers"
   jq --arg s "$s" '
     (.seats[] | select(.name=="Lodge Ida")) as $base
@@ -599,12 +638,14 @@ t_carrier_index_reload() {
     fail "[C114] the live carrier did not reload the new name and route"
     return 1
   fi
-  id=$(answer_of keeper added.md);id=${id#ok }
+  id=$(answer_of keeper added.md)
+  id=${id#ok }
   check "[C114] array positions still identify the original writer and the new reader" bash -c '[[ -f $1/mail/"Lodge Ivo"/in/$2.md && -f $1/mail/"Harbor Keeper"/sent/$2.md ]]' _ "$s" "$id"
   request keeper removed.md "to: Lodge Ida" "subject: removed route" --- body
   check "[C114] the previous route is no longer authorized" answered keeper removed.md "refused the plan does not let Harbor Keeper mail Lodge Ida, so the mail goes to none"
   check "[C114] reloading keeps the same live carrier process" test "$(carrier_pid deck)" = "$pid"
-  next=$scratch/shared-next-51;cp -a -- "$clone/BUILD/shared/50" "$next"
+  next=$scratch/shared-next-51
+  cp -a -- "$clone/BUILD/shared/50" "$next"
   jq '(.seats[] | select(.name=="Harbor Keeper")).reach.mail=["Lodge Ida"]' "$next/mail.json" > "$scratch/race-mail.json"
   mv -f -- "$scratch/race-mail.json" "$next/mail.json"
   carrier_test_shared_manifest "$next"
@@ -619,7 +660,8 @@ t_carrier_index_reload() {
   trap 'cleanup || exit 1' EXIT
   check "[C114] the request is decided under the new index, not the stale authorized one" answered keeper race.md "refused the plan does not let Harbor Keeper mail Lodge Ivo, so the mail goes to none"
   check "[C114] that stale pass created no delivery commit" test "$(store_commits)" = 1
-  next=$scratch/shared-next-52;cp -a -- "$clone/BUILD/shared/51" "$next"
+  next=$scratch/shared-next-52
+  cp -a -- "$clone/BUILD/shared/51" "$next"
   cp -- "$next/mail.json" "$scratch/repair-mail.json"
   carrier_test_shared_manifest "$next"
   jq '. + {unverified:true}' "$next/mail.json" > "$scratch/unverified-mail.json"
@@ -690,13 +732,15 @@ t_carrier_record_view_reload() {
   before=$(sha256sum < "$clone/BUILD/$records")
   check "[C112] Administration initially sees the old authorized record" test -L "$record_view/Harbor Keeper"
   check "[C112] the replacement record is initially absent" test ! -e "$record_view/Harbor Pilot"
-  next=$scratch/record-shared-next;cp -a -- "$clone/BUILD/$old" "$next"
+  next=$scratch/record-shared-next
+  cp -a -- "$clone/BUILD/$old" "$next"
   jq '(.seats[] | select(.seat==["orchard","barn","grower"])).reach.record=["Harbor Pilot"]' "$next/plan-view.json" > "$scratch/record-shared-view"
   mv -f -- "$scratch/record-shared-view" "$next/plan-view.json"
   carrier_test_shared_manifest "$next"
   check "[C112] publish only the changed shared reach table" carrier_test_publish_shared "$next" 60
   local published_top
-  published_top=$(sha256sum < "$clone/BUILD/MANIFEST"); published_top=${published_top%% *}
+  published_top=$(sha256sum < "$clone/BUILD/MANIFEST")
+  published_top=${published_top%% *}
   check "[C112] the carrier finishes its refresh for the published top" eventually_long jq -e --arg top "$published_top" '.top==$top' "$(state_of)/floors/bridge/links.state"
   check "[C112] the carrier creates the newly authorized link without rebuilding Administration" eventually_long test -L "$record_view/Harbor Pilot"
   check "[C112] the revoked link is removed by the same refresh" test ! -L "$record_view/Harbor Keeper"
@@ -734,7 +778,9 @@ client_mail_floor_fixture() {
 }
 
 t_client_mail_floors() {
-  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then skip "client mail floors: Administration needs an unbarred caller"; return 0; fi
+  if [[ $(nnp_of $$) != NoNewPrivs:0 ]]; then
+    skip "client mail floors: Administration needs an unbarred caller"; return 0
+  fi
   client_mail_floor_fixture
   check "client mail: plan selects the declared kind" exit_is 0 wplan
   check "client mail: fold persists the opt-in" jq -e '.mail.clientKinds == ["courier","quiet"]' "$clone/PLAN/view.json"
@@ -843,7 +889,8 @@ t_client_mail_floors() {
   request keeper read-first.md "to: Orchard Grower" "subject: early confirmation" --- "read while busy"
   check "client notice: a second letter reaches the busy reader" carrier_test_answer keeper read-first.md ok
   local read_id ack
-  read_id=$(answer_of keeper read-first.md); read_id=${read_id#ok }
+  read_id=$(answer_of keeper read-first.md)
+  read_id=${read_id#ok }
   check "client notice: the second letter is readable from the workspace" eventually_long grep -sFxq 'read while busy' "$mailbox/client-in/$read_id.md"
   ack="$mailbox/out/.workplace-read-$read_id"
   sha256sum < "$mailbox/client-in/$read_id.md" > "$mailbox/out/.read" && mv -fT -- "$mailbox/out/.read" "$ack"

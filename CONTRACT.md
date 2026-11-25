@@ -54,7 +54,7 @@
   - `searchable-only` is a tmpfs of mode 0111: it can be passed through, not listed, and only its rows exist;
   - `scratch` is an empty writable tmpfs;
   - `read-only` and `read-write` bind the path onto itself.
-  A path with no row has its nearest ancestor's state, and every table of a seat holds a row for `/`.
+    A path with no row has its nearest ancestor's state, and every table of a seat holds a row for `/`.
 - **C15.** Inside a view, `/dev/tty` opens, the terminal's size can be read, job control works, a full-screen program reaches the alternate screen, and another pane's terminal cannot be written.
 - **C16.** A seat's program receives exactly the binding's inherited names and the rows of the plan's `environment` cell for that seat, then the variables that the frame gives it (C39, C48) and the values it expects (C49). Without floors an inherited name takes its value from the environment `exec` runs in. With floors it takes the value captured from the `up` caller, before tmux can inject its own environment. `PWD` is the seat's directory. A variable of the server or of the loop does not arrive.
 
@@ -74,7 +74,7 @@
   - the learned slots;
   - the carrier's directory, which is its working directory and its mark, and its log (C57);
   - the server's socket (C68).
-  It is the loop's record and no input of the reader.
+    It is the loop's record and no input of the reader.
   - With floors each floor's run is `RUN/F` (5.160 point 8), and what this contract says of `RUN` it says of `RUN/F` for that floor's commands. It holds the list above for the floor, and also `tmux.conf`, copied from the generation's sealed `floor.conf` for server startup (C105). Its `state.json` names the floor, the top's hash and the generations that `up` read.
 - **C22.** `status` reports the build, the run and every check as ok or gone, and exits 1 when the build has changed or a check fails. With the run up, it prints the line that attaches to the server.
   - With floors, a bare `status` reports the build and then each floor in the floors' order, and `status F` the build, the mail's and the values' lines, which are the configuration's, and the floor F alone: its homes, its records and its run. After the build's line it prints `shared  generation M`, the shared generation that the top names. For each floor it prints `floor   F: generation N`, a `conf` line naming its sealed file and the frame's settings after it, and `run: floor F is up, ID` or `run: floor F is down`. A running floor also gets a read-only check of its transport settings (C106). For a floor that is down, where requests of its writers wait in `out`, a `waiting` line counts them and says that none is served until `up F`: no other floor's carrier serves them (C57). It exits 0 for a floor that is down.
@@ -127,6 +127,7 @@
     - If not, which row does it make? The nearest row above it of any source answers, a label's row among them. When the seat is not cleared for the label, it makes a hidden row, and none when that row is searchable-only. When the seat is cleared, it makes a read-only row.
 
     The row a label makes replaces nothing.
+
   - A hidden row that a label made becomes searchable-only when a row that is not hidden stands beneath it. It is then a passage to what lies beneath (5.124 point 7): a label beneath a labelled path governs that path.
   - the rows stand in the byte order of their paths, each with the origins of the statement or label that made it, in the plan's order (5.18): equal statements at several scopes make one row whose origins follow the plan, whatever scope each stands at (5.131 point 4).
 - **C31.** The fold refuses the plan, naming the seat, the paths and the origins, for:
@@ -134,9 +135,9 @@
     - a label of closed written through a link, since a tmpfs written through a link lies where the link leads, and one whose last part is a link gets none, as bubblewrap mounts nothing on a link; such a refusal names the label, its origin and, where it has one, its physical path;
     - a row that is not hidden whose real path is at or beneath a closed directory's, unless it is written at a mask's path or beneath it, where the mask lies, the runtime directory's included; a row that leads to a mask from another name, a link's spelling of it among them, is refused (5.177 point 6). The frame takes the clone, R and the tmux socket directories by their physical paths, so each mask lies at the path the rule reads, whatever of a link a seat's view shows;
     - a read-only or read-write row whose real path holds a closed directory, where the row would show it, at its written path joined with the rest of the closed directory's physical path, and nothing lies over that path after the row's bind: neither a hidden, scratch or searchable-only row of the view written at it or at an ancestor of it beneath the row, which the order of the rows mounts after it, nor, for a mask, the mask itself, which is mounted after every row at its path. A label beneath a hidden, scratch or searchable-only row has no tmpfs of its own, and that row is what lies over it.
-    A row is judged by its real path, where every link in it leads, its last part too, a file as well as a directory (5.176 point 7); a directory is resolved without being entered. A row, a label or a mask whose real path the rule cannot tell, or of which it cannot tell whether it stands because a part of its path cannot be searched, is refused, naming it and the reason (5.177 point 6). Each row's refusal names the seat, the row with its state and origins, the file or the directory that it leads to, by its real path, and the closed directory's physical path, where a row holds one the path where it would show it, and the label's origin or the mask's name. A path that does not exist is passed over, and so is a mask that does not stand.
-    The views it reads are those a pane gets, the seat's table of C33: `view.json` where the plan holds statements, and the plan's `view` cell where it holds none, so the frame's masks hold under another name in that cell too (5.176 point 7). It reads the plan, the views and the binding that joins the labels' paths: at `build` the frame's own binding and library, and at `up`, `restart` and `exec` `BUILD`'s own copies, which `BUILD`'s manifest verifies, so that a binding or a library of the checkout changed after the build is not read there (5.176 point 11). It joins the labels to the command's root, and `up`, `restart` and `exec` refuse, before anything is made, a root that is not the plan's, as `BUILD`'s copy of the plan's manifest names it, where another spelling of the same directory is the same root, with exit 1, and `exec` with exit 2: `COMMAND refuses: the plan belongs to the root ROOT, not to ROOT2`, or `COMMAND refuses: cannot read the plan's root in FILE` (5.177 point 6). Where it cannot read the plan's labels or the views, and where a label is no absolute path once the binding joins it, it refuses.
-    Its limits (5.176 point 7, 5.177 point 6): a directory that the machine mounts at a second place is not seen; it reads the machine at one moment, before the bind; a hard link to a file beneath a closed directory is not seen, since it reads paths; at `up` and `restart` its own code is the checkout's, which nothing compares with `BUILD`'s; and its verdict rests on the command's environment, the state's and the sockets' directories, and the `jq`, `readlink` and `stat` on its path.
+      A row is judged by its real path, where every link in it leads, its last part too, a file as well as a directory (5.176 point 7); a directory is resolved without being entered. A row, a label or a mask whose real path the rule cannot tell, or of which it cannot tell whether it stands because a part of its path cannot be searched, is refused, naming it and the reason (5.177 point 6). Each row's refusal names the seat, the row with its state and origins, the file or the directory that it leads to, by its real path, and the closed directory's physical path, where a row holds one the path where it would show it, and the label's origin or the mask's name. A path that does not exist is passed over, and so is a mask that does not stand.
+      The views it reads are those a pane gets, the seat's table of C33: `view.json` where the plan holds statements, and the plan's `view` cell where it holds none, so the frame's masks hold under another name in that cell too (5.176 point 7). It reads the plan, the views and the binding that joins the labels' paths: at `build` the frame's own binding and library, and at `up`, `restart` and `exec` `BUILD`'s own copies, which `BUILD`'s manifest verifies, so that a binding or a library of the checkout changed after the build is not read there (5.176 point 11). It joins the labels to the command's root, and `up`, `restart` and `exec` refuse, before anything is made, a root that is not the plan's, as `BUILD`'s copy of the plan's manifest names it, where another spelling of the same directory is the same root, with exit 1, and `exec` with exit 2: `COMMAND refuses: the plan belongs to the root ROOT, not to ROOT2`, or `COMMAND refuses: cannot read the plan's root in FILE` (5.177 point 6). Where it cannot read the plan's labels or the views, and where a label is no absolute path once the binding joins it, it refuses.
+      Its limits (5.176 point 7, 5.177 point 6): a directory that the machine mounts at a second place is not seen; it reads the machine at one moment, before the bind; a hard link to a file beneath a closed directory is not seen, since it reads paths; at `up` and `restart` its own code is the checkout's, which nothing compares with `BUILD`'s; and its verdict rests on the command's environment, the state's and the sockets' directories, and the `jq`, `readlink` and `stat` on its path.
   - a statement at the scope of a kind that the plan does not make, as a home and a wake of such a kind are refused. `none` is such a kind: it is the fold's word for a seat with no kind, and no kind is made so (5.131 point 4);
   - a term of the wrong shape, an unknown scope or state, a path that is not canonical, a number that is not whole, a label that is neither a whole number nor `closed`, or a clearance or a numbered label of more than 15 digits;
   - a clearance at a seat's scope, since a seat has its room's clearance (5.118);
@@ -150,11 +151,11 @@
   - a row that is not hidden, lying beneath a hidden row;
   - a row that is not hidden, whose governing label is one the seat is not cleared for. A row's governing label is the deepest label at or above it, and a passage is not refused.
   - a label the seat is not cleared for, whose path has no row of the seat's, and whose nearest row above is read-only or read-write: `seat NAME (K/R/S): PATH, labelled VALUE (from ORIGIN), lies beneath ROW (STATE, from ORIGIN) with no row of its own`, then `, and no clearance reaches closed`, `, and the seat is cleared for no label`, or `, and the seat's clearance C does not reach VALUE`. This checks what the label step made (5.129 point 2): the rule above reads the labels at or above a row, and this one reads the labels beneath one. A row at the labelled path itself is the rule above's.
-  In addition to that closed-name check, `build`, `up`, `restart` and `exec` check
-  alias access on the machine. The first three check all views; `exec` checks its
-  selected seat. They read the same plan, view and binding as the closed-name
-  check. `libexec/alias-access.jq` is copied into BUILD and covered by its
-  manifest. The existing closed-name refusal is returned first.
+    In addition to that closed-name check, `build`, `up`, `restart` and `exec` check
+    alias access on the machine. The first three check all views; `exec` checks its
+    selected seat. They read the same plan, view and binding as the closed-name
+    check. `libexec/alias-access.jq` is copied into BUILD and covered by its
+    manifest. The existing closed-name refusal is returned first.
 
   Host contents have three access levels: unshown, read-only and read-write.
   Hidden, scratch and searchable-only rows give no access to their host backing
@@ -207,6 +208,7 @@
   - the counts.
 
   It prints each label whose row is a passage (C30), with the seats that pass through it, and lists the directories held by nobody as a report. That listing neither goes beneath a closed path nor names one, however its label is written, since the closed paths are read joined to the root as the fold reads them (C4), and a directory is closed whatever path names it, and so it names nothing at or beneath one: a closed path stands in no view, and a label of closed covers it (5.124 point 6, 5.149, 5.153). It walks the physical paths of the directories, and reads the rows' and the labels' paths the same way, and it judges each directory once, so that it names a directory once, however many searchable-only rows lie above it and whatever names lead to it (5.160 point 9). None of this is in the plan.
+
 - **C33.** A seat's table is `view.json` when the plan holds statements, and the plan's `view` cell when it holds none.
   - The choice is made in one place, `folded` in `libexec/table.jq`. It reads the binding's `fold` words: `statement`, `clearance`, `label`, `key`, `home`, `home-variable`, `home-seed` and `expect`.
   - `plan`, `build`, `up` and `why` all call it. A plan that holds any of them without a statement is folded too, and refused, since no seat has a row for `/`.
@@ -364,7 +366,6 @@
 ## Keys and names
 
 - **C67.** A key of an office, a room or a seat, and a kind's name, is not empty, is not `-`, `.` or `..`, does not begin with `-`, and holds no `/`, no white space and no control character. `plan` and `build` refuse one that is, with exit 1, naming the term or the row. A name is one seat's alone: `plan` and `build` refuse two seats of one name, naming both terms. A seat's name, in every plan, is not empty, does not begin with `.`, holds no `/`, no comma and no control character, neither begins nor ends with white space, and is none of the carrier's own names beside the seats' boxes, `next`, `next.new`, `record`, `serving`, `serving.new`, `taken`, `wake.json` and `wake.json.new`, nor of the frame's own beside the seats' directories in the records, `chain`, `chain.state`, `chain.state.new`, `mark` and `mark.` followed by digits (5.162 point 5): `plan` and `build` refuse one that is, naming the term. The homes, the store and the Logs layer use a name as a directory's name, and a mail's head separates its readers by commas.
-
 
 ## No seat reaches a tmux server
 
@@ -631,7 +632,6 @@
 - **C132.** An unenforced synthetic bridge remains up while an office floor is rebuilt. Its original carrier must grab the newly published seat and write through the rebuilt destination server to the actual program, without replacing its own process. The bridge uses the private test default socket; the fixture requires an unbarred caller and starts no model.
 
 - **C133.** The pointer throttle's persisted integer epoch second is sampled at settlement, after typing and recording its verdict, rather than taken from the journal's earlier start. A slow send therefore does not consume its own cooldown. The native wake fixture may delay its first pointer client by a bounded 1.5 seconds and still requires at least 60 seconds between the two UTC pointer records, printing their actual timestamps. The same settlement rule applies to uncertain or refused attempts. The journal retains its original start for recovery; the existing gate, ids and record format are preserved.
-
 
 ## Client mail
 

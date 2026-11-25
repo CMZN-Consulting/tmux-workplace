@@ -1,0 +1,5 @@
+# Manifests and receipts record the digests of the files below, and the W4 test asserts on text that comes from them, so every byte stays.
+tests/fixtures/
+
+# A test cuts the text of floor_capture and floor_client out of this file with sed and builds a script from it, so those lines keep their layout.
+libexec/floor-runtime.bash

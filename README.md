@@ -56,7 +56,7 @@ cd tmux-workplace
 bin/workplace doctor
 ```
 
-Every line it prints should start with `ok` and name a program with its version, as in `ok      tmux 3.8`. A line that starts with `absent` names something that is missing and says what that stops. On the machine where this page was tested, one line starts with `absent` and names "a user manager". It matters only for plans that send their records to the system's own log, which the examples below do not. Check the reader on its own:
+Every line it prints should start with `ok`. Most of them name a program and its version, as in `ok      tmux 3.8`. A line that starts with `absent` names something that is missing and says what that stops. One such line may name "a user manager": it matters only for plans that send their records to the system's own log, which the examples below do not. Check the reader on its own:
 
 ```sh
 typify --version
@@ -88,7 +88,7 @@ seat Harbor Pilot (harbor/dock/pilot): kind navigator; clearance 0, the room's (
 …
 ```
 
-Your directory name and your reader's version line will differ. The command exited with status 0. Check it with `echo $?` straight after it. A description that the reader refuses prints the reader's message with the file and line, and the status is 1.
+Your directory name, the three digests and your reader's version line will differ. The command exited with status 0. Check it with `echo $?` straight after it. A description that the reader refuses prints the reader's message with the file and line, and the status is 1.
 
 Each `seat` block ends with a number of rows. A row is one path and what the seat may do with it. Print the rows of Harbor Pilot, one per line:
 
@@ -238,7 +238,7 @@ Now take it down:
 bin/workplace down
 ```
 
-You see one line for each thing it undoes, newest first: `undo session/orchard: done`, `undo session/harbor: done`, `undo the carrier, pid …: done`, then `undo the agent of …: done` for each key helper, and last `down: done`. Run `bin/workplace status` again and it says `run: down`.
+You see one line for each thing it undoes, newest first: `undo session/orchard: done`, `undo session/harbor: done`, `undo the carrier, pid …: done`, then for each key helper `undo the agent of …: done` and, where the helpers keep their sockets in the system's runtime directory, `undo the runtime sockets of …'s agent: done`, and last `down: done`. Run `bin/workplace status` again and it says `run: down`.
 
 `down` removes only what `up` made: the terminals and the helpers. Everything else stays, `BUILD` too. `unbuild` then removes the build:
 
@@ -249,7 +249,7 @@ bin/workplace unbuild
 It names the twenty files of `BUILD` that it removes, then the key homes that it removes (`unbuild: removed the key homes in …, 4 homes, …`), and last says which part of the state directory it keeps:
 
 ```text
-unbuild: the state directory …/state/workplace/config-a8c1b6bcd11c is kept, with everything in it but the key homes: carrier.lock, comms, homes, homes.json, mail, records, values.json
+unbuild: the state directory …/state/workplace/config-3461cbd94fbf is kept, with everything in it but the key homes: carrier.lock, comms, homes, homes.json, mail, records, values.json
 ```
 
 What stays on the disk, then: the description and its `PLAN` in `config`, the letters in the state directory's `mail`, the kept record of the two terminals in its `records`, the values you wrote, the folders and stand-ins that you made, and `public/note-from-pilot`, the one file that a seat was allowed to make. What is gone: the terminals, the helpers, `BUILD` and the keys that were made for the seats. The example lives in one directory, so this removes all of it:

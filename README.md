@@ -51,53 +51,11 @@ What each term does is one entry of `host/binding.json`. What the loop does with
 
 ### Preview a Typify edit
 
-The optional `bin/workplace-preview` accepts a configuration checkout and one JSON request on standard input. It requires Python 3, the frame's planning dependencies and the Typify reader. Set `TYPIFY_PREVIEW_READER` to an absolute executable to select a reader explicitly. If `WORKPLACE_ROOT` is empty or unset, the preview treats the checkout's parent as the root. With an explicit root, the checkout must be at or below it and retains that relative position in the preview.
+The optional `bin/workplace-preview` shows what a proposed edit of the Typify source would change in a plan, without touching the plan, the build or any running session. [Preview a Typify edit](docs/preview.md) describes its input and its reply.
 
-```sh
-bin/workplace-preview "$WORKPLACE_CONFIG" <<'JSON'
-{"edits":[{"path":"programs/OFFICE[5]/COMMS.typify","content":null}]}
-JSON
-```
+### What a running workplace checks
 
-A string replaces or creates the entire UTF-8 file. A JSON null removes an existing file. Valid edit paths are unique, relative `.typify` paths in `programs/` or declared layers. An empty edit list compares two identical inputs. Only regular source files are admitted, and every file under `programs/` must use the `.typify` extension. Hidden entries, links in the source tree, and reserved `BUILD` and `PLAN` components are refused. The preview checks that the declared tmux configuration files exist and uses empty placeholders for them.
-
-The command stages a private copy, calls `workplace plan --no-inventory`, applies the proposed edits there and calls the same planner again. The flag skips the optional host-directory inventory. Both passes use the same synthetic root, reader and configuration path. The caller's plan, build, tmux sessions and source are left alone.
-
-The JSON reply reports `planChanged`, `viewChanged`, changed program paths and affected seats by address and name. Seat changes cover pane, room, start, directories, environment key names, filesystem rows and folded seat settings including reach. Filesystem rows describe declared access. Changes outside this projection can appear in the plan without a seat delta. An error reply names the failing stage and carries its diagnostic, and the command exits with status 1.
-
-An enforced seat's aliases cannot increase its host-file access. A bind through a
-symbolic link needs the same or greater permission at the resolved path's own
-name. A writable alias of a read-only path is refused. A parent alias must also
-cover each stricter descendant at the alias's destination; explicitly permitted
-children and read-only aliases of writable data remain usable. The check runs
-again at build, up, restart and each seat's exec. Private-key source files remain
-unshown even where an alias uses a different name. This is a check of declared
-paths and host metadata, not a scan of file contents.
-
-The check assumes stable paths and mounts between inspection and namespace
-creation. It does not identify hard links, separate host mounts of the same data
-or descriptors that another process already holds. The contract states the
-external host work on which a running view depends.
-
-Build seals each floor's configuration into its generation and publishes the
-enforced and unenforced frame settings in `BUILD/share/`. Startup reads the
-floor's configuration first and the frame's settings second. It rejects active
-hooks, malformed or blocking files, unexpected sessions, and shell expansions
-in enforced-floor options. Startup calls have a ten-second deadline. The carrier
-repairs changed transport settings and records a repair; `status` checks them
-without repairing them. Existing pane history below 5000 cannot be repaired and
-is refused. Higher history limits are preserved.
-
-Unenforced mailboxes are `MAILPATH/NAME/` links into the store; record views are
-`RECORDPATH/NAME/`. Their source files are reachable to ordinary processes of the
-same Unix user, so neither seat identity nor privacy is enforced on that floor.
-Shutdown leaves personal sessions and their default server running, removes its
-own run directory, and retains the frame's global settings and reserved marks.
-It stops a carrier unit only while the unit has the recorded invocation ID.
-Reusing that default server requires the same sealed floor configuration. If
-the file changed, `up` refuses without changing the server, since tmux would
-ignore the later client's `-f`. End that server yourself before loading the
-new configuration.
+[The checks of build, up, restart and exec](docs/running.md) cover how an alias of a path is checked, how a build is sealed, how a started workplace is checked and what a shutdown leaves.
 
 ## Needs
 

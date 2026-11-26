@@ -2,7 +2,7 @@
 
 The frame that applies a workplace's plan. tmux makes the sessions, windows and panes, and bubblewrap gives each seat the view its table declares.
 
-To plan a workplace from its Typify declarations, install the reader and put its `typify` launcher on your `PATH`. The [reader installation guide](https://github.com/CMZN-Consulting/typify/blob/v1.0.0-rc.1/mcp/README.md#run-locally) gives the Racket commands. Bun is needed only for the optional MCP server.
+To plan a workplace from its Typify declarations, install the reader and put its `typify` launcher on your `PATH`. The [reader installation guide](https://github.com/CMZN-Consulting/typify/blob/v1.0.0/docs/install.md) describes the release archives and how to verify them, and no Racket installation is needed. Bun is needed only for the optional MCP server.
 
 The [shared declaration layers](docs/declarations.md) cover room access, communication, recording and scoped SSH grants.
 

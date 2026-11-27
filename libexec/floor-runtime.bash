@@ -220,10 +220,12 @@ floor_client_mail_dirs() {
     warn "the client mailbox $destination must be its physical path"
     return 1
   fi
-  for dir in "$destination/client-in" "$destination/client-out" "$destination/client-answers" "${private_out%/*}/client-receipts"; do
+  for dir in "$destination/client-in" "$destination/client-sent" "$destination/client-out" "$destination/client-answers" "${private_out%/*}/client-receipts"; do
     if [[ $mode == make && ! -e $dir && ! -L $dir ]]; then
       mkdir -m 0700 -- "$dir" || return 1
     fi
+    # A build made before client-sent existed has none: up and recovery go on, and the next build makes it.
+    [[ $mode != make && $dir == "$destination/client-sent" && ! -e $dir && ! -L $dir ]] && continue
     if [[ ! -d $dir || -L $dir || $(stat -c '%u:%a:%d' -- "$dir") != "$EUID:700:$(stat -c %d -- "$private_out")" ]]; then
       warn "$dir must be this user's real directory, mode 700, on the carrier's file system"
       return 1

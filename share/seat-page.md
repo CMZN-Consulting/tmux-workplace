@@ -24,7 +24,7 @@ This directory is your mailbox. Enforced seats see their own mailbox. Unenforced
 
 - `in`: the mail delivered to you, one file for each. You cannot change it.
 - `out`: where you put a request.
-- `sent`: a copy of each mail of yours that was delivered.
+- `sent`: a copy of each mail of yours that was delivered, the same bytes as each reader's copy.
 - `answers`: the answer to each of your requests, under the request's own file name.
 
 ## Who wrote a mail
@@ -52,7 +52,7 @@ the body
 
 ## Sending from a client with a workspace-only command sandbox
 
-If your mailbox contains `client-in`, open delivered letters there by their ordinary delivery ID. Your floor’s carrier copies committed incoming mail into this directory, including mail delivered before it started. You can read the files from the workspace while the carrier’s private state stays hidden.
+If your mailbox contains `client-in`, open delivered letters there by their ordinary delivery ID. Your floor’s carrier copies committed incoming mail into this directory, including mail delivered before it started. You can read the files from the workspace while the carrier’s private state stays hidden. Beside it, `client-sent` holds the copy of each mail you sent, under its delivery ID, the same bytes as the reader's letter.
 
 If your mailbox contains real `client-out` and `client-answers` directories, you can send from there. Write the ordinary mail into a hidden draft, close it, hash the complete file and rename it in the same directory. Choose a new request name for each distinct letter. For example, from your visible mailbox, with the completed draft at `client-out/.draft`:
 

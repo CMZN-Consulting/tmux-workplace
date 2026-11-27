@@ -37,7 +37,29 @@ label="a selected reader without a prompt pattern has a pending notice"
 check notice_without_pattern
 label="the client publish and answer directories exist on the carrier filesystem"
 check floor_client_mail_dirs make "$mail_path/Finch" "$comms/Finch/out" "$taken"
-ln -s -- "$comms/Finch/out" "$mail_path/Finch/out" && ln -s -- "$store/Finch/in" "$mail_path/Finch/in" || exit 1
+label="the build makes client-sent beside client-in, a real directory of the user's with mode 700"
+check bash -c '[[ -d $1 && ! -L $1 && $(stat -c %u:%a "$1") == "$2:700" ]]' _ "$mail_path/Finch/client-sent" "$EUID"
+old_build() (
+  mv -T -- "$mail_path/Finch/client-sent" "$scratch/client-sent.away" || exit 1
+  floor_client_mail_dirs check "$mail_path/Finch" "$comms/Finch/out" "$taken" 2> /dev/null
+  status=$?
+  mv -T -- "$scratch/client-sent.away" "$mail_path/Finch/client-sent" || exit 1
+  exit "$status"
+)
+label="a build made before client-sent existed passes the check that up and recovery make"
+check old_build
+linked_sent() (
+  mv -T -- "$mail_path/Finch/client-sent" "$scratch/client-sent.away" || exit 1
+  ln -s -- "$scratch/client-sent.away" "$mail_path/Finch/client-sent" || exit 1
+  floor_client_mail_dirs check "$mail_path/Finch" "$comms/Finch/out" "$taken" 2> /dev/null
+  status=$?
+  rm -- "$mail_path/Finch/client-sent" && mv -T -- "$scratch/client-sent.away" "$mail_path/Finch/client-sent" || exit 1
+  ((status != 0))
+)
+label="a client-sent that is a link is refused by that check"
+check linked_sent
+ln -s -- "$comms/Finch/out" "$mail_path/Finch/out" && ln -s -- "$store/Finch/in" "$mail_path/Finch/in" \
+  && ln -s -- "$store/Finch/sent" "$mail_path/Finch/sent" && ln -s -- "$comms/Finch/answers" "$mail_path/Finch/answers" || exit 1
 outbox=$mail_path/Finch/client-out
 answers=$mail_path/Finch/client-answers
 turn() {
@@ -87,6 +109,58 @@ label="another payload under that logical name has a conflict receipt"
 check grep -q '^refused .*different contents' "$answers/$conflict"
 label="replays consume no counter"
 check test "$(< "$comms/next")" = 1
+label="the sender's client-sent holds its copy of the mail: the reader's in and the store's sent byte for byte, read-only, on an inode of its own"
+check bash -c 'cmp -s "$1" "$2" && cmp -s "$1" "$3" && [[ $(stat -c %a "$1") == 400 && ! $1 -ef $3 ]]' _ \
+  "$mail_path/Finch/client-sent/$id.md" "$store/Wren/in/$id.md" "$store/Finch/sent/$id.md"
+label="client-sent holds that mail and nothing else"
+check test "$(ls -A -- "$mail_path/Finch/client-sent")" = "$id.md"
+swapped_during_copy() (
+  local sent=$mail_path/Finch/client-sent decoy=$scratch/decoy
+  mkdir -p -- "$decoy"
+  rm -f -- "$sent/$id.md"
+  eval "$(declare -f carrier_git | sed '1s/^carrier_git/carrier_git_real/')"
+  carrier_git() {
+    if [[ $1 == cat-file && ! -L $sent ]]; then
+      mv -T -- "$sent" "$scratch/client-sent.real" && ln -s -- "$decoy" "$sent" || return 1
+    fi
+    carrier_git_real "$@"
+  }
+  carrier_copy_inbox Finch "$sent" sent
+  local status=$?
+  rm -- "$sent" && mv -T -- "$scratch/client-sent.real" "$sent" || exit 1
+  [[ $status == 0 && -z $(ls -A -- "$decoy") && -f $sent/$id.md ]] && cmp -s -- "$sent/$id.md" "$store/Finch/sent/$id.md"
+)
+label="a client-sent swapped for a link after its checks gets the copy in the directory that was checked, and the link's target gets nothing"
+check swapped_during_copy
+fifo_during_copy() (
+  local sent=$mail_path/Finch/client-sent
+  stat() {
+    if [[ $1 == -c && $2 == %u:%a:%h && $4 == */$id.md ]]; then
+      command stat "$@"
+      local status=$?
+      rm -f -- "$4" && mkfifo -m 0600 -- "$4"
+      return "$status"
+    fi
+    command stat "$@"
+  }
+  carrier_copy_inbox Finch "$sent" sent
+)
+fifo_during_copy &
+copier=$!
+for n in {1..50}; do
+  kill -0 "$copier" 2> /dev/null || break
+  sleep 0.2
+done
+if kill -0 "$copier" 2> /dev/null; then
+  kill "$copier"
+  timeout 2 bash -c ': > "$1"' _ "$mail_path/Finch/client-sent/$id.md"
+  copied=hung
+else
+  wait "$copier"
+  copied=$?
+fi
+label="a fifo put in place of a published copy between its check and its read blocks nothing: the copy is published again"
+check bash -c '[[ $1 == 0 && -f $2 && ! -p $2 && $(stat -c %a "$2") == 400 ]] && cmp -s "$2" "$3"' _ "$copied" "$mail_path/Finch/client-sent/$id.md" "$store/Finch/sent/$id.md"
 letter Wren remainder > "$outbox/.full"
 incomplete=incomplete.$(sha_of "$outbox/.full").md
 printf 'to: Wren\nsubject: synthetic mail\n---\n' > "$outbox/$incomplete"
@@ -129,10 +203,17 @@ check bash -c '[[ $(stat -c %a "$1") == 400 && ! $1 -ef $2 ]] && cmp -s "$1" "$2
 uncommitted=20260101T000000Z-999999.md
 printf 'unfinished\n' > "$store/Finch/in/$uncommitted"
 rm -- "$mail_path/Finch/client-in/$incoming.md"
+printf 'unfinished\n' > "$store/Finch/sent/$uncommitted"
+rm -- "$mail_path/Finch/client-sent/$id.md"
+printf 'stale\n' > "$mail_path/Finch/client-sent/20260101T000000Z-999998.md"
 carrier_index_load "$index"
 turn 0
 label="a fresh carrier backfills existing committed mail and ignores an unfinished delivery"
 check client 'test -s "client-in/$1.md" && test ! -e "client-in/$2"' _ "$incoming" "$uncommitted"
+read -r _ visible < "$mail_path/Finch/client-answers/visible".*.md
+label="the client reads both of its sent mails in client-sent, with its private sent absent, and no unfinished or stale one"
+check client 'set -e; test -L sent; test ! -e sent; test "$(ls client-sent | tr "\n" " ")" = "$1.md $2.md "; grep -Fxq first "client-sent/$1.md"; grep -Fxq client "client-sent/$2.md"; grep -Fxq "from: Finch" "client-sent/$2.md"' \
+  _ "$id" "$visible"
 label="the client reads its receipt in the same restricted view"
 check client 'grep -q "^ok " client-answers/visible.*.md'
 recover() {
@@ -396,3 +477,4 @@ label="an explicit screen route verifies early reads, recovers once and removes 
 check read_before_pointer screen-pattern
 label="a pending-only seat can settle a delivery on a floor without any screen pattern"
 check read_before_pointer pending
+

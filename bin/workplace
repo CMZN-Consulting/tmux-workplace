@@ -3788,12 +3788,29 @@ carrier_destination() (
   printf '%s\n' "$context"
 )
 
+# Publishes the committed files of the store's $box/$part, in or sent, into a client endpoint's directory, each a
+# read-only file of its own, and removes there what no commit holds. The directory is opened once and checked through
+# that descriptor, and every later step works through it, so a seat that swaps the name for a link after the checks
+# moves and removes nothing elsewhere.
 carrier_copy_inbox() {
-  local box=$1 directory=$2 head tree listing="" object name tmp entry mode kind
+  local box=$1 directory=$2 part=${3:-in} dfd result=1
+  [[ $part == in || $part == sent ]] || return 1
+  [[ -d $directory && ! -L $directory && $(realpath -e -- "$directory") == "$directory" ]] || return 1
+  exec {dfd}< "$directory" || return 1
+  if [[ $(readlink -- "/proc/self/fd/$dfd") == "$directory" && $(stat -L -c '%u:%a:%F' -- "/proc/self/fd/$dfd") == "$EUID:700:directory" ]]; then
+    carrier_copy_entries "$box" "/proc/self/fd/$dfd" "$part"
+    result=$?
+  fi
+  exec {dfd}<&-
+  return "$result"
+}
+
+# The published copy is read without following a link and without blocking, so a fifo put in its place stops nothing.
+carrier_copy_entries() {
+  local box=$1 d=$2 part=$3 head tree listing="" object name tmp entry mode kind
   local -A committed=()
-  [[ -d $directory && $(realpath -e -- "$directory") == "$directory" && $(stat -c '%u:%a' -- "$directory") == "$EUID:700" ]] || return 1
   if head=$(carrier_git rev-parse --verify --quiet HEAD); then
-    tree=$(carrier_git ls-tree "$head" -- "$box/in") || return 1
+    tree=$(carrier_git ls-tree "$head" -- "$box/$part") || return 1
     if [[ -n $tree ]]; then
       IFS=' ' read -r mode kind object <<< "${tree%%$'\t'*}"
       [[ $mode == 040000 && $kind == tree ]] || return 1
@@ -3809,30 +3826,39 @@ carrier_copy_inbox() {
     name=${entry#*$'\t'}
     [[ $mode == 100644 && $kind == blob && $name =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]{6,}\.md$ ]] || return 1
     committed[$name]=1
-    if [[ -f $directory/$name && ! -L $directory/$name && -f $store/$box/in/$name && ! -L $store/$box/in/$name && $(stat -c '%u:%a:%h' -- "$directory/$name") == "$EUID:400:1" ]] &&
-       cmp -s -- "$directory/$name" "$store/$box/in/$name"; then continue; fi
-    tmp=$(mktemp -- "$taken/.client-in.XXXXXXXX") || return 1
-    if ! carrier_git cat-file blob "$object" > "$tmp" || ! chmod 0400 -- "$tmp" || ! mv --no-copy -fT -- "$tmp" "$directory/$name"; then
+    if [[ -f $d/$name && ! -L $d/$name && -f $store/$box/$part/$name && ! -L $store/$box/$part/$name && $(stat -c '%u:%a:%h' -- "$d/$name") == "$EUID:400:1" ]] &&
+      dd if="$d/$name" bs=$(( 2 * MAIL_LIMIT )) count=1 iflag=fullblock,nofollow,nonblock status=none 2> /dev/null | cmp -s -- - "$store/$box/$part/$name"; then
+      continue
+    fi
+    tmp=$(mktemp -- "$taken/.client-$part.XXXXXXXX") || return 1
+    if ! carrier_git cat-file blob "$object" > "$tmp" || ! chmod 0400 -- "$tmp" || ! mv --no-copy -fT -- "$tmp" "$d/$name"; then
       rm -f -- "$tmp"
       return 1
     fi
   done <<< "$listing"
-  for entry in "$directory"/*.md; do
+  for entry in "$d"/*.md; do
     name=${entry##*/}
     [[ $name =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]{6,}\.md$ && -z ${committed[$name]+x} ]] || continue
     rm -f -- "$entry" || return 1
   done
 }
 
+# A client endpoint's client-in shows the mail delivered to it, and its client-sent the copy of each mail it sent, the
+# same bytes as each reader's in.
 carrier_refresh_inbox() {
-  local i=$1 box=${seat_boxes[$1]} directory=${seat_endpoint[$1]}/client-in stamp result=0
-  stamp=$(stat -c '%d:%i:%y:%z' -- "$store/$box/in" "$directory") || return 1
-  [[ ${inbox_stamps[i]-} != "$stamp" ]] || return 0
-  carrier_hold || return 0
-  if carrier_copy_inbox "$box" "$directory"; then
-    inbox_stamps[i]=$(stat -c '%d:%i:%y:%z' -- "$store/$box/in" "$directory") || result=1
-  else result=1; fi
-  carrier_release
+  local i=$1 box=${seat_boxes[$1]} part directory stamp result=0
+  for part in in sent; do
+    directory=${seat_endpoint[i]}/client-$part
+    stamp=$(stat -c '%d:%i:%y:%z' -- "$store/$box/$part" "$directory") || { result=1; continue; }
+    if [[ $part == in ]]; then [[ ${inbox_stamps[i]-} != "$stamp" ]] || continue
+    else [[ ${sent_stamps[i]-} != "$stamp" ]] || continue; fi
+    carrier_hold || return "$result"
+    if carrier_copy_inbox "$box" "$directory" "$part"; then
+      if [[ $part == in ]]; then inbox_stamps[i]=$(stat -c '%d:%i:%y:%z' -- "$store/$box/$part" "$directory") || result=1
+      else sent_stamps[i]=$(stat -c '%d:%i:%y:%z' -- "$store/$box/$part" "$directory") || result=1; fi
+    else result=1; fi
+    carrier_release
+  done
   return "$result"
 }
 
@@ -3843,7 +3869,7 @@ carrier_serve_turn() {
   if [[ -n $endpoint ]]; then
     if carrier_refresh_inbox "$i"; then inbox_faults[i]=0
     elif [[ ${inbox_faults[i]-0} == 0 ]]; then
-      warn "the committed inbox for ${seat_names[i]} could not be refreshed at $endpoint/client-in; the carrier will retry"
+      warn "the committed inbox or sent copies for ${seat_names[i]} could not be refreshed at $endpoint/client-in or client-sent; the carrier will retry"
       inbox_faults[i]=1
     fi
   fi
@@ -5028,7 +5054,7 @@ cmd_record_links_end() {
 carrier_index_load() {
   local index=$1 entry i
   seat_names=() seat_boxes=() seat_out=() seat_answers=() seat_reach=() seat_keys=() seat_pane=() seat_wake=() seat_number=() seat_own=() seat_fl=()
-  own=() wake_any=0 seat_pending=() seat_notice=() read_receipt_stamps=() seat_endpoint=() seat_client_panes=() inbox_stamps=() inbox_faults=()
+  own=() wake_any=0 seat_pending=() seat_notice=() read_receipt_stamps=() seat_endpoint=() seat_client_panes=() inbox_stamps=() sent_stamps=() inbox_faults=()
   local mail_root
   mail_root=$(jq -r '.path' <<< "$index") || return 1
   while IFS= read -r entry; do

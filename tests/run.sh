@@ -7653,6 +7653,216 @@ t_unbuild_keys() {
   mv -- "$scratch/PLAN" "$clone/PLAN"
 }
 
+# C134: a command that changes the workplace does the same work, and ends with the same status, whether or not its
+# output can be written. Each of these runs the workplace with its standard output and standard error into a pipe whose
+# reader has gone, and keeps the workplace's own status in closed_status: reader_takes_a_line reads the first line and
+# goes, as `| head -n 1` does; reader_gone opens the pipe and closes its only reader before the workplace starts, so
+# that its first write fails, whatever the timing.
+reader_takes_a_line() {
+  "$@" 2>&1 | head -n 1 > /dev/null
+  closed_status=${PIPESTATUS[0]}
+}
+reader_gone() {
+  local fifo=$scratch/reader-gone reader writer
+  rm -f -- "$fifo"
+  mkfifo -m 0600 -- "$fifo" || return 1
+  exec {reader}<> "$fifo"
+  exec {writer}> "$fifo"
+  exec {reader}<&-
+  "$@" >&"$writer" 2>&"$writer" {writer}>&-
+  closed_status=$?
+  exec {writer}>&-
+  rm -f -- "$fifo"
+}
+sums_of() { (cd -- "$1" && find . ! -type d -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum); }
+
+t_plan_with_its_reader_gone() {
+  scoped_clone
+  statements_plan
+  local planned way
+  mkdir -m 0700 -- "$scratch/tmp"
+  check "[C134] plan, its output read" exit_is 0 env TMPDIR="$scratch/tmp" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+  check "[C134] it leaves no work directory" test -z "$(ls -A -- "$scratch/tmp")"
+  planned=$(sums_of "$clone/PLAN")
+  for way in reader_takes_a_line reader_gone; do
+    rm -rf -- "$clone/PLAN"
+    "$way" env TMPDIR="$scratch/tmp" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan
+    check "[C134] plan with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    check "[C134] and writes PLAN/ byte for byte as it does with its output read" test "$(sums_of "$clone/PLAN")" = "$planned"
+    check "[C134] and leaves no work directory" test -z "$(ls -A -- "$scratch/tmp")"
+  done
+  reader_gone env TMPDIR="$scratch/tmp" PATH="$STUB_DIR/bin:$PATH" "$BASH" "$loop" plan --inventory
+  check "[C134] plan with a flag it does not take, its output gone, exits 2, as it does with its output read (it exited $closed_status)" \
+    test "$closed_status" = 2
+}
+
+t_build_with_its_reader_gone() {
+  make_plan
+  local built way
+  check "[C134] build, its output read" exit_is 0 wp build
+  built=$(sums_of "$clone/BUILD")
+  for way in reader_takes_a_line reader_gone; do
+    rm -rf -- "$clone/BUILD"
+    "$way" wp build
+    check "[C134] build with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    check "[C134] and writes BUILD byte for byte as it does with its output read" test "$(sums_of "$clone/BUILD")" = "$built"
+  done
+  reader_gone wp build
+  check "[C134] build while BUILD stands, its output gone, refuses with exit 1, as it does with its output read (it exited $closed_status)" \
+    test "$closed_status" = 1
+  check "[C134] and leaves BUILD as it was" test "$(sums_of "$clone/BUILD")" = "$built"
+  # The refusal of a path prints its faults with printf before any say or warn.
+  make_plan '.programs[6].plan[1].term[4] = "harbor//dock"'
+  check "[C134] build of a plan with a path it refuses, its output read, exits 1" exit_is 1 wp build
+  reader_gone wp build
+  check "[C134] and with its output gone, exits 1 as well (it exited $closed_status)" test "$closed_status" = 1
+  check "[C134] and leaves no BUILD" test ! -e "$clone/BUILD"
+}
+
+t_up_with_its_reader_gone() {
+  make_plan
+  local way
+  check "build" exit_is 0 wp build
+  check "[C134] up, its output read" exit_is 0 wp up
+  check "[C134] the workplace is whole: status exits 0" exit_is 0 wp status
+  check "down" exit_is 0 wp down
+  for way in reader_takes_a_line reader_gone; do
+    "$way" wp up
+    check "[C134] up with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    check "[C134] and the workplace is whole: status exits 0" exit_is 0 wp status
+    check "[C134] with five seats and no other pane" test "$(T list-panes -a -F x | wc -l)" = 5
+    check "down" exit_is 0 wp down
+  done
+  reader_gone wp up now
+  check "[C134] up with an argument, its output gone, refuses with exit 2, as it does with its output read (it exited $closed_status)" \
+    test "$closed_status" = 2
+}
+
+t_restart_with_its_reader_gone() {
+  local s way pane n=0
+  check "build and up" up_fixture
+  s=$(state_of)
+  for way in exit_is reader_takes_a_line reader_gone; do
+    check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+    pane=$(pane_by_title "Harbor Keeper")
+    T send-keys -t "$pane" C-c
+    check "keeper's program ends" eventually_long dead_pane "Harbor Keeper"
+    if [[ $way == exit_is ]]; then
+      check "[C134] restart, its output read" exit_is 0 wp restart "Harbor Keeper"
+    else
+      "$way" wp restart "Harbor Keeper"
+      check "[C134] restart with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    fi
+    n=$((n + 1))
+    check "[C134] keeper runs again" eventually live_pane "Harbor Keeper"
+    check "[C134] in the same pane" test "$(pane_by_title "Harbor Keeper")" = "$pane"
+    check "[C134] and restart recorded who asked, $n times in all" test "$(grep -c '' "$s/restarts")" = "$n"
+  done
+  check "keeper ran" wait_for_probe "Harbor Keeper" keeper
+  reader_gone wp restart Ghost
+  check "[C134] restart of a seat it does not know, its output gone, refuses with exit 2, as it does with its output read (it exited $closed_status)" \
+    test "$closed_status" = 2
+  check "down" exit_is 0 wp down
+}
+
+t_down_with_its_reader_gone() {
+  local way
+  check "build and up" up_fixture
+  check "[C134] down, its output read" exit_is 0 wp down
+  check "[C134] nothing of the workplace is left" no_server
+  check "[C134] and RUN is gone" test ! -e "$run"
+  for way in reader_takes_a_line reader_gone; do
+    check "up" exit_is 0 wp up
+    "$way" wp down
+    check "[C134] down with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    check "[C134] nothing of the workplace is left" no_server
+    check "[C134] and RUN is gone" test ! -e "$run"
+  done
+  reader_gone wp down now
+  check "[C134] down with an argument, its output gone, refuses with exit 2, as it does with its output read (it exited $closed_status)" \
+    test "$closed_status" = 2
+}
+
+t_unbuild_with_its_reader_gone() {
+  local program
+  for program in gpg gpg-agent gpgconf ssh-keygen ssh-add setsid base64; do
+    command -v "$program" > /dev/null || {
+      skip "[C134] $program is not on PATH here, so no key home is made for unbuild to remove"; return
+    }
+  done
+  scoped_clone
+  local s way
+  s=$(state_of)
+  statements_plan "$key_terms"
+  check "plan" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  check "[C134] the build made key homes" test -d "$s/keys"
+  check "[C134] unbuild, its output read" exit_is 0 wp unbuild
+  check "[C134] BUILD and the key homes are gone" test ! -e "$clone/BUILD" -a ! -e "$s/keys"
+  for way in reader_takes_a_line reader_gone; do
+    check "build again" exit_is 0 wp build
+    check "[C134] the build made key homes" test -d "$s/keys"
+    "$way" wp unbuild
+    check "[C134] unbuild with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    check "[C134] BUILD and the key homes are gone" test ! -e "$clone/BUILD" -a ! -e "$s/keys"
+  done
+  reader_gone wp unbuild now
+  check "[C134] unbuild with an argument, its output gone, refuses with exit 2, as it does with its output read (it exited $closed_status)" \
+    test "$closed_status" = 2
+}
+
+# A program the frame starts takes SIGPIPE's default disposition (C134): bit 13 of the mask it ignores is clear.
+sigpipe_default() {
+  local mask
+  mask=$(sed -n 's/^SigIgn:[[:space:]]*//p' "/proc/$1/status" 2> /dev/null) && [[ -n $mask ]] && (((16#$mask & 16#1000) == 0))
+}
+
+# With floors, up and restart do their work in a second process, generation-run, which holds the generations lock
+# (C117), and down takes the floor's own lock. The floor's mail gives it a carrier, which up starts.
+t_a_floor_with_its_reader_gone() {
+  scoped_clone
+  floors_clone
+  mkdir -p -- "$root/mailbox"
+  statements_plan "$floors_terms | $comms_terms"
+  check "plan of three floors" exit_is 0 wplan
+  check "build" exit_is 0 wp build
+  local s way pane n=0
+  s=$(state_of)
+  for way in exit_is reader_takes_a_line reader_gone; do
+    if [[ $way == exit_is ]]; then
+      check "[C134] up deck, its output read" exit_is 0 wp up deck
+    else
+      "$way" wp up deck
+      check "[C134] up deck with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    fi
+    check "[C134] and the floor is whole: status deck exits 0" exit_is 0 wp status deck
+    check "[C134] the carrier that up started takes SIGPIPE's default" sigpipe_default "$(carrier_pid deck)"
+    check "keeper ran" on deck wait_for_probe "Harbor Keeper" keeper
+    pane=$(on deck pane_by_title "Harbor Keeper")
+    on deck T send-keys -t "$pane" C-c
+    check "keeper's program ends" eventually_long on deck dead_pane "Harbor Keeper"
+    if [[ $way == exit_is ]]; then
+      check "[C134] restart deck, its output read" exit_is 0 wp restart deck "Harbor Keeper"
+    else
+      "$way" wp restart deck "Harbor Keeper"
+      check "[C134] restart deck with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    fi
+    n=$((n + 1))
+    check "[C134] keeper runs again" eventually on deck live_pane "Harbor Keeper"
+    check "[C134] and the floor's restart record names who asked, $n times in all" test "$(grep -c '' "$s/floors/deck/restarts")" = "$n"
+    if [[ $way == exit_is ]]; then
+      check "[C134] down deck, its output read" exit_is 0 wp down deck
+    else
+      "$way" wp down deck
+      check "[C134] down deck with $way exits 0, as it does with its output read (it exited $closed_status)" test "$closed_status" = 0
+    fi
+    check "[C134] and RUN/deck is gone" test ! -e "$run/deck"
+  done
+  reader_gone wp up deck now
+  check "[C134] up deck with a second argument, its output gone, refuses with exit 2, as it does with its output read (it exited $closed_status)" \
+    test "$closed_status" = 2
+}
+
 t_records_by_day() {
   local fake=$scratch/fake-date d
   mkdir -p -- "$fake"
@@ -8044,6 +8254,13 @@ tests=(
   t_records_by_day
   t_restart
   t_unbuild_keys
+  t_plan_with_its_reader_gone
+  t_build_with_its_reader_gone
+  t_up_with_its_reader_gone
+  t_restart_with_its_reader_gone
+  t_down_with_its_reader_gone
+  t_unbuild_with_its_reader_gone
+  t_a_floor_with_its_reader_gone
   t_the_runtime_directory
   t_source_and_contract
 )

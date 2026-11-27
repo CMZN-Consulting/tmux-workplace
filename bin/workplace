@@ -35,8 +35,28 @@ VERIFY_MARGIN=600
 MAIL_LIMIT=256000
 TEXT_LIMIT=4096
 
-say() { printf '%s\n' "$*"; }
-warn() { printf '%s\n' "workplace: $*" >&2; }
+# plan, build, up, restart, down and unbuild end as their work decides, whether or not their standard output and
+# standard error can be written (C134). For them SIGPIPE runs a handler, so that a write to a pipe whose reader has gone
+# fails and returns rather than ending the shell; a program the shell starts takes the signal's default again, as it
+# always has. A subshell takes the default too, so say and warn set the handler again where they run, and drop a line
+# they cannot write, with its error.
+outlive_closed_output=""
+say() {
+  if [[ -n $outlive_closed_output ]]; then
+    trap : PIPE
+    printf '%s\n' "$*" 2> /dev/null
+    return 0
+  fi
+  printf '%s\n' "$*"
+}
+warn() {
+  if [[ -n $outlive_closed_output ]]; then
+    trap : PIPE
+    printf '%s\n' "workplace: $*" >&2
+    return 0
+  fi
+  printf '%s\n' "workplace: $*" >&2
+}
 die() { warn "$1"; exit "${2:-1}"; }
 
 source_dir=${BASH_SOURCE[0]}
@@ -1008,7 +1028,7 @@ held_by_nobody() {
   done
   (( ${#found[@]} )) || return 0
   say "held by nobody, a report and no part of the plan:"
-  printf '  %s\n' "${found[@]}"
+  for path in "${found[@]}"; do say "  $path"; done
 }
 
 cmd_plan() {
@@ -6318,6 +6338,13 @@ usage() {
 (( $# )) || { usage >&2; exit 2; }
 command=$1
 shift
+# generation-run is the process in which up and restart do their work under the generations lock (C117).
+case $command in
+  plan | build | unbuild | restart | up | generation-run | down)
+    outlive_closed_output=1
+    trap : PIPE
+    ;;
+esac
 case $command in
   plan) cmd_plan "$@" ;;
   build) cmd_build "$@" ;;

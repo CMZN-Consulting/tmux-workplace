@@ -636,6 +636,15 @@
 
 - **C133.** The pointer throttle's persisted integer epoch second is sampled at settlement, after typing and recording its verdict, rather than taken from the journal's earlier start. A slow send therefore does not consume its own cooldown. The native wake fixture may delay its first pointer client by a bounded 1.5 seconds and still requires at least 60 seconds between the two UTC pointer records, printing their actual timestamps. The same settlement rule applies to uncertain or refused attempts. The journal retains its original start for recovery; the existing gate, ids and record format are preserved.
 
+## When the output cannot be written
+
+- **C134.** `plan`, `build`, `up`, `restart`, `down` and `unbuild` do the same work, and end with the same exit status, whether or not their standard output and standard error can be written. Their output reports the work and never decides it.
+  - A write to a pipe whose reader has gone ends neither the command nor any step of its work. The line is dropped, and every other line is written as it would be.
+  - The status is the work's own: never 0 and never 141 because of the output.
+  - Where the output can be written, they print the same bytes in the same order.
+  - The frame catches SIGPIPE in its own shell, and again in each subshell that prints. Every program it starts takes the signal's default, so the server, the carrier and the agents that `up` starts are as they would be.
+  - `status`, `why`, `doctor` and `record verify` change nothing, and may end at a closed pipe.
+
 ## Client mail
 
 An opted-in, unenforced seat reads its committed incoming letters at `client-in/ID.md` beneath its workspace mailbox, and the copy of each letter it sent at `client-sent/ID.md`, the same bytes as each reader's `in/ID.md` (C59). Its floor’s carrier rebuilds these views after restart and refreshes them when deliveries arrive. Each complete letter is published by rename as a separate file with mode 0400. The carrier opens each of the two directories once and works through that descriptor, and reads a published copy without following a link or blocking, so that a seat which swaps a name in its workspace moves nothing elsewhere and stops nothing. A build made before `client-sent` existed has none; up and recovery go on, and the next build makes it. The private Git store remains the delivery record.

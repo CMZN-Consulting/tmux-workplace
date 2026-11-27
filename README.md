@@ -296,6 +296,10 @@ The [shared declaration layers](docs/declarations.md) cover room access, communi
 
 The optional `bin/workplace-preview` shows what a proposed edit of the Typify source would change in a plan, without touching the plan, the build or any running session. [Preview a Typify edit](docs/preview.md) describes its input and its reply.
 
+### Send a mail from a seat
+
+The optional `bin/workplace-mail` sends one mail from a seat's mailbox, run by the seat itself. It writes the head from its arguments: `--no-reply` writes `reply: none`, and each `--attach PATH` writes the file's SHA-256, size and absolute path, read from the file. It puts the request in `out`, or `client-out` for a client endpoint, and waits for the answer. `workplace-mail --help` lists its arguments.
+
 ### What a running workplace checks
 
 [The checks of build, up, restart and exec](docs/running.md) cover how an alias of a path is checked, how a build is sealed, how a started workplace is checked and what a shutdown leaves.

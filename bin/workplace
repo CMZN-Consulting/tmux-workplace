@@ -4077,7 +4077,7 @@ carrier_verdict() {
   def refuse($why; $targets): {ok: false, reason: $why, targets: $targets};
   . as $all
   | ($all | split("\n")) as $lines
-  | ({"mail": ["to", "subject", "cc", "re", "reply", "from", "id", "at"], "grab": ["seat", "lines"], "write": ["seat", "key"]}[$kind]) as $known
+  | ({"mail": ["to", "subject", "cc", "re", "reply", "attach", "from", "id", "at"], "grab": ["seat", "lines"], "write": ["seat", "key"]}[$kind]) as $known
   | ($lines | index("---")) as $dash
   | (if $kind == "grab" then (if ($all | endswith("\n")) then $lines[:-1] else $lines end)
      elif $dash == null then $lines else $lines[:$dash] end) as $head
@@ -4092,10 +4092,14 @@ carrier_verdict() {
       refuse("line \([$parsed[] | select(.m == null or (.m.word as $w | $known | index([$w]) | not))][0].n) of its head is not one that the head of a \($kind) may hold"; $targets)
     elif any($parsed[]; .line | bad(true)) then
       refuse("line \([$parsed[] | select(.line | bad(true))][0].n) of its head holds a control character, a character that moves or breaks a line, or bytes that are not UTF-8"; $targets)
-    elif ([$parsed[].m.word] | length) != ([$parsed[].m.word] | unique | length) then
-      refuse("its head holds two \([$parsed[].m.word] | group_by(.) | map(select(length > 1))[0][0]) lines"; $targets)
+    elif ([$parsed[].m.word | select(. != "attach")] | length) != ([$parsed[].m.word | select(. != "attach")] | unique | length) then
+      refuse("its head holds two \([$parsed[].m.word | select(. != "attach")] | group_by(.) | map(select(length > 1))[0][0]) lines"; $targets)
     elif $kind == "mail" then
-      if ($v.to // "") == "" then refuse("its head names no reader in to"; $targets)
+      # An attach line, which a head may hold more than once, is checked for its form alone: no file is opened.
+      ([$parsed[] | select(.m.word == "attach" and ((.m.value // "") | test("^[0-9a-f]{64} (0|[1-9][0-9]{0,19}) /") | not))][0]) as $attach
+      | if $attach != null then
+        refuse("line \($attach.n) of its head is an attach line that is not a SHA-256 of 64 lowercase hex digits, a size in bytes and an absolute path, one space apart"; $targets)
+      elif ($v.to // "") == "" then refuse("its head names no reader in to"; $targets)
       elif ($v.subject // "") == "" then refuse("its head has no subject"; $targets)
       else
         [["to", "cc"][] as $w | ($v[$w] // "") | select(. != "") | split(",") | to_entries[]

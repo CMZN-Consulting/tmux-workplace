@@ -478,3 +478,150 @@ check read_before_pointer screen-pattern
 label="a pending-only seat can settle a delivery on a floor without any screen pattern"
 check read_before_pointer pending
 
+# The mail program writes the head itself: an attach line for each file with its SHA-256, its size in bytes and its
+# absolute path, and reply: none for a mail that owes no reply. The carrier checks an attach line's form alone.
+program=$tool/bin/workplace-mail
+serve_until() {
+  local n
+  for n in 1 2 3 4 5; do
+    [[ -s $2 ]] && return 0
+    sleep 1.05
+    turn "$1" || :
+  done
+  [[ -s $2 ]]
+}
+verdict_of() {
+  printf '%s\n' "$@" > "$scratch/verdict-mail"
+  carrier_verdict mail Wren '{"mail":["Finch"]}' "$scratch/verdict-mail"
+}
+hex=$(printf 'ab%.0s' {1..32})
+label="the carrier takes two attach lines in one head and keeps each as written"
+check bash -c 'jq -e --arg a "$1" --arg b "$2" ".ok == true and .keep == [\"to: Finch\", \"subject: s\", \$a, \$b]" <<< "$3"' _ \
+  "attach: $hex 0 /a" "attach: $hex 1234 /a path/with spaces.md" "$(verdict_of "to: Finch" "subject: s" "attach: $hex 0 /a" "attach: $hex 1234 /a path/with spaces.md" --- body)"
+attach_refusal="line 3 of its head is an attach line that is not a SHA-256 of 64 lowercase hex digits, a size in bytes and an absolute path, one space apart"
+for bad in "attach: ${hex^^} 1 /x" "attach: ${hex:1} 1 /x" "attach: $hex 01 /x" "attach: $hex 1 x" "attach: $hex  1 /x" "attach: $hex 1" "attach:"; do
+  label="the carrier refuses the attach line \"$bad\" and the mail goes to none"
+  check bash -c 'jq -e --arg r "$1" ".ok == false and .reason == \$r" <<< "$2"' _ "$attach_refusal" "$(verdict_of "to: Finch" "subject: s" "$bad" --- body)"
+done
+mkdir -p -- "$scratch/files"
+printf 'a made-up report\n' > "$scratch/files/report.md"
+printf 'second\0file, with a NUL\n' > "$scratch/files/the other file.bin"
+printf 'the body\nof the mail, with no newline at the end' > "$scratch/files/body"
+expect_attach() { printf 'attach: %s %s %s\n' "$(sha256sum < "$1" | cut -d ' ' -f 1)" "$(wc -c < "$1")" "$(realpath -e -- "$1")"; }
+before=$(ls -A -- "$comms/Wren/out")
+"$program" --box "$comms/Wren" --to Finch --subject s --reply x --no-reply < /dev/null 2> /dev/null
+rc=$?
+label="the program refuses --reply beside --no-reply with exit 2 and puts nothing in out"
+check test "$rc|$(ls -A -- "$comms/Wren/out")" = "2|$before"
+"$program" --box "$comms/Wren" --to Finch --subject "the report" --re 20260101T000000Z-000001 --no-reply \
+  --attach "$scratch/files/report.md" --attach "$scratch/files/the other file.bin" --name report --wait 0 \
+  < "$scratch/files/body" > "$scratch/program-out"
+rc=$?
+label="with --wait 0 the program puts its request in out under its name and exits 0"
+check test "$rc|$(< "$scratch/program-out")" = "0|$comms/Wren/out/report.md"
+serve_until 1 "$comms/Wren/answers/report.md"
+label="the carrier delivers the program's mail"
+check grep -Eq '^ok [0-9]{8}T[0-9]{6}Z-[0-9]{6}$' "$comms/Wren/answers/report.md"
+read -r _ rid < "$comms/Wren/answers/report.md"
+{
+  printf '%s\n' "id: $rid" "$(sed -n 2p "$store/Finch/in/$rid.md")" "from: Wren" "to: Finch" "subject: the report" \
+    "re: 20260101T000000Z-000001" "reply: none"
+  expect_attach "$scratch/files/report.md"
+  expect_attach "$scratch/files/the other file.bin"
+  printf '%s\n' ---
+  cat -- "$scratch/files/body"
+} > "$scratch/report-wanted"
+label="the delivered head says reply: none and holds an attach line for each file, its SHA-256, size in bytes and absolute path; the body is byte for byte"
+check cmp -s "$scratch/report-wanted" "$store/Finch/in/$rid.md"
+label="the writer's sent holds the same bytes as the reader's in"
+check cmp -s "$store/Finch/in/$rid.md" "$store/Wren/sent/$rid.md"
+printf 'waited for\n' | "$program" --box "$comms/Wren" --to Finch --subject waits --reply needed --name waited --wait 20 > "$scratch/waited-out" 2>&1 &
+waiter=$!
+serve_until 1 "$comms/Wren/answers/waited.md"
+wait "$waiter"
+rc=$?
+label="the program waits for the carrier's answer and prints it, with exit 0"
+check bash -c '[[ $1 == 0 && $(< "$2") =~ ^ok\ [0-9]{8}T[0-9]{6}Z-[0-9]{6}$ ]]' _ "$rc" "$scratch/waited-out"
+read -r _ wid < "$comms/Wren/answers/waited.md"
+label="--reply writes its text as given"
+check grep -Fxq 'reply: needed' "$store/Finch/in/$wid.md"
+printf 'late\n' | "$program" --box "$comms/Wren" --to Finch --subject late --name late --wait 1 2> "$scratch/late-err"
+rc=$?
+label="with no answer in time the program exits 3, says where the request waits, and the request stands"
+check bash -c '[[ $1 == 3 && -f $2/out/late.md ]] && grep -Fq "the request waits at $2/out/late.md" "$3"' _ "$rc" "$comms/Wren" "$scratch/late-err"
+serve_until 1 "$comms/Wren/answers/late.md"
+client_program() {
+  bwrap --unshare-all --die-with-parent --ro-bind /usr /usr --symlink usr/lib64 /lib64 --symlink usr/lib /lib \
+    --dir /workspace --bind "$mail_path/Finch" /workspace/Finch --ro-bind "$program" /tools/workplace-mail \
+    --chdir /workspace/Finch --clearenv --setenv PATH /usr/bin /usr/bin/bash -c "$@"
+}
+before=$(ls -A -- "$outbox")
+client_program 'printf "x\n" | /tools/workplace-mail --to Wren --subject s --attach "$1" --wait 0' _ "$store/Finch/sent/$id.md" 2> "$scratch/unseen-err"
+rc=$?
+label="in the client's view the program cannot attach a file the seat cannot see, exits 2 and puts nothing in client-out"
+check bash -c '[[ $1 == 2 && $2 == "$3" ]] && grep -Fq "cannot find" "$4"' _ "$rc" "$before" "$(ls -A -- "$outbox")" "$scratch/unseen-err"
+client_program 'printf "notes of the client\n" > notes.md && printf "the client body\n" | /tools/workplace-mail --to Wren --subject "from the client" --no-reply --attach notes.md --name clientmail --wait 0' \
+  > "$scratch/client-out"
+rc=$?
+name=$(< "$scratch/client-out")
+name=${name##*/}
+label="in the client's view the program publishes NAME.SHA256.md in client-out, the digest of the whole letter"
+check bash -c '[[ $1 == 0 && $2 =~ ^clientmail\.([0-9a-f]{64})\.md$ && -f $3/$2 ]] && [[ $(sha256sum < "$3/$2") == "${BASH_REMATCH[1]}  -" ]]' _ "$rc" "$name" "$outbox"
+serve_until 0 "$answers/$name"
+label="the carrier delivers the client's mail"
+check grep -Eq '^ok [0-9]{8}T[0-9]{6}Z-[0-9]{6}$' "$answers/$name"
+read -r _ cid < "$answers/$name"
+label="its attach line names the file as the seat sees it, with the file's SHA-256 and size"
+check grep -Fxq "attach: $(sha256sum < "$mail_path/Finch/notes.md" | cut -d ' ' -f 1) 20 /workspace/Finch/notes.md" "$store/Wren/in/$cid.md"
+turn 0 || :
+label="the client's client-sent holds the program's mail, the reader's in byte for byte"
+check client 'cmp -s "client-sent/$1.md" -' _ "$cid" < "$store/Wren/in/$cid.md"
+refused_answer() {
+  printf 'to nobody\n' | "$program" --box "$comms/Wren" --to Ghost --subject nobody --name nobody --wait 20 > "$scratch/nobody-out" 2> "$scratch/nobody-err" &
+  local waiter=$! status
+  serve_until 1 "$comms/Wren/answers/nobody.md"
+  wait "$waiter"
+  status=$?
+  [[ $status == 1 && ! -s $scratch/nobody-out ]] && grep -q '^refused ' "$scratch/nobody-err"
+}
+label="a refused mail makes the program exit 1 with the carrier's reason on standard error"
+check refused_answer
+nothing_sent() {
+  local before rc
+  before=$(ls -A -- "$comms/Wren/out")
+  "$program" --box "$comms/Wren" --to Finch "$@" 2> "$scratch/nothing-err"
+  rc=$?
+  [[ $rc == 2 && $(ls -A -- "$comms/Wren/out") == "$before" ]]
+}
+label="a CR in an argument is refused, with exit 2 and nothing in out"
+check nothing_sent --subject $'two\rlines' < "$scratch/files/body"
+label="a file whose bytes do not match its size, as in /proc, is refused"
+check nothing_sent --subject s --attach /proc/version < "$scratch/files/body"
+label="and says why"
+check grep -Fq 'where its size says 0' "$scratch/nothing-err"
+label="a directory is not attached"
+check nothing_sent --subject s --attach "$scratch/files" < "$scratch/files/body"
+label="and says why"
+check grep -Fq 'is not a regular file' "$scratch/nothing-err"
+many=()
+for n in {1..19}; do many+=(--attach "$scratch/files/report.md"); done
+label="a head of more than 20 lines is refused"
+check nothing_sent --subject s "${many[@]}" < "$scratch/files/body"
+head -c 256001 /dev/zero | tr '\0' a > "$scratch/files/large"
+label="a mail of more than 256,000 bytes is refused"
+check nothing_sent --subject s < "$scratch/files/large"
+"$program" --box "$mail_path/Finch" --to Wren --subject plain --wait 0 < "$scratch/files/body" > "$scratch/plain-out"
+rc=$?
+label="where the seat can reach out, the program uses it even beside client-out"
+check bash -c '[[ $1 == 0 && $(< "$2") == "$3"/out/mail-*.md && -f $4/${5##*/} ]]' _ "$rc" "$scratch/plain-out" "$mail_path/Finch" "$comms/Finch/out" "$(< "$scratch/plain-out")"
+plain=$(< "$scratch/plain-out")
+serve_until 0 "$comms/Finch/answers/${plain##*/}"
+"$program" --box "$comms/Wren" --to Finch --subject one --wait 0 < "$scratch/files/body" > "$scratch/one-out"
+"$program" --box "$comms/Wren" --to Finch --subject two --wait 0 < "$scratch/files/body" > "$scratch/two-out"
+one=$(< "$scratch/one-out") two=$(< "$scratch/two-out")
+label="two default names sort in the order of sending, and so are served in it"
+check bash -c '[[ $1 < $2 ]]' _ "${one##*/}" "${two##*/}"
+serve_until 1 "$comms/Wren/answers/${two##*/}"
+serve_until 1 "$comms/Wren/answers/${two##*/}"
+label="the first sent has the smaller id"
+check bash -c 'read -r _ a < "$1" && read -r _ b < "$2" && [[ $a < $b ]]' _ "$comms/Wren/answers/${one##*/}" "$comms/Wren/answers/${two##*/}"

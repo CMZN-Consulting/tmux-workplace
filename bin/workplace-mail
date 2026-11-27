@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Sends one mail from a seat's own mailbox. The program writes the head, takes the body from standard input as it
+# stands, puts the request in the mailbox's out, or client-out for a client endpoint, by one rename, and waits for the
+# carrier's answer. It runs as the seat, in the seat's own view, so it reads only what the seat may read.
+export LC_ALL=C
+set -u -o pipefail
+
+say() { printf '%s\n' "$*"; }
+die() {
+  printf 'workplace-mail: %s\n' "$1" >&2
+  exit "${2:-2}"
+}
+
+usage() {
+  cat << 'EOF'
+usage: workplace-mail [--box DIR] --to NAMES --subject TEXT [--cc NAMES] [--re ID]
+                      [--reply TEXT | --no-reply] [--attach PATH]... [--name NAME] [--wait SECONDS] < BODY
+
+Sends one mail from the mailbox DIR, the current directory unless one is given. The body is standard input, byte
+for byte.
+
+  --to NAMES      the readers, separated by commas, each as the workplace names the seat
+  --cc NAMES      further readers, in the same form
+  --subject TEXT  one line
+  --re ID         the id of the mail that this one answers
+  --reply TEXT    a reply line as written
+  --no-reply      writes "reply: none": no reply is owed
+  --attach PATH   once for each file: writes "attach: SHA256 SIZE PATH" into the head, the file's SHA-256, its
+                  size in bytes and its absolute path, read here from the file itself
+  --name NAME     the request's name: letters, digits, dot, dash and underscore, never used before in this
+                  mailbox; unless given, a fresh one that sorts in the order of sending
+  --wait SECONDS  how long to wait for the carrier's answer, 30 unless given; 0 waits for none
+
+Exit status: 0 when the answer is ok, or with --wait 0 once the request stands in out; 1 when the carrier refused
+it; 3 when no answer came in time, and the request still waits; 2 when nothing was sent.
+EOF
+}
+
+box=. name="" wait=30
+declare -A given=()
+declare -a attach=() lines=()
+while (($#)); do
+  case $1 in
+    --box | --to | --subject | --cc | --re | --reply | --name | --wait)
+      (($# >= 2)) || die "$1 needs a value"
+      [[ -z ${given[$1]+x} ]] || die "$1 is given twice"
+      given[$1]=$2
+      shift 2
+      ;;
+    --attach)
+      (($# >= 2)) || die "$1 needs a value"
+      attach+=("$2")
+      shift 2
+      ;;
+    --no-reply)
+      [[ -z ${given[--no-reply]+x} ]] || die "$1 is given twice"
+      given[--no-reply]=none
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      die "$1 is not an argument of this program"
+      ;;
+  esac
+done
+[[ -n ${given[--box]+x} ]] && box=${given[--box]}
+[[ -n ${given[--name]+x} ]] && name=${given[--name]}
+[[ -n ${given[--wait]+x} ]] && wait=${given[--wait]}
+[[ -n ${given[--to]-} ]] || die "--to names no reader"
+[[ -n ${given[--subject]-} ]] || die "--subject is empty"
+[[ -z ${given[--reply]+x} || -z ${given[--no-reply]+x} ]] || die "--reply and --no-reply are given together"
+[[ $wait =~ ^(0|[1-9][0-9]{0,3})$ ]] || die "--wait takes a whole number of seconds from 0 to 9999"
+[[ -n $name ]] || name=mail-$(date -u +%Y%m%dT%H%M%S%NZ)-$$
+[[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$ ]] || die "the name $name is not letters, digits, dot, dash and underscore, at most 100, beginning with a letter or a digit"
+[[ ! -t 0 ]] || die "the body is read from standard input; give it a file or a pipe"
+
+[[ -d $box ]] || die "the mailbox $box is not a directory"
+# out is taken where the seat can reach it; a client endpoint, whose out leads into state it cannot see, uses
+# client-out, which the carrier serves only while the seat's kind has client mail.
+if [[ -d $box/out && -d $box/answers ]]; then
+  route=plain out=$box/out answers=$box/answers
+elif [[ -d $box/client-out && ! -L $box/client-out && -d $box/client-answers && ! -L $box/client-answers ]]; then
+  route=client out=$box/client-out answers=$box/client-answers
+else
+  die "$box holds neither out and answers nor client-out and client-answers; give the mailbox with --box"
+fi
+
+lines=("to: ${given[--to]}" "subject: ${given[--subject]}")
+[[ -n ${given[--cc]-} ]] && lines+=("cc: ${given[--cc]}")
+[[ -n ${given[--re]-} ]] && lines+=("re: ${given[--re]}")
+[[ -n ${given[--reply]+x} ]] && lines+=("reply: ${given[--reply]}")
+[[ -n ${given[--no-reply]+x} ]] && lines+=("reply: none")
+for path in "${attach[@]}"; do
+  [[ $path != *[[:cntrl:]]* ]] || die "an attached path holds a control character"
+  real=$(realpath -e -- "$path" && printf x) || die "cannot find $path"
+  real=${real%$'\n'x}
+  [[ $real != *[[:cntrl:]]* ]] || die "the path of $path holds a control character"
+  [[ -f $real && ! -L $real ]] || die "$path is not a regular file"
+  before=$(stat -c '%d %i %s %.9Y %.9Z' -- "$real") || die "cannot read $path"
+  sum=$(sha256sum < "$real") || die "cannot read $path"
+  count=$(wc -c < "$real") || die "cannot read $path"
+  after=$(stat -c '%d %i %s %.9Y %.9Z' -- "$real") || die "cannot read $path"
+  [[ $before == "$after" ]] || die "$path changed while it was read; try again once it rests"
+  read -r _ _ size _ <<< "$before"
+  [[ $count == "$size" ]] || die "$path holds $count bytes where its size says $size, as a file of /proc or /sys does; attach a copy"
+  lines+=("attach: ${sum%% *} $size $real")
+done
+((${#lines[@]} <= 20)) || die "the head would be of more than 20 lines; attach fewer files"
+for line in "${lines[@]}"; do
+  [[ $line != *[[:cntrl:]]* ]] || die "the ${line%%:*} line would hold a control character"
+done
+
+draft=$(mktemp -- "$out/.mail.XXXXXXXX") || die "cannot write a draft in $out"
+trap 'rm -f -- "$draft"' EXIT
+{
+  printf '%s\n' "${lines[@]}" ---
+  cat
+} > "$draft" || die "cannot write the draft $draft"
+(($(stat -c %s -- "$draft") <= 256000)) || die "the mail is more than 256,000 bytes; put the text in a file and attach it"
+if [[ $route == client ]]; then
+  sum=$(sha256sum < "$draft") || die "cannot read the draft $draft"
+  final=$name.${sum%% *}.md
+else
+  final=$name.md
+fi
+[[ ! -e $out/$final && ! -L $out/$final && ! -e $answers/$final ]] || die "the request name $final is taken; give another with --name"
+mv -n -T -- "$draft" "$out/$final"
+[[ ! -e $draft ]] || die "could not rename the draft to $out/$final"
+
+if ((wait == 0)); then
+  say "$out/$final"
+  exit 0
+fi
+for ((n = 0; n < wait * 5; n++)); do
+  [[ ! -s $answers/$final ]] || break
+  sleep 0.2
+done
+if [[ -s $answers/$final ]]; then
+  first=""
+  IFS= read -r first < "$answers/$final" || :
+  case $first in
+    "ok "*)
+      say "$first"
+      exit 0
+      ;;
+    *)
+      printf '%s\n' "$first" >&2
+      exit 1
+      ;;
+  esac
+fi
+die "no answer in $wait s; the request waits at $out/$final, and its answer will stand at $answers/$final" 3

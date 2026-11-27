@@ -47,7 +47,8 @@ the body
 ```
 
 - `to` names one reader or several, separated by commas, each exactly as the workplace names the seat. `cc` does the same.
-- `re` and `reply` are further lines that a head may hold.
+- `re` and `reply` are further lines that a head may hold. A line `reply: none` tells the readers that no reply is owed.
+- A line `attach: SHA256 SIZE PATH` names a file: its SHA-256 in 64 lowercase hex digits, its size in bytes in decimal with no leading zero, and its absolute path, one space apart. A head may hold several. The workplace checks the line's form and does not open the file.
 - Then read `answers`, under your file's name: `ok` with the id that the workplace gave your mail, or `refused` with the reason. A refused mail went to no one.
 
 ## Sending from a client with a workspace-only command sandbox
